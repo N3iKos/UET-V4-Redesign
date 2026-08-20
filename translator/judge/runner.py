@@ -29,14 +29,17 @@ the result object.
 
 from __future__ import annotations
 
+import os
 import threading
+from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, TextIO
 
 from .. import config
 from ..core.models import BatchResult, JobConfig
 from ..data import app_prefs
 from ..io.excel_io import ExcelReader, ExcelWriter
+from ..logging_.vlogging import RawLogger
 from ..scheduling.connection_pool import AllConnectionsUnavailable, ConnectionPool
 from ..scheduling.scheduler import BatchTask, Scheduler, ScheduleEvent
 from . import estimator
@@ -213,6 +216,10 @@ class JudgeRunner:
         # operation so a later Fix All / re-judge starts from an empty ledger.
         self._rows_seen: set[int] = set()
 
+        # Debug and Raw API logging setup
+        self._log_file: TextIO | None = self._open_debug_log()
+        self._raw_logger: RawLogger | None = self._open_raw_log()
+
         if self._pool is None and job is not None:
             # A combo job has no single provider, so the pool comes from the
             # shared factory rather than from `provider` — the same decision the
@@ -228,6 +235,68 @@ class JudgeRunner:
                     provider,
                     connection_ids=[job.connection_id] if job.connection_id else None,
                 )
+
+    # ── Logging helpers ───────────────────────────────────────────────────────
+
+    def write_log(self, message: str) -> None:
+        """Append one line to the debug log with a timestamp."""
+        if not self._log_file:
+            return
+        ts = datetime.now().strftime("%H:%M:%S")
+        try:
+            self._log_file.write(f"[{ts}] {message}\n")
+            self._log_file.flush()
+        except Exception:
+            pass
+
+    def _log_raw(self, label: str, prompt: str, response: str | None, latency: float) -> None:
+        if self._raw_logger is not None:
+            self._raw_logger.log(label=label, prompt=prompt, response=response, latency=latency)
+
+    def _open_debug_log(self) -> TextIO | None:
+        job = self._job
+        if not job or not job.debug_log or not job.log_path:
+            return None
+        try:
+            log_dir = os.path.dirname(job.log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            handle = open(job.log_path, "a", encoding="utf-8")
+            handle.write(
+                f"\n{'=' * 60}\n"
+                f"JUDGE RUNNER LOG — Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Target: {self._target.path}\n"
+                f"Columns: src={self._target.src_col}, dst={self._target.dst_col}, ctx={self._target.ctx_col}\n"
+                f"Criteria: {', '.join(self.criteria)}  Grading: {self._grading_mode}\n"
+                f"{'=' * 60}\n\n"
+            )
+            handle.flush()
+            return handle
+        except Exception as exc:
+            self._notify("warn", f"Could not open Judge debug log: {exc}")
+            return None
+
+    def _open_raw_log(self) -> RawLogger | None:
+        job = self._job
+        if not job or not job.raw_log:
+            return None
+        try:
+            base = job.log_path or self._target.path
+            return RawLogger(os.path.splitext(base)[0] + "_judge_raw.log")
+        except Exception as exc:
+            self._notify("warn", f"Could not open Judge raw API log: {exc}")
+            return None
+
+    def close_logs(self) -> None:
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
+        if self._raw_logger:
+            self._raw_logger.close()
+            self._raw_logger = None
 
     # ── Reading the file ──────────────────────────────────────────────────────
 
@@ -386,6 +455,10 @@ class JudgeRunner:
                 f"{len(report.failed_sections)} of {len(report.sections)} request(s) "
                 f"failed — those rows are reported as unevaluated.",
             )
+        self.write_log(
+            f"Evaluation finished: score={report.summary.percent:.1f}%, evaluated={report.summary.evaluated}, "
+            f"problems={report.summary.problem_rows}, unevaluated={report.summary.unevaluated}, tokens={self._tokens_used}"
+        )
         return report
 
     def _run_evaluation(
@@ -627,6 +700,7 @@ class JudgeRunner:
 
     def _retry_event(self, message: str) -> None:
         """One concise retry line on the events rail — never a raw response."""
+        self.write_log(f"[retry] {message}")
         if self._on_event is None:
             return
         try:
@@ -806,6 +880,9 @@ class JudgeRunner:
                 f"{len(staged.unchanged)} row(s) were left unchanged — the model "
                 f"could not fix them without changing what the source means.",
             )
+        self.write_log(
+            f"Fix All staged: {len(staged.texts)} fixed, {len(staged.unchanged)} unchanged, {len(staged.failed)} failed"
+        )
         return staged
 
     def apply_fix(
@@ -839,6 +916,7 @@ class JudgeRunner:
         )
         try:
             writer.flush(payload, self._target.dst_col)
+            self.write_log(f"Applied fixes: wrote {len(payload)} approved rows to col {self._target.dst_col}")
         finally:
             # commit() joins the writer thread and re-raises whatever it hit,
             # so a lock or a permission error surfaces here rather than being
@@ -1008,6 +1086,7 @@ class JudgeRunner:
             stop_event=self._stop,
             solo_prompt_builder=solo_prompt_builder,
             solo_parser=solo_parser,
+            raw_log=self._log_raw if self._raw_logger else None,
         )
         try:
             stats = scheduler.run(tasks, total_rows=sum(task.size for task in tasks))
@@ -1140,6 +1219,9 @@ class JudgeRunner:
             )
             outcome = executor.execute(prompt, label=label, rows=1)
             self._tokens_used += outcome.tokens
+            self._log_raw(label, prompt, outcome.content, outcome.latency)
+            if self.write_log:
+                self.write_log(f"direct request: {label} (tokens: {outcome.tokens}, latency: {outcome.latency:.2f}s)")
             if outcome.content is None:
                 return None, outcome.error or "The request failed."
             return outcome.content, ""
@@ -1147,6 +1229,7 @@ class JudgeRunner:
         client = self._direct_client()
         if client is None:
             return None, "No provider is configured for this evaluation."
+        started = datetime.now().timestamp()
         try:
             reply = client.generate(
                 model=self._model_id(),
@@ -1155,12 +1238,25 @@ class JudgeRunner:
                 reasoning=self._reasoning(),
                 max_completion_tokens=FIX_MAX_TOKENS,
             )
+            latency = datetime.now().timestamp() - started
+            tokens = getattr(reply, "tokens", 0) or 0
+            content = getattr(reply, "content", "") or ""
+            self._tokens_used += tokens
+            self._log_raw(label, prompt, content, latency)
+            self.write_log(f"client request: {label} (tokens: {tokens}, latency: {latency:.2f}s)")
+            return content, ""
         except ProviderError as exc:
-            return None, exc.response_text.strip() or str(exc)
+            latency = datetime.now().timestamp() - started
+            err_text = exc.response_text.strip() or str(exc)
+            self._log_raw(label, prompt, None, latency)
+            self.write_log(f"client error: {label} - {err_text}")
+            return None, err_text
         except Exception as exc:
-            return None, f"{type(exc).__name__}: {exc}"
-        self._tokens_used += getattr(reply, "tokens", 0) or 0
-        return getattr(reply, "content", "") or "", ""
+            latency = datetime.now().timestamp() - started
+            err_text = f"{type(exc).__name__}: {exc}"
+            self._log_raw(label, prompt, None, latency)
+            self.write_log(f"client exception: {label} - {err_text}")
+            return None, err_text
 
     # ── Plumbing ──────────────────────────────────────────────────────────────
 
@@ -1224,6 +1320,7 @@ class JudgeRunner:
         self._notify("warn" if kind == "locked" else "info", message)
 
     def _notify(self, kind: str, message: str) -> None:
+        self.write_log(f"[{kind}] {message}")
         if self._on_notice is not None:
             self._on_notice(kind, message)
 

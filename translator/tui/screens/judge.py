@@ -2706,6 +2706,11 @@ class JudgeRunScreen(BaseScreen):
             anti_desync=proc.get("anti_desync", "auto"),
             debug_log=proc.get("debug_log", False),
             raw_log=proc.get("raw_log", False),
+            log_path=(
+                os.path.splitext(self._target.path)[0] + "_judge.log"
+                if proc.get("debug_log") or proc.get("raw_log")
+                else ""
+            ),
         )
         choice = self._choice(model_slot)
         choice.apply_to(job)
