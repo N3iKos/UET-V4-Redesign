@@ -1,0 +1,101 @@
+No,ID,String,Original_text,Translated
+1,Abandoned.Abandoned,Abandoned,Abandoned hospital,Rumah sakit terbengkalai
+2,Abandoned.Event01_01,Abandoned,Strength,Kekuatan
+3,Abandoned.Event01_02,Abandoned,A creepy vibe suddenly makes you shiver all over.,Aura menyeramkan tiba-tiba membuatmu meigil di seluruh tubuh.
+4,Abandoned.Event01_03,Abandoned,Shout out confidently,Berteriak dengan percaya diri
+5,Abandoned.Event01_04,Abandoned,You keep telling yourself it's all fake. Stay positive and upbeat!,Kamu terus meyakinku bahwa ini semua palsu. Tetap positif dan semangat!
+6,Abandoned.Event02_01,Abandoned,I'm a Pro,Aku seorang Pro
+7,Abandoned.Event02_02,Abandoned,You reach the hazardous spot mentioned by the mayor.,Kamu sampai di titik berbautkan oleh walikota.
+8,Abandoned.Event02_03,Abandoned,Rebuild it,Bangun kembali
+9,Abandoned.Event02_04,Abandoned,You work hard to fix the dangerous area. Now that's how you work!,"Kamu bekerja keras untuk memperbaiki area berbahaya itu. Nah, begitu baru benar cara kerjanya!"
+10,Abandoned.Event03_01,Abandoned,Shiver,Menggigil
+11,Abandoned.Event03_02,Abandoned,A chilly wind suddenly blows from behind.,Angin dingin tiba-tiba berhembus dari belakang.
+12,Abandoned.Event03_03,Abandoned,Turn around,Berbalik
+13,Abandoned.Event03_04,Abandoned,"It's just your imagination. After all, the wind has you frozen in fear.","Itu hanya imajinasimu. Lagipula, angin itu membuatmu membeku ketakutan."
+14,Abandoned.Event04_01,Abandoned,One More Time,Sekali Lagi
+15,Abandoned.Event04_02,Abandoned,The sign you put up last time seems to have tilted.,Papan tanda yang kamu pasang terakhir kali sepertinya miring.
+16,Abandoned.Event04_03,Abandoned,Fix it yourself,Perbaiki sendiri
+17,Abandoned.Event04_04,Abandoned,You leave a good impression on Shizuko.,Kamu memberikan kesan yang baik pada Shizuko.
+18,Abandoned.Event04_05,Abandoned,Let Shizuko fix it,Biarkan Shizuko yang memperbaikinya
+19,Abandoned.Event04_06,Abandoned,Shizuko likes your assertive attitude.,Shizuko suka sikapmu yang tegas.
+20,Abandoned.Event04_07,Abandoned,Pull it out,Cabut itu
+21,Abandoned.Event04_08,Abandoned,Shizuko gives you a hard knock on the head.,Shizuko memukul kepalamu dengan keras.
+22,Abandoned.Event05_01,Abandoned,Startled Sound,Suara Terkejut
+23,Abandoned.Event05_02,Abandoned,"While checking for hazards, you suddenly step on a piece of glass.","Saat memeriksa bahaya, tiba-tiba kamu menginjak pecahan kaca."
+24,Abandoned.Event05_03,Abandoned,Hug Shizuko,Peluk Shizuko
+25,Abandoned.Event05_04,Abandoned,Shizuko shyly keeps pushing you away.,Shizuko dengan malu-malu terus mendorongmu menjauh.asdasdasd
+26,Abandoned.Event05_05,Abandoned,Run outside,Lari ke luar
+27,Abandoned.Event05_06,Abandoned,"Shizuko watches you, laughing until she cries.","Shizuko melihatmu, tertawa sampai menangis."
+28,Abandoned.Event05_07,Abandoned,Pretend to be calm,Pura-pura tenang
+29,Abandoned.Event05_08,Abandoned,"Your mind has been strengthened, increasing your resistance to stss!","Mentalmu telah diperkuat, meningkatkan resistensimu terhadap stres!"
+30,Abandoned.Event06_01,Abandoned,Is it Water?,Apakah itu Air?
+31,Abandoned.Event06_02,Abandoned,Shizuko suddenly screams; turns out a droplet of something fell on her neck.,Shizuko tiba-tiba berteriak; ternyata ada tetesan sesuatu yang jatuh di lehernya.
+32,Abandoned.Event06_03,Abandoned,Hug Shizuko,Peluk Shizuko
+33,Abandoned.Event06_04,Abandoned,Because Shizuko startled you.,Karena Shizuko mengagetkanmu.
+34,Abandoned.Event06_05,Abandoned,Check her neck,Periksa lehernya
+35,Abandoned.Event06_06,Abandoned,It seems it's not water... but bat urine.,Sepertinya ini bukan air... tapi air seni kelelawar.
+36,Abandoned.Event06_07,Abandoned,AAAAAAAAAAAAH—!,AAAAAAAAAAAAH—!
+37,Abandoned.Event06_08,Abandoned,Shizuko grabs you and runs outside again.,Shizuko menarikmu dan berlari ke luar lagi.
+38,Abandoned.Event07_01,Abandoned,Secret Room,Ruang Rahasia
+39,Abandoned.Event07_02,Abandoned,"The corner of the abandoned hospital is occupied by monkeys, who are now staring fiercely at you.","Sudut rumah sakit terbengkalai itu ditempati oleh monyet-monyet, yang sekarang menatapmu dengan tajam."
+40,Abandoned.Event07_03,Abandoned,Slowly back away,Mundur perlahan
+41,Abandoned.Event07_04,Abandoned,The monkeys just watch you leave quietly.,Monyet-monyet itu hanya melihatmu pergi dengan tenang.
+42,Abandoned.Event07_05,Abandoned,Throw a rice ball at them,Lempar bola nasi ke arah mereka
+43,Abandoned.Event07_06,Abandoned,"You don't have a rice ball, so you throw a condom instead. The monkeys seem to like it and toss coins back to you.","Kamu tidak punya bola nasi, jadi kamu melempar kondom sebagai gantinya. Monyet-monyet itu sepertinya menyukainya dan melemparkan koin kembali kepadamu."
+44,Abandoned.Event07_07,Abandoned,Recite a Buddhist scripture,Rapalkan kitab suci Buddha
+45,Abandoned.Event07_08,Abandoned,Your mood instantly becomes as calm as the sea.,Suasana hatimu seketika menjadi setenang laut.
+46,Abandoned.Event07_09,Abandoned,Imitate a mother monkey's call,Meniru panggilan induk monyet
+47,Abandoned.Event07_10,Abandoned,*Bleeee* *Hoo* *Hoo*...? You end up being chased around by the monkeys.,*Bleeee* *Hoo* *Hoo*...? Kamu akhirnya malah dikeoleh para monyet.
+48,Abandoned.Event08_01,Abandoned,I Felt It,Aku Merasakannya
+49,Abandoned.Event08_02,Abandoned,"Your sixth sense makes you stop, and you hesitate whether to go forward.","Indammu membuatmu berhenti, dan kamu ragu apakah harus lanjut maju."
+50,Abandoned.Event08_03,Abandoned,Look at Shizuko,Lihat Shizuko
+51,Abandoned.Event08_04,Abandoned,Shizuko seems kind of happy for some reason?,Shizuko tampak agak senang karena alasan tertentu?
+52,Abandoned.Event08_05,Abandoned,Let's stop here,Mari berhenti di sini
+53,Abandoned.Event08_06,Abandoned,The impact this is having on your mind is getting stronger.,Dampak hal ini terhadap pikiranmu menjadi semakin kuat.
+54,Abandoned.Event08_07,Abandoned,Better rest for a bit,Lebih baik istirahat sebentar
+55,Abandoned.Event08_08,Abandoned,You find a clean spot and sit down to drink some hot water.,Kamu menemukan tempat yang bersih dan duduk untuk minum air panas.
+56,Abandoned.Event09_01,Abandoned,Whispers,Bisikan
+57,Abandoned.Event09_02,Abandoned,"You think you hear a murmuring voice and turn to look at Shizuko, but she seems clueless.","Kamrasa mendengar suara gumaman dan menoleh untuk melihat Shizuko, tapi dia tampak tidak tahu apa-apa."
+58,Abandoned.Event09_03,Abandoned,AAAAAAAAAAAAH—!,AAAAAAAAAAAAH—!
+59,Abandoned.Event09_04,Abandoned,"You let out a good scream, which makes you feel better, but it startles Shizuko.","Kamu brtriak kencang, yang membuatmu merasa lebih baik, tapi itu mengejutkan Shizuko."
+60,Abandoned.Event09_05,Abandoned,"It's just a noise, that's all.","Itu cuma suara bising, itu saja."
+61,Abandoned.Event09_06,Abandoned,"Your adrenaline is pumping, which strengthens your mind.","Adrenalinmu terpompa, yang mekuat pikiranmu."
+62,Abandoned.Event09_07,Abandoned,Silently recite a Buddhist scripture,Merapalkan kitab suci Buddha dalam hati
+63,Abandoned.Event09_08,Abandoned,Sooooooo scary!!!!,Takuuuuuut banget!!!!
+64,Abandoned.Event09_09,Abandoned,Look at Shizuko and think naughty thoughts,Lihat Shizuko dan pikirkan hal-hal mesum
+65,Abandoned.Event09_10,Abandoned,"Shizuko covers herself, looking at you in disbelief.","Shizuko menutupi tubuhnya, menatagan tidak percaya."
+66,Abandoned.Event10_01,Abandoned,Physical Labor,Kerja Fisik
+67,Abandoned.Event10_02,Abandoned,You tidy up some recyclables the mayor asked to be brought back.,Kamu merapikan beberapa barang daur ulang yang diminta walikota untuk dibawa kembali.
+68,Abandoned.Event10_03,Abandoned,Carry everything yourself,Bawa semuanya sendiri
+69,Abandoned.Event10_04,Abandoned,Shizuko slips away on the way back because she really wants to get a bath in. How heartless.,Shizuko menyelinap pergi saat jalan pulang karena dia benar-benar ingin mandi. Tega sekali.
+70,Abandoned.Event10_05,Abandoned,Split the load with Shizuko,Bagi beban bawaan dengan Shizuko
+71,Abandoned.Event10_06,Abandoned,"Although Shizuko complains a bit, she obediently helps carry it back.","Meskipun Shizuko sedikit mengeluh, dia patuh membantu membawanya kembali."
+72,Abandoned.Event10_07,Abandoned,Use a push cart,Gunakan kereta dorong
+73,Abandoned.Event10_08,Abandoned,It's pretty expensive to rent one. Better think twice next time.,Cukup mahal untuk menyewanya. Lebih baik pikir dua kali lain kali.
+74,Abandoned.Event11_01,Abandoned,Glow Toy,Mainan Bercahaya
+75,Abandoned.Event11_02,Abandoned,"You find a child's glowing toy, which seems a bit scary in this setting...","Kamu menemukan mainan anak-anak yang bercahaya, yang terasa agak menyeramkan di suasana seperti ini..."
+76,Abandoned.Event11_03,Abandoned,Go grab it,Ambil saja
+77,Abandoned.Event11_04,Abandoned,"You accidentally hit the toy's switch, and it slides away.","Kamu tdak sengaja menek saklaainannya, dan benda itu tergelincir menjauh."
+78,Abandoned.Event11_05,Abandoned,Sneak up to grab it,Mengendap-endap untuk mengambilnya
+79,Abandoned.Event11_06,Abandoned,You carefully pick up the toy... seems like everything's fine.,Kamu mengambil mainan itu dengan hati-hati... sepertinya semuanya baik-baik saja.
+80,Abandoned.Event11_07,Abandoned,Throw a stone first,Lempar batu dulu
+81,Abandoned.Event11_08,Abandoned,Shizuko laughs joyously at your timid approach.,Shizuko tertawa riang melihat pendekatanmu yang penakut.
+82,Abandoned.Event12_01,Abandoned,Missing Black Cat,Kucing Hitam yang Hilang
+83,Abandoned.Event12_02,Abandoned,You see the pink cat mentioned by the mayor... looks kinda familiar?,Kamu melihat kucing merah muda yang disebutkan oleh walikota... terlihat agak familiar?
+84,Abandoned.Event12_03,Abandoned,Pull out a can of cat food,Keluarkan sekaleng makanan kucing
+85,Abandoned.Event12_04,Abandoned,Successfully tamed the pink kitty!,Berhasil menjinakkan kucing merah muda itu!
+86,Abandoned.Event12_05,Abandoned,Pet it first,Elus dulu
+87,Abandoned.Event12_06,Abandoned,You and the pink cat engage in a fierce battle!,Kamu dan kucing merah muda itu tat dalam pertarungan sengit!
+88,Abandoned.Event12_07,Abandoned,Ignore it and check it out,Abaikan dan periksa saja
+89,Abandoned.Event12_08,Abandoned,"The pink cat disappears, and Shizuko gives you an annoyed knock on the head!","Kuciang merah muda itu menghilang, dan Shizuko memukul kepalamu dengan kesal!"
+90,Abandoned.EventQA01,Abandoned,Slightly relieved your stress!,Sedikit meredakan stresmu!
+91,Abandoned.EventQA02,Abandoned,Money increased by {Event3} !,Uang bertambah {Event3} !
+92,Abandoned.EventQA03,Abandoned,You suddenly feel a surge of pressure...,Kamu tiba-tiba merasakan tekanan yang mewlonjak...
+93,Abandoned.EventQA04,Abandoned,Shizuko's affection for you increased!,Kasih sayang Shizuko padamu meningkat!
+94,Abandoned.EventQA05,Abandoned,Shizuko's sexual desire increased!,Gairah seksual Shizuko meningkat!
+95,Abandoned.EventQA06,Abandoned,Energy decreased by 15\nYou suddenly feel a surge of pressure...,Energi berkurang 15\nKasmu tiba-tiba merasakan tekanan yang melonjak...
+96,Abandoned.EventQA07,Abandoned,Shizuko's affection for you increased!\nExploration Progress+1,Kasih sayang Shizuko padamu menikjngkat!\nProgres Eksplorasi+1
+97,Abandoned.EventQA08,Abandoned,Shizuko's affection for you decreased...,Kasih sayang Shizuko padamu menurun...
+98,Abandoned.EventQA09,Abandoned,Slightly relieved your stress!\nExploration Progress+1,Stresmu sedikit teratasi!\nProgres Eksplorasi+1
+99,Abandoned.EventQA10,Abandoned,Nothing happened,Tidak terjadi apa-apa
+100,Abandoned.EventQA11,Abandoned,Slightly relieved your stress!\nDesire decreased by {Event3},Stresmu sedikit teratasairah berkurang {Event3}

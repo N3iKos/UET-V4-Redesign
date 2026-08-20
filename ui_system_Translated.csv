@@ -1,0 +1,186 @@
+﻿No,ID,String,Original_text,Translated
+1,TEXTDAT_OFF_0x000010_IDX_0,UI_System,MS ゴシック,MS Gothic
+2,TEXTDAT_OFF_0x000020_IDX_1,UI_System,MS 明朝,MS Mincho
+3,TEXTDAT_OFF_0x00002C_IDX_2,UI_System,MS Pゴシック,MS P Gothic
+4,TEXTDAT_OFF_0x00003D_IDX_3,UI_System,MS P明朝,MS P Mincho
+5,TEXTDAT_OFF_0x00004A_IDX_4,UI_System,オリジナル,Original
+6,TEXTDAT_OFF_0x0002F9_IDX_47,UI_System,桜色リフレイン～Ver.BGM～,Sakurairo Refrain ~Ver.BGM~
+7,TEXTDAT_OFF_0x000317_IDX_48,UI_System,ふたたび始まる朝,Pagi yang Dimulai Kembali
+8,TEXTDAT_OFF_0x00032C_IDX_49,UI_System,きらめきの中で,Di Dalam Kilauan
+9,TEXTDAT_OFF_0x00033F_IDX_50,UI_System,癒やしの眠り,Tidur yang Menyembuhkan
+10,TEXTDAT_OFF_0x000362_IDX_52,UI_System,紅茶に浮かぶ優しさの色,Warna Kelembutan yang Mengapung di Teh Hitam
+11,TEXTDAT_OFF_0x00037D_IDX_53,UI_System,これから始まる奇跡,Keajaiban yang Akan Dimulai
+12,TEXTDAT_OFF_0x000394_IDX_54,UI_System,魔女の狂騒曲,Rhapsody Sang Penyihir
+13,TEXTDAT_OFF_0x0003A5_IDX_55,UI_System,あらら…,Alala...
+14,TEXTDAT_OFF_0x0003B2_IDX_56,UI_System,恋語るそよかぜの調べ,Melodi Angin Sepoi-sepoi yang Mengisahkan Cinta
+15,TEXTDAT_OFF_0x0003CB_IDX_57,UI_System,魔女たちの素顔,Wajah Asli Para Penyihir
+16,TEXTDAT_OFF_0x0003DE_IDX_58,UI_System,想いの交心,Pertukaran Hati
+17,TEXTDAT_OFF_0x0003ED_IDX_59,UI_System,うまく言えない違和感,Perasaan aneh yang sulit diungkapkan
+18,TEXTDAT_OFF_0x000406_IDX_60,UI_System,魔女の苦難,Penderitaan sang penyihir
+19,TEXTDAT_OFF_0x000415_IDX_61,UI_System,心に刺さる棘,Duri yang menusuk hati
+20,TEXTDAT_OFF_0x000426_IDX_62,UI_System,悩める魔女,Penyihir yang gelisah
+21,TEXTDAT_OFF_0x000435_IDX_63,UI_System,あの日見た微笑み,Senyuman yang kulihat hari itu
+22,TEXTDAT_OFF_0x000468_IDX_66,UI_System,まどろみ,Kantuk yang mendalam
+23,TEXTDAT_OFF_0x000475_IDX_67,UI_System,静寂に潜む精霊の足音,Langkah kaki roh yang tersembunyi dalam keheningan
+24,TEXTDAT_OFF_0x00048E_IDX_68,UI_System,好奏の優しさ,Kelembutan Koso
+25,TEXTDAT_OFF_0x00049F_IDX_69,UI_System,名もなき旋律,Melodi tanpa nama
+26,TEXTDAT_OFF_0x0004B0_IDX_70,UI_System,娘へ,Untuk putriku
+27,TEXTDAT_OFF_0x0004B9_IDX_71,UI_System,永遠の旋律,Melodi abadi
+28,TEXTDAT_OFF_0x0004C8_IDX_72,UI_System,恋のメロディー,Melodi cinta
+29,TEXTDAT_OFF_0x0004DB_IDX_73,UI_System,魔女達の優しさ,Kelembutan para penyihir
+30,TEXTDAT_OFF_0x0004EE_IDX_74,UI_System,幸せな時間と優しさの音,Waktu bahagia dan suara kelembutan
+31,TEXTDAT_OFF_0x000525_IDX_76,UI_System,恋するココロと魔法の言葉,Hati yang Jatuh Cinta dan Kata-kata Ajaib
+32,TEXTDAT_OFF_0x000542_IDX_77,UI_System,恋するココロと魔法の言葉～Ver.BGM～,Hati yang Jatuh Cinta dan Kata-kata Ajaib～Ver.BGM～
+33,TEXTDAT_OFF_0x00056A_IDX_78,UI_System,受け継がれた想いと旋律,Perasaan dan Melodi yang Diwariskan
+34,TEXTDAT_OFF_0x000585_IDX_79,UI_System,フルートとヴァイオリンのための協奏曲,Konserto untuk Flute dan Biola
+35,TEXTDAT_OFF_0x0005AE_IDX_80,UI_System,永遠の旋律～Ver.SINGLE～,Melodi Abadi～Ver.SINGLE～
+36,TEXTDAT_OFF_0x0005CB_IDX_81,UI_System,桜色リフレイン～Spring has come～,Refrain Warna Sakura～Spring has come～
+37,TEXTDAT_OFF_0x00060F_IDX_84,UI_System,あ,a
+38,TEXTDAT_OFF_0x000616_IDX_85,UI_System,か,ka
+39,TEXTDAT_OFF_0x00061D_IDX_86,UI_System,さ,sa
+40,TEXTDAT_OFF_0x000624_IDX_87,UI_System,た,ta
+41,TEXTDAT_OFF_0x00062B_IDX_88,UI_System,な,na
+42,TEXTDAT_OFF_0x000632_IDX_89,UI_System,は,ha
+43,TEXTDAT_OFF_0x000639_IDX_90,UI_System,ま,ma
+44,TEXTDAT_OFF_0x000640_IDX_91,UI_System,や,ya
+45,TEXTDAT_OFF_0x000647_IDX_92,UI_System,ら,ra
+46,TEXTDAT_OFF_0x00064E_IDX_93,UI_System,わ,Wa
+47,TEXTDAT_OFF_0x000655_IDX_94,UI_System,キャラ選択０,Pilih Karakter 0
+48,TEXTDAT_OFF_0x000666_IDX_95,UI_System,キャラ選択１,Pilih Karakter 1
+49,TEXTDAT_OFF_0x000677_IDX_96,UI_System,キャラ選択２,Pilih Karakter 2
+50,TEXTDAT_OFF_0x000688_IDX_97,UI_System,キャラ選択３,Pilih Karakter 3
+51,TEXTDAT_OFF_0x000699_IDX_98,UI_System,キャラ選択４,Pilih Karakter 4
+52,TEXTDAT_OFF_0x0006AA_IDX_99,UI_System,キャラ選択５,Pilih Karakter 5
+53,TEXTDAT_OFF_0x0006BB_IDX_100,UI_System,キャラ選択６,Pilih Karakter 6
+54,TEXTDAT_OFF_0x0006CC_IDX_101,UI_System,キャラ選択７,Pilih Karakter 7
+55,TEXTDAT_OFF_0x0006DD_IDX_102,UI_System,キャラ選択８,Pilih Karakter 8
+56,TEXTDAT_OFF_0x0006EE_IDX_103,UI_System,キャラ選択９,Pilih Karakter 9
+57,TEXTDAT_OFF_0x0008B9_IDX_123,UI_System,SeChPlayEx ファイル名に _F がついていません  : ch=%d / option=%d / time=%d / speed=%d / volume=%d,SeChPlayEx Nama file tidak memiliki akhiran _F  : ch=%d / option=%d / time=%d / speed=%d / volume=%d
+58,TEXTDAT_OFF_0x000985_IDX_127,UI_System,BgvPlay filename に _F 修飾子がありません,BgvPlay filename tidak memiliki modifier _F
+59,TEXTDAT_OFF_0x0009B3_IDX_128,UI_System,BgvPlay key に _F 修飾子がありません,BgvPlay key tidak memiliki modifier _F
+60,TEXTDAT_OFF_0x0009DC_IDX_129,UI_System,BgvPlay の ch が範囲外です ch=%d,ch BgvPlay di luar jangkauan ch=%d
+61,TEXTDAT_OFF_0x000A01_IDX_130,UI_System,BgvStop の ch が範囲外です ch=%d,ch BgvStop di luar jangkauan ch=%d
+62,TEXTDAT_OFF_0x000ABE_IDX_140,UI_System,陰毛ありなしモードでは使用不可！！,Tidak bisa digunakan dalam mode ada/tidak ada bulu kemaluan!!
+63,TEXTDAT_OFF_0x000B2F_IDX_143,UI_System,レイヤー情報 : %d => X=%d / Y=%d / W=%d / H=%d / Scale=%d,Informasi layer : %d => X=%d / Y=%d / W=%d / H=%d / Scale=%d
+64,TEXTDAT_OFF_0x000D61_IDX_153,UI_System,  *** スクロールする画像は画面サイズより小さいです  %f,*** Gambar yang di-scroll lebih kecil dari ukuran layar %f
+65,TEXTDAT_OFF_0x000E69_IDX_159,UI_System,  *** 見切れている可能性があります  %f,*** Ada kemungkinan terpotong %f
+66,TEXTDAT_OFF_0x001321_IDX_224,UI_System,tipsデータが読み込めませんでした。 要連絡,Data tips tidak dapat dimuat. Perlu dilaporkan
+67,TEXTDAT_OFF_0x001416_IDX_239,UI_System,tips_click 検索失敗 要連絡 [%t] … %d),Pencarian tips_click gagal Perlu dilaporkan [%t] … %d)
+68,TEXTDAT_OFF_0x001441_IDX_240,UI_System,tips_onmouse 検索失敗 要連絡 … %d),Pencarian tips_onmouse gagal Perlu dilaporkan … %d)
+69,TEXTDAT_OFF_0x001469_IDX_241,UI_System,tips_off 検索失敗 要連絡 [%t] … %d),Pencarian tips_off gagal Perlu dilaporkan [%t] … %d)
+70,TEXTDAT_OFF_0x0014B2_IDX_243,UI_System,引数オーバー<d%d>%t</d>,Argumen berlebih<d%d>%t</d>
+71,TEXTDAT_OFF_0x0014E2_IDX_245,UI_System,tips_call ng … (%d) 要連絡,tips_call ng … (%d) Perlu dilaporkan
+72,TEXTDAT_OFF_0x001586_IDX_251,UI_System,!!! FOUND extend_title.csv : %t タイトルが一致しました。,!!! FOUND extend_title.csv : %t Judul cocok.
+73,TEXTDAT_OFF_0x001888_IDX_286,UI_System,スキップ,Skip
+74,TEXTDAT_OFF_0x001895_IDX_287,UI_System,オート,Auto
+75,TEXTDAT_OFF_0x0018A0_IDX_288,UI_System,履歴,Log
+76,TEXTDAT_OFF_0x0018A9_IDX_289,UI_System,システムメニュー,Menu Sistem
+77,TEXTDAT_OFF_0x0018BE_IDX_290,UI_System,ウィンドウの消去,Hapus Jendela
+78,TEXTDAT_OFF_0x0018D3_IDX_291,UI_System,セーブメニュー,Menu Simpan
+79,TEXTDAT_OFF_0x0018E6_IDX_292,UI_System,シーンを抜ける,Keluar dari Adegan
+80,TEXTDAT_OFF_0x0018F9_IDX_293,UI_System,ロードメニュー,Menu Muat
+81,TEXTDAT_OFF_0x00190C_IDX_294,UI_System,クイックセーブ,Simpan Cepat
+82,TEXTDAT_OFF_0x00191F_IDX_295,UI_System,クイックロード,Muat Cepat
+83,TEXTDAT_OFF_0x001932_IDX_296,UI_System,前の選択肢に戻る,Kembali ke Pilihan Sebelumnya
+84,TEXTDAT_OFF_0x001947_IDX_297,UI_System,次の選択肢に進む,Lanjut ke Pilihan Berikutnya
+85,TEXTDAT_OFF_0x00195C_IDX_298,UI_System,メニューの固定,Kunci Menu
+86,TEXTDAT_OFF_0x00196F_IDX_299,UI_System,ウィンドウの<br>濃さを調整,Atur Kepekatan<br>Jendela
+87,TEXTDAT_OFF_0x00198E_IDX_300,UI_System,ウィンドウの<br>濃さを調整,Atur Kepekatan<br>Jendela
+88,TEXTDAT_OFF_0x0019AD_IDX_301,UI_System,音声再生,Putar Suara
+89,TEXTDAT_OFF_0x0019BA_IDX_302,UI_System,お気に入りボイス登録,Daftar Suara Favorit
+90,TEXTDAT_OFF_0x0019D3_IDX_303,UI_System,お気に入りボイス,Suara Favorit
+91,TEXTDAT_OFF_0x0019E8_IDX_304,UI_System,ツイート,Tweet
+92,TEXTDAT_OFF_0x0019FE_IDX_306,UI_System,サウンド設定,Pengaturan Suara
+93,TEXTDAT_OFF_0x001A0F_IDX_307,UI_System,タイトルに戻る,Kembali ke Judul
+94,TEXTDAT_OFF_0x001A22_IDX_308,UI_System,音声再生,Putar Suara
+95,TEXTDAT_OFF_0x00222D_IDX_445,UI_System,使えるテクスチャーは2の乗数のみ!?,Tekstur yang bisa digunakan hanya kelipatan 2!?
+96,TEXTDAT_OFF_0x00226F_IDX_447,UI_System,ご使用のシステムは動作環境を満たしていない為、ゲームが正常に動作しない可能性があります。,"Sistem yang kamu gunakan tidak memenuhi persyaratan lingkungan operasi, sehingga game mungkin tidak berjalan dengan normal."
+97,TEXTDAT_OFF_0x00239C_IDX_458,UI_System,謎,Misteri
+98,TEXTDAT_OFF_0x0023C1_IDX_463,UI_System,謎,Misteri
+99,TEXTDAT_OFF_0x0023CF_IDX_465,UI_System,謎,Misteri
+100,TEXTDAT_OFF_0x003305_IDX_700,UI_System,サンプルテキスト,Teks Sampel
+101,TEXTDAT_OFF_0x00405F_IDX_876,UI_System,だめ・・・,Jangan...
+102,TEXTDAT_OFF_0x004336_IDX_911,UI_System,g_titleBtnFunc で ENDMARK が見つかりました。func が見つかりませんでした func=%d / k=%d,ENDMARK ditemukan di g_titleBtnFunc. func tidak ditemukan func=%d / k=%d
+103,TEXTDAT_OFF_0x00470C_IDX_965,UI_System,catalog.csvファイルが読み込めませんでした。,File catalog.csv tidak dapat dimuat.
+104,TEXTDAT_OFF_0x00486A_IDX_985,UI_System,マウスでドラッグ、または画面をタッチしながら左右させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar sambil menggeser kiri-kanan untuk menggulir gambar"
+105,TEXTDAT_OFF_0x0048BD_IDX_986,UI_System,マウスでドラッグ、または画面をタッチしながら上下させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar sambil menggeser atas-bawah untuk menggulir gambar"
+106,TEXTDAT_OFF_0x004910_IDX_987,UI_System,マウスでドラッグ、または画面をタッチしながら上下させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar dan geser ke atas/bawah untuk menggulir gambar"
+107,TEXTDAT_OFF_0x004963_IDX_988,UI_System,マウスでドラッグ、または画面をタッチしながら上下させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar dan geser ke atas/bawah untuk menggulir gambar"
+108,TEXTDAT_OFF_0x0049B6_IDX_989,UI_System,マウスでドラッグ、または画面をタッチしながら左右させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar dan geser ke kiri/kanan untuk menggulir gambar"
+109,TEXTDAT_OFF_0x004A09_IDX_990,UI_System,マウスでドラッグ、または画面をタッチしながら上下させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar dan geser ke atas/bawah untuk menggulir gambar"
+110,TEXTDAT_OFF_0x004A5C_IDX_991,UI_System,マウスでドラッグ、または画面をタッチしながら上下させると画像がスクロールします,"Seret dengan mouse, atau sentuh layar dan geser ke atas/bawah untuk menggulir gambar"
+111,TEXTDAT_OFF_0x004C09_IDX_1010,UI_System,ＣＧ鑑賞 START,START Galeri CG
+112,TEXTDAT_OFF_0x004D0D_IDX_1026,UI_System,ＣＧ鑑賞 END,END Galeri CG
+113,TEXTDAT_OFF_0x004F81_IDX_1052,UI_System,MAX_PAGE:%d 裏モード無効,MAX_PAGE:%d Mode Belakang Nonaktif
+114,TEXTDAT_OFF_0x00549F_IDX_1115,UI_System,bgm.csv 確認してください [%f][%d],Silakan periksa bgm.csv [%f][%d]
+115,TEXTDAT_OFF_0x0056D2_IDX_1143,UI_System,キャラ = %f,Karakter = %f
+116,TEXTDAT_OFF_0x0056E2_IDX_1144,UI_System,衣装 = %d,Kostum = %d
+117,TEXTDAT_OFF_0x0056F0_IDX_1145,UI_System,ポーズ = %d,Pose = %d
+118,TEXTDAT_OFF_0x005700_IDX_1146,UI_System,表情 = %d,Ekspresi = %d
+119,TEXTDAT_OFF_0x00570E_IDX_1147,UI_System,漫符 = %d,Simbol = %d
+120,TEXTDAT_OFF_0x00571C_IDX_1148,UI_System,背景 = %d,Latar Belakang = %d
+121,TEXTDAT_OFF_0x005FBE_IDX_1285,UI_System,g_nDicTab あ[%d]:か[%d]:さ[%d]:た[%d]:な[%d],g_nDicTab あ[%d]:か[%d]:さ[%d]:た[%d]:な[%d]
+122,TEXTDAT_OFF_0x005FEF_IDX_1286,UI_System,g_nDicTab は[%d]:ま[%d]:や[%d]:ら[%d]:わ[%d],g_nDicTab は[%d]:ま[%d]:や[%d]:ら[%d]:わ[%d]
+123,TEXTDAT_OFF_0x006040_IDX_1289,UI_System,g_nDicPtrがマイナス,g_nDicPtr negatif
+124,TEXTDAT_OFF_0x00619C_IDX_1299,UI_System,SET 本編Hシーン全て見た,SET Semua adegan H cerita utama sudah dilihat
+125,TEXTDAT_OFF_0x0061B8_IDX_1300,UI_System,SET 裏Hシーン全て見た,SET Semua adegan H rahasia sudah dilihat
+126,TEXTDAT_OFF_0x0061D2_IDX_1301,UI_System,オナてつ の最後を見ていません,Belum melihat bagian akhir dari Onatetsu
+127,TEXTDAT_OFF_0x01D234_IDX_3337,UI_System,なにを望む？,Apa yang kamu inginkan?
+128,TEXTDAT_OFF_0x01D245_IDX_3338,UI_System,『おまんこに欲しい……！』,『Aku mau di memekku……!』
+129,TEXTDAT_OFF_0x01D264_IDX_3339,UI_System,『お尻に欲しい……！』,『Aku mau di pantatku……!』
+130,TEXTDAT_OFF_0x01D27F_IDX_3340,UI_System,SSEL103 選択肢の値がおかしいです,SSEL103 Nilai pilihan salah
+131,TEXTDAT_OFF_0x01FEB1_IDX_3568,UI_System,なにを望む？,Apa yang kamu inginkan?
+132,TEXTDAT_OFF_0x01FEC2_IDX_3569,UI_System,『おまんこが……！』,『Memekku……!』
+133,TEXTDAT_OFF_0x01FEDB_IDX_3570,UI_System,『アナルが……！』,『Analku……!』
+134,TEXTDAT_OFF_0x01FEF2_IDX_3571,UI_System,SSEL104 選択肢の値がおかしいです,SSEL104 Nilai pilihan salah
+135,TEXTDAT_OFF_0x024F29_IDX_3900,UI_System,なにを望む？,Apa yang kamu inginkan?
+136,TEXTDAT_OFF_0x024F3A_IDX_3901,UI_System,『おまんこに欲しい……！』,『Aku mau di memekku……!』
+137,TEXTDAT_OFF_0x024F59_IDX_3902,UI_System,『お尻の穴に欲しい……！』,『Aku mau di lubang pantatku……!』
+138,TEXTDAT_OFF_0x024F78_IDX_3903,UI_System,SSEL106 選択肢の値がおかしいです,SSEL106 Nilai pilihan salah
+139,TEXTDAT_OFF_0x02687A_IDX_3994,UI_System,なにを望む？,Apa yang kamu inginkan?
+140,TEXTDAT_OFF_0x02688B_IDX_3995,UI_System,『おまんこに……！』,『Di memek……!』
+141,TEXTDAT_OFF_0x0268A4_IDX_3996,UI_System,『お尻の穴に……！』,『Di lubang pantat……!』
+142,TEXTDAT_OFF_0x0268BD_IDX_3997,UI_System,SSEL107 選択肢の値がおかしいです,SSEL107 Nilai pilihan salah
+143,TEXTDAT_OFF_0x02BC00_IDX_4346,UI_System,なにを望む？,Apa yang kamu inginkan?
+144,TEXTDAT_OFF_0x02BC11_IDX_4347,UI_System,『おまんこで感じたい……！』,『Aku ingin merasakannya di memekku……!』
+145,TEXTDAT_OFF_0x02BC32_IDX_4348,UI_System,『お仕置きしないと……！』,『Aku harus menghukummu……!』
+146,TEXTDAT_OFF_0x02BC51_IDX_4349,UI_System,SSEL203 選択肢の値がおかしいです,SSEL203 Nilai pilihan salah
+147,TEXTDAT_OFF_0x02FCEA_IDX_4628,UI_System,なにを望む？,Apa yang kamu inginkan?
+148,TEXTDAT_OFF_0x02FCFB_IDX_4629,UI_System,『おまんこがよく見える……』,『Memeknya kelihatan jelas……』
+149,TEXTDAT_OFF_0x02FD1C_IDX_4630,UI_System,『アナルがよく見える……』,『Anusnya kelihatan jelas……』
+150,TEXTDAT_OFF_0x02FD3B_IDX_4631,UI_System,SSEL204 選択肢の値がおかしいです,SSEL204 Nilai pilihan salah
+151,TEXTDAT_OFF_0x0348A9_IDX_4933,UI_System,なにを望む？,Apa yang kamu inginkan?
+152,TEXTDAT_OFF_0x0348BA_IDX_4934,UI_System,『おまんこに挿れて欲しい……！』,『Aku ingin kamu memasukkannya ke memekku……!』
+153,TEXTDAT_OFF_0x0348DF_IDX_4935,UI_System,『お尻の穴に挿れて欲しい……！』,『Aku ingin kamu memasukkannya ke lubang pantatku……!』
+154,TEXTDAT_OFF_0x034904_IDX_4936,UI_System,SSEL206 選択肢の値がおかしいです,SSEL206 Nilai pilihan salah
+155,TEXTDAT_OFF_0x0370E9_IDX_5087,UI_System,なにを望む？,Apa yang kamu inginkan?
+156,TEXTDAT_OFF_0x0370FA_IDX_5088,UI_System,『おまんこが気持ちイイ……！』,『Memekku terasa enak sekali……!』
+157,TEXTDAT_OFF_0x03711D_IDX_5089,UI_System,『お尻の穴が気持ちイイ……！』,『Lubang pantatku terasa enak sekali……!』
+158,TEXTDAT_OFF_0x037140_IDX_5090,UI_System,SSEL207 選択肢の値がおかしいです,SSEL207 Nilai pilihan salah
+159,TEXTDAT_OFF_0x03C77C_IDX_5431,UI_System,なにを望む？,Apa yang kamu inginkan?
+160,TEXTDAT_OFF_0x03C78D_IDX_5432,UI_System,『おまんこで愉しむ……！』,『Menikmatinya dengan memekku……!』
+161,TEXTDAT_OFF_0x03C7AC_IDX_5433,UI_System,『お尻の穴で愉しむ……！』,『Menikmatinya dengan lubang pantatku……!』
+162,TEXTDAT_OFF_0x03C7CB_IDX_5434,UI_System,SSEL303 選択肢の値がおかしいです,SSEL303 Nilai pilihan salah
+163,TEXTDAT_OFF_0x03E63F_IDX_5550,UI_System,なにを望む？,Apa yang kamu inginkan?
+164,TEXTDAT_OFF_0x03E650_IDX_5551,UI_System,『ヴァギナに指を……』,『Masukkan jarimu ke vagina……』
+165,TEXTDAT_OFF_0x03E66B_IDX_5552,UI_System,『お尻が気になる……』,『Aku penasaran dengan pantatku……』
+166,TEXTDAT_OFF_0x03E686_IDX_5553,UI_System,SSEL304 選択肢の値がおかしいです,SSEL304 Nilai pilihan salah
+167,TEXTDAT_OFF_0x0456B5_IDX_6019,UI_System,なにを望む？,Apa yang kamu inginkan?
+168,TEXTDAT_OFF_0x0456C6_IDX_6020,UI_System,『おまんこが……！』,『Memekku...!』
+169,TEXTDAT_OFF_0x0456DF_IDX_6021,UI_System,『肛門が……！』,『Anusku...!』
+170,TEXTDAT_OFF_0x0456F4_IDX_6022,UI_System,SSEL306 選択肢の値がおかしいです,SSEL306 Nilai pilihan salah
+171,TEXTDAT_OFF_0x047959_IDX_6161,UI_System,なにを望む？,Apa yang kamu inginkan?
+172,TEXTDAT_OFF_0x04796A_IDX_6162,UI_System,『このままおまんこを……！』,『Teruslah ngentot memekku...!』
+173,TEXTDAT_OFF_0x04798B_IDX_6163,UI_System,『いや、お尻の穴の方が……！』,"『Tidak, lubang pantatku lebih...!』"
+174,TEXTDAT_OFF_0x0479AE_IDX_6164,UI_System,SSEL307 選択肢の値がおかしいです,SSEL307 Nilai pilihan salah
+175,TEXTDAT_OFF_0x04BBDB_IDX_6457,UI_System,なにを望む？,Apa yang kamu inginkan?
+176,TEXTDAT_OFF_0x04BBEC_IDX_6458,UI_System,『おまんこ舐めちゃう……！』,『Aku mau jilat memekmu...!』
+177,TEXTDAT_OFF_0x04BC0D_IDX_6459,UI_System,『アナル舐めちゃう……！』,『Aku mau jilat analmu...!』
+178,TEXTDAT_OFF_0x04BC2C_IDX_6460,UI_System,SSEL402 選択肢の値がおかしいです,SSEL402 Nilai pilihan salah
+179,TEXTDAT_OFF_0x04E94E_IDX_6648,UI_System,SSEL402 選択肢の値がおかしいです,SSEL402 Nilai pilihan salah
+180,TEXTDAT_OFF_0x052F23_IDX_6962,UI_System,SSEL402 選択肢の値がおかしいです,SSEL402 Nilai pilihan salah
+181,TEXTDAT_OFF_0x055341_IDX_7114,UI_System,なにを望む？,Apa yang kamu inginkan?
+182,TEXTDAT_OFF_0x055352_IDX_7115,UI_System,『おまんこが疼いて……！』,『Memekku berdenyut-denyut...!』
+183,TEXTDAT_OFF_0x055371_IDX_7116,UI_System,『お尻の穴が疼いて……！』,『Lubang pantatku berdenyut-denyut...!』
+184,TEXTDAT_OFF_0x055390_IDX_7117,UI_System,SSEL405 選択肢の値がおかしいです,SSEL405 Nilai pilihan salah
+185,TEXTDAT_OFF_0x0575F2_IDX_7254,UI_System,SSEL405 選択肢の値がおかしいです,SSEL405 Nilai pilihan salah
