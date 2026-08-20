@@ -86,16 +86,14 @@ _OUTPUT_CONTRACT = (
 )
 
 _FIX_SYS = (
-    "You are a professional translation editor. "
-    "Your ONLY job is to correct the TRANSLATION — never the source.\n"
-    "CRITICAL: OUTPUT LANGUAGE must exactly match the Translated text language.\n"
-    "CRITICAL: Do NOT translate the text into another language.\n"
-    "CRITICAL: The corrected line must preserve the exact meaning of SOURCE. "
-    "If you cannot fix the stated PROBLEM without drifting from the source "
-    "meaning, return the TRANSLATION unchanged instead of guessing.\n"
-    "CRITICAL: If the Translated text is already correct, return it unchanged.\n"
-    "Return ONLY the corrected numbered lines with their [N] prefix. "
-    "Do NOT explain, do NOT comment."
+    "You are a professional translation editor.\n"
+    "Your ONLY job is to correct the flawed TRANSLATION using the stated PROBLEM / CORRECTION NOTE as your primary guide.\n"
+    "CRITICAL RULES:\n"
+    "1. Follow the correction instructed in PROBLEM / CORRECTION NOTE strictly. Replace the incorrect words/meanings identified in the problem note with the correct ones.\n"
+    "2. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
+    "3. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
+    "4. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
+    "5. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks."
 )
 
 # How a comment must be written. Vague comments ("awkward phrasing") are
@@ -501,7 +499,7 @@ def build_fix_prompt(
         lines.append(f"  TRANSLATION : {encode_placeholders(translation or '')}")
         note = ((comments or {}).get(row) or "").strip()
         if note:
-            lines.append(f"  PROBLEM     : {note}")
+            lines.append(f"  CORRECTION NOTE : {note}")
         blocks.append("\n".join(lines))
 
     target = (tgt_lang or "").strip() or "the target language"
@@ -515,19 +513,15 @@ def build_fix_prompt(
         f"{_style_line(style_prompt)}"
         f"{_fix_style_rule(style_prompt)}"
         f"{_fix_scope_rule(criteria, severities)}"
-        f"\nEach line lists what is wrong with it. Fix exactly that, and change "
-        f"nothing else.\n"
+        f"\nEach line below provides the SOURCE, the flawed TRANSLATION, and the CORRECTION NOTE.\n"
+        f"Apply the correction specified in the note directly to fix the translation.\n"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
         f"\nOutput format:\n"
         f"- Output EXACTLY {len(rows)} line(s), in this order: {numbers}\n"
         f"- Each line as: [ROW_NUMBER] corrected translation\n"
         f"- Example: [{example}] the corrected line in {target}\n"
-        f"- Output ONLY the corrected translation — never the source, never an "
-        f"explanation\n"
-        f"- If a line is already correct, return it unchanged with its [N] prefix\n"
-        f"- If fixing the stated PROBLEM would change what the SOURCE means, "
-        f"return the line unchanged rather than guessing\n"
+        f"- Output ONLY the corrected translation — never the source, never an explanation\n"
         f"- Keep every placeholder byte-for-byte\n"
         f"\nLines:\n" + "\n".join(blocks) + "\n\nOutput:"
     )
@@ -561,14 +555,15 @@ def build_fix_solo_prompt(
     parts.append(f"Source     : {encode_placeholders(source or '')}\n")
     parts.append(f"Translation: {encode_placeholders(translation or '')}\n")
     if (comment or "").strip():
-        parts.append(f"Problem    : {comment.strip()}\n")
+        parts.append(f"Correction Note: {comment.strip()}\n")
     parts.append(f"\n{_PLACEHOLDER_RULE}\n")
     parts.append(_extra_placeholders(custom_placeholders))
     parts.append(
-        f"\nReturn ONLY the corrected translation in {target} — no prefix, no "
-        f"quotes, no explanation. Keep every placeholder byte-for-byte.\n"
-        f"If you cannot fix the stated problem without changing what the source "
-        f"means, return the translation unchanged.\n"
+        f"\nInstruction:\n"
+        f"Apply the correction from the Correction Note to produce the corrected translation in {target}.\n"
+        f"Do not keep the wrong words that were flagged.\n"
+        f"Return ONLY the corrected translation — no prefix, no quotes, no explanation.\n"
+        f"Keep every placeholder byte-for-byte.\n"
         f"\nCorrected:"
     )
     return "".join(parts)
