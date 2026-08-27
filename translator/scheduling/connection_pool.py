@@ -374,13 +374,23 @@ class ConnectionPool:
 
     def report_error(self, connection_id: str, detail: str = "") -> None:
         """
-        A plain (non-rate-limit) error. Under fallback this is enough to move
-        on: "stick to one connection until it errors" (§5).
+        A plain (non-rate-limit) error — a timeout, a broken reply, an
+        unexpected exception.
+
+        Rotates away from the failing slot under BOTH strategies. The old rule
+        was fallback-only ("stick to one connection until it errors"), but a
+        round-robin pool that keeps handing requests to a slot that just timed
+        out burns the rest of its wave on the same dead endpoint — the rotation
+        was per-wave, so a member that dies mid-wave holds its slot until the
+        wave completes. A short park (CONNECTION_ERROR_COOLDOWN) stops the very
+        next `_rotate()` from picking the failing slot straight back up, and
+        `_is_current` stops parallel workers failing on the same slot from
+        rotating more than once.
         """
         with self._lock:
             state = self._states[connection_id]
             state.requests_fail += 1
-            if self.strategy == "fallback" and self._is_current(connection_id):
+            if self._is_current(connection_id):
                 # Park it briefly, otherwise the very next _rotate() would pick
                 # the failing connection straight back up and flap A->B->A.
                 if len(self._slots) > 1:

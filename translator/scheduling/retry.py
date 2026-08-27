@@ -269,6 +269,19 @@ class RetryExecutor:
             return
 
         if kind == ProviderError.KIND_SERVER or exc.status_code in (500, 502, 503, 504):
+            if getattr(exc, "is_timeout", False):
+                # The request ran past the user's request_timeout — the endpoint
+                # stopped answering, which is not a blip the same slot should be
+                # trusted to clear on the next attempt. Rotate away from the
+                # slot *now* (report_error parks it briefly and moves the pool
+                # on) so the retry lands on a different connection or combo
+                # member, and no retry-delay is slept: the request already cost
+                # the user N seconds of waiting.
+                lease.key_pool.record_error(key, latency)
+                self._pool.report_error(lease.connection_id, preview)
+                self._emit("error", label, attempt,
+                           connection=connection_name, message=preview)
+                return
             # Temporary server/gateway failure: short penalty cooldown, retry or
             # let the pool fall back — not exhaustion.
             lease.key_pool.record_503(key)

@@ -198,6 +198,7 @@ class ProviderError(Exception):
         response_text: str  = "",
         headers:       dict | None = None,
         kind:          str  = "unknown",
+        is_timeout:    bool = False,
     ):
         super().__init__(msg)
         self.status_code   = status_code
@@ -207,6 +208,12 @@ class ProviderError(Exception):
         self.response_text = response_text
         self.headers: dict = headers or {}
         self.kind          = kind
+        # True only when the request exceeded the user's request_timeout: the
+        # endpoint never answered at all, which is a different signal from a
+        # 504 the server actually sent. The pool uses it to rotate away from
+        # the slot even under round-robin, where an ordinary short cooldown is
+        # absorbed inline — a slot that hangs must not hold its wave.
+        self.is_timeout    = is_timeout
 
     def preview(self, limit: int = 200) -> str:
         """Short form for inline display; full text stays in response_text."""
