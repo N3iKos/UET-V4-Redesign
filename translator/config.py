@@ -111,6 +111,13 @@ CONNECTION_ERROR_COOLDOWN = 60  # how long a connection is parked after a plain 
 # the user retries or stops.
 MAX_CONSECUTIVE_FAILURES = 3
 
+# How many times a single batch may be taken off a stuck worker and requeued
+# before it is failed outright. Reassignment exists to rescue a batch from ONE
+# wedged worker; a batch that wedges every worker it lands on is the problem
+# itself (a poisoned prompt that makes providers hang, say), and the run must be
+# able to finish without it. 3 matches the retry budget everywhere else.
+MAX_TASK_REASSIGNS = 3
+
 # ── Parse recovery thresholds ─────────────────────────────────────────────────
 PARSE_GOOD_RATIO = 0.8
 

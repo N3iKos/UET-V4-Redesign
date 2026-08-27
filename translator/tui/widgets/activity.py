@@ -55,6 +55,7 @@ _PHASES: dict[str, tuple[str, str]] = {
     "retry":      ("retry",    WARN),
     "done":       ("success",  OK),
     "failed":     ("failed",   ERROR),
+    "resting":    ("resting",  MUTED),
 }
 
 # Phases drawn with a spinner rather than a fixed glyph — the ones that are
@@ -67,6 +68,7 @@ _STATIC_ICONS = {
     "failed": "✗",
     "waiting": "·",
     "idle": "·",
+    "resting": "z",
 }
 
 
@@ -200,7 +202,8 @@ def running_seconds(status) -> float:
 
     phase = getattr(status, "phase", "idle")
     started = getattr(status, "started_at", 0.0) or 0.0
-    if started and phase in ("think", "generating", "parsing", "retry", "waiting"):
+    if started and phase in ("think", "generating", "parsing", "retry",
+                             "waiting", "resting"):
         return max(0.0, time.time() - started)
     return float(getattr(status, "elapsed", 0.0) or 0.0)
 

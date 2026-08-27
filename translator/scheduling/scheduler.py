@@ -40,6 +40,11 @@ from ..providers.ratelimit import RateLimitPreset
 from .connection_pool import AllConnectionsUnavailable, ConnectionPool
 from .retry import ExecutionResult, RetryEvent, RetryExecutor
 
+# A single batch may be rescued from a wedged worker this many times before it
+# is failed outright (config.py owns the number; re-imported here so the
+# strategies' arithmetic reads without a module-qualified name).
+MAX_TASK_REASSIGNS = config.MAX_TASK_REASSIGNS
+
 
 # ── Work units ────────────────────────────────────────────────────────────────
 
@@ -51,6 +56,12 @@ class BatchTask:
     is_repair:     bool = False
     context_map:   dict[int, str] | None = None
     extra:         dict = field(default_factory=dict)
+    # Incremented each time a stuck worker's batch is handed to another
+    # worker. A result from an older generation is discarded by the scheduler:
+    # the reassigned worker already produced (or will produce) the answer, and
+    # counting both would double-write rows and double-count stats. The
+    # generation travels with the task object both workers hold a reference to.
+    generation:    int = 0
 
     @property
     def size(self) -> int:
@@ -60,14 +71,20 @@ class BatchTask:
     def row_numbers(self) -> list[int]:
         return [row for row, _ in self.rows]
 
+    def next_generation(self) -> "BatchTask":
+        """The same task, bumped — for reassigning a stuck worker's batch."""
+        self.generation += 1
+        return self
+
 
 WorkerPhase = Literal[
-    "idle", "waiting", "think", "generating", "parsing", "retry", "done", "failed"
+    "idle", "waiting", "think", "generating", "parsing", "retry", "done",
+    "failed", "resting"
 ]
 
 # Phases whose duration is still running, so the panel's clock keeps ticking
 # rather than freezing at the snapshot value.
-_LIVE_PHASES = ("think", "generating", "parsing", "retry", "waiting")
+_LIVE_PHASES = ("think", "generating", "parsing", "retry", "waiting", "resting")
 
 
 @dataclass
@@ -231,6 +248,143 @@ class Scheduler:
         # the run is paused; any success resets it to zero.
         self._consecutive_failures = 0
         self._failure_lock = threading.Lock()
+        # The batch each worker currently holds, and when it took it — the
+        # watchdog's view of "who is working on what". Written by
+        # _process_task at the top, cleared at the end; read by the parallel
+        # watchdog to decide who has overstayed.
+        self._in_flight: dict[int, tuple[BatchTask, float]] = {}
+        self._in_flight_lock = threading.Lock()
+
+    # ── In-flight tracking (watchdog) ──────────────────────────────────────────
+
+    def _note_in_flight(self, worker_id: int, task: BatchTask) -> None:
+        with self._in_flight_lock:
+            self._in_flight[worker_id] = (task, time.time())
+
+    def _clear_in_flight(self, worker_id: int, task: BatchTask | None = None) -> None:
+        """
+        Release the watchdog's view of a worker's batch.
+
+        When `task` is given, the entry is removed only if it still names that
+        exact task: a takeover worker for the same slot may already have noted
+        its own batch (wave mode reuses slots across waves), and popping
+        unconditionally would blind the watchdog to the new one.
+        """
+        with self._in_flight_lock:
+            if task is None:
+                self._in_flight.pop(worker_id, None)
+                return
+            entry = self._in_flight.get(worker_id)
+            if entry is not None and entry[0] is task:
+                self._in_flight.pop(worker_id)
+
+    def _stuck_workers(self, limit: float) -> list[tuple[int, BatchTask]]:
+        """
+        Workers holding a batch past `limit`, with the batch they hold.
+
+        Reads the snapshot under the lock so a worker finishing normally while
+        the watchdog looks is not misread as stuck.
+        """
+        now = time.time()
+        stuck: list[tuple[int, BatchTask]] = []
+        with self._in_flight_lock:
+            for worker_id, (task, taken_at) in list(self._in_flight.items()):
+                if now - taken_at > limit:
+                    stuck.append((worker_id, task))
+        return stuck
+
+    # ── Reassignment (watchdog) ────────────────────────────────────────────────
+
+    def _reassign(
+        self,
+        worker_id: int,
+        task: BatchTask,
+        task_queue,
+        pending: _PendingCount,
+        stats: StatsAccumulator,
+    ) -> None:
+        """
+        Parallel mode: take the batch off a wedged worker and requeue it.
+
+        Bumping the generation makes the worker's late result stale — the stale
+        checks in `_process_task_inner` discard it rather than writing rows the
+        takeover worker also writes. Clearing the in-flight entry ends this
+        stuck episode: if the worker unwedges, takes a new batch and wedges
+        again, it is a fresh episode and will be reassigned again.
+
+        The caller has already `transfer()`red the pending count (the wedged
+        episode closed, the requeued batch opened) atomically, so the drained
+        event cannot fire between "decided to requeue" and "task is in the
+        queue" — the stranded-batch race. A batch that has already been
+        reassigned MAX_TASK_REASSIGNS times is failed outright instead — at
+        some point the batch, not the worker, is the problem, and the run must
+        be able to finish without it; failing it settles the pending unit.
+        """
+        task.next_generation()
+        self._clear_in_flight(worker_id, task)
+        if task.generation >= MAX_TASK_REASSIGNS:
+            self._fail_task(
+                worker_id, task, stats,
+                f"batch {task.batch_num}: reassigned {MAX_TASK_REASSIGNS}× and "
+                f"still stuck — counted as failed",
+            )
+            self._emit_event(
+                "batch_failed",
+                f"batch {task.batch_num}: workers kept getting stuck on it — "
+                f"failed after {MAX_TASK_REASSIGNS} reassignments",
+                task.batch_num, worker_id=worker_id,
+            )
+            pending.finished_one()
+        else:
+            task_queue.put(task)
+            self._emit_event(
+                "retry",
+                f"worker {worker_id} stuck {self.stuck_limit():.0f}s on batch "
+                f"{task.batch_num} — batch requeued for another worker, "
+                f"worker rests",
+                task.batch_num, worker_id=worker_id,
+            )
+        self._set_status(
+            worker_id, phase="resting",
+            message="wedged — batch reassigned",
+            started_at=time.time(),
+        )
+
+    def _reassign_wave(
+        self,
+        worker_id: int,
+        task: BatchTask,
+        pending: list[BatchTask],
+        stats: StatsAccumulator,
+    ) -> None:
+        """Wave mode: same as _reassign, but the batch fronts the next wave."""
+        task.next_generation()
+        self._clear_in_flight(worker_id, task)
+        if task.generation >= MAX_TASK_REASSIGNS:
+            self._fail_task(
+                worker_id, task, stats,
+                f"batch {task.batch_num}: reassigned {MAX_TASK_REASSIGNS}× and "
+                f"still stuck — counted as failed",
+            )
+            self._emit_event(
+                "batch_failed",
+                f"batch {task.batch_num}: workers kept getting stuck on it — "
+                f"failed after {MAX_TASK_REASSIGNS} reassignments",
+                task.batch_num, worker_id=worker_id,
+            )
+        else:
+            pending.insert(0, task)
+            self._emit_event(
+                "retry",
+                f"worker {worker_id} stuck {self.stuck_limit():.0f}s — "
+                f"batch {task.batch_num} reassigned, worker rests 1 wave",
+                task.batch_num, worker_id=worker_id,
+            )
+        self._set_status(
+            worker_id, phase="resting",
+            message="wedged — batch reassigned",
+            started_at=time.time(),
+        )
 
     # ── Pacing derived from the model's preset ────────────────────────────────
 
@@ -310,6 +464,28 @@ class Scheduler:
         executor: RetryExecutor,
         stats: StatsAccumulator,
     ) -> None:
+        """
+        Run one batch on one worker.
+
+        The watchdog's view of "this worker holds this batch" is cleared in a
+        finally: every exit path — success, failure, abort, discard — leaves
+        the worker free, or a wedged worker would stay "in flight" forever and
+        be re-reassigned on every watchdog pass. The task is named in the
+        clear so a takeover worker's entry is never clobbered (wave mode reuses
+        slots across waves).
+        """
+        try:
+            self._process_task_inner(worker_id, task, executor, stats)
+        finally:
+            self._clear_in_flight(worker_id, task)
+
+    def _process_task_inner(
+        self,
+        worker_id: int,
+        task: BatchTask,
+        executor: RetryExecutor,
+        stats: StatsAccumulator,
+    ) -> None:
         self._set_status(
             worker_id,
             phase="generating",
@@ -321,11 +497,17 @@ class Scheduler:
             started_at=time.time(),
             message="",
         )
+        self._note_in_flight(worker_id, task)
         if self._on_batch_start is not None:
             self._on_batch_start(task, worker_id)
 
         label = f"batch {task.batch_num}/{task.total_batches}"
         prompt = self._build_prompt(task)
+        # The generation this worker started on. If a watchdog reassigns the
+        # batch while this request is in flight, the task object's generation
+        # moves on and everything this worker produces from here is discarded —
+        # see _is_stale below. Checked between the phases that write state.
+        my_generation = task.generation
         try:
             outcome: ExecutionResult = executor.execute(
                 prompt, label=label, rows=task.size, use_repair_model=task.is_repair,
@@ -342,6 +524,10 @@ class Scheduler:
                 self._aborted = True
             if first:
                 self._emit_event("aborted", str(exc), task.batch_num, worker_id=worker_id)
+            return
+
+        if self._is_stale(task, my_generation):
+            self._discard_stale(worker_id, task)
             return
 
         stats.add_tokens(outcome.tokens)
@@ -369,6 +555,11 @@ class Scheduler:
         missing = [rn for rn in result.failed_rows if rn not in result.results]
         if missing:
             self._recover_missing(worker_id, task, missing, result, executor, stats)
+
+        if self._is_stale(task, my_generation):
+            # Reassigned mid-recovery: the takeover worker owns these rows now.
+            self._discard_stale(worker_id, task)
+            return
 
         ok_rows = sum(1 for text in result.results.values() if text)
         failed_rows = task.size - ok_rows
@@ -566,6 +757,52 @@ class Scheduler:
                 error_kind=error_kind,
             )
 
+    # ── Stuck-worker guards ────────────────────────────────────────────────────
+
+    def stuck_limit(self) -> float:
+        """
+        How long a batch may run before the watchdog calls it stuck.
+
+        Built from the user's request timeout rather than invented: one
+        attempt may legitimately take that long, and the retry budget may
+        legitimately spend it up to max_attempts times. The grace (90s) covers
+        parsing and the recovery ladder, which are cheap but not free. Beyond
+        this the worker is not "slow", it is wedged — its batch is reassigned
+        and the worker rests for a wave.
+        """
+        try:
+            from ..data.app_prefs import request_timeout
+
+            per_attempt = float(request_timeout())
+        except Exception:
+            per_attempt = float(config.DEFAULT_REQUEST_TIMEOUT)
+        attempts = 1 if self._job.retry_mode == "infinite" \
+            else max(1, self._job.max_attempts)
+        return per_attempt * attempts + 90.0
+
+    @staticmethod
+    def _is_stale(task: BatchTask, generation: int) -> bool:
+        """Has this batch been reassigned since `generation` was current?"""
+        return task.generation != generation
+
+    def _discard_stale(self, worker_id: int, task: BatchTask) -> None:
+        """
+        Drop a result from a batch that was reassigned while it was in flight.
+
+        The takeover worker owns the rows now; counting this worker's late
+        reply would write those rows twice and double-count the stats. Say so
+        on the events rail — silently discarding minutes of work reads as a
+        bug — but the worker's own line is left alone: in wave mode the slot
+        may already be showing the takeover's progress, and in parallel mode
+        the worker will set its next phase the moment it pulls again.
+        """
+        self._emit_event(
+            "retry",
+            f"batch {task.batch_num}: late result from worker {worker_id} "
+            f"dropped (reassigned)",
+            task.batch_num, worker_id=worker_id,
+        )
+
     # ── Plumbing ──────────────────────────────────────────────────────────────
 
     def _make_executor(self, worker_id: int) -> RetryExecutor:
@@ -684,26 +921,82 @@ class SequentialStrategy(ExecutionStrategy):
                 scheduler._pace(scheduler._job.batch_delay)
 
 
+class _PendingCount:
+    """
+    How many batches the parallel run still expects to complete.
+
+    A plain len() cannot answer this once reassignment exists: the queue drains
+    while a wedged worker still holds a batch that was requeued, and a requeue
+    puts an item back after the queue reported empty. The counter is bumped up
+    by a reassignment and down when a batch settles (processed, failed, or
+    dropped as stale), so "zero" means the work is genuinely done — the
+    condition the workers wait on instead of per-worker sentinel Nones.
+
+    `transfer()` is the reassignment step: close the wedged worker's episode
+    (-1) and open the takeover's (+1) in ONE locked step, so the drained event
+    cannot fire in between and release the shutdown sentinels early.
+
+    The event is set and CLEARED on every transition: a reassignment after a
+    momentary zero must un-fire `done`, or the strategy would send shutdown
+    sentinels while a rescued batch is still in flight.
+    """
+
+    def __init__(self, total: int) -> None:
+        self._lock = threading.Lock()
+        self._count = total
+        self.done = threading.Event()
+        self._sync()
+
+    def _sync(self) -> None:
+        if self._count <= 0:
+            self.done.set()
+        else:
+            self.done.clear()
+
+    def add(self, n: int = 1) -> None:
+        with self._lock:
+            self._count += n
+            self._sync()
+
+    def finished_one(self) -> None:
+        with self._lock:
+            self._count -= 1
+            self._sync()
+
+    def transfer(self) -> None:
+        """Atomic -1 +1: reassignment never passes through 'drained'."""
+        with self._lock:
+            # No count change overall; the sync is what must not fire between
+            # the episode that closed and the one that opened.
+            self._sync()
+
+
 class ParallelStrategy(ExecutionStrategy):
     """
     N workers pulling from one shared queue — the existing behaviour, moved
     rather than rewritten. Each worker takes the next batch the moment it is
     free, so a slow batch never holds the others up.
+
+    Shutdown is a drained-event, not per-worker sentinels: a wedged worker
+    never pulls the `None` meant for it, and with sentinels that None would
+    sit in the queue behind a reassigned batch while healthy workers exited
+    early — the batch stranded. Workers block on the queue until a batch
+    arrives; the strategy pushes a `None` per worker once `_PendingCount`
+    fires, so exactly the workers that are still pulling exit.
     """
 
     def run(self, tasks: list[BatchTask], stats: StatsAccumulator) -> None:
         scheduler = self._s
         workers = scheduler._effective_workers()
-        task_queue: queue.Queue[BatchTask | None] = queue.Queue()
+        task_queue: "queue.Queue[BatchTask | None]" = queue.Queue()
+        pending = _PendingCount(len(tasks))
         for task in tasks:
             task_queue.put(task)
-        for _ in range(workers):
-            task_queue.put(None)
 
         threads = [
             threading.Thread(
                 target=self._worker_loop,
-                args=(worker_id, task_queue, stats),
+                args=(worker_id, task_queue, pending, stats),
                 name=f"uet-worker-{worker_id}",
                 daemon=True,
             )
@@ -711,13 +1004,21 @@ class ParallelStrategy(ExecutionStrategy):
         ]
         for thread in threads:
             thread.start()
+        self._watchdog(threads, task_queue, pending, stats)
+        # Nothing left to do; release every worker still pulling.
+        for _ in threads:
+            task_queue.put(None)
+        # Wedged workers are daemons and cannot be joined in finite time; their
+        # batches were reassigned, so the run's results are complete without
+        # them. Join with a generous timeout and move on.
         for thread in threads:
-            thread.join()
+            thread.join(timeout=120.0)
 
     def _worker_loop(
         self,
         worker_id: int,
         task_queue: "queue.Queue[BatchTask | None]",
+        pending: _PendingCount,
         stats: StatsAccumulator,
     ) -> None:
         # One executor per worker: no shared mutable state between workers,
@@ -728,9 +1029,71 @@ class ParallelStrategy(ExecutionStrategy):
             task = task_queue.get()
             if task is None:
                 break
+            my_generation = task.generation
             scheduler._process_task(worker_id, task, executor, stats)
+            if task.generation == my_generation:
+                # This worker's pass settled the batch it pulled. A worker
+                # whose batch was reassigned mid-flight settles nothing — the
+                # takeover's pass is the one that counts, and the reassignment
+                # already bumped the pending count for it.
+                pending.finished_one()
             scheduler._pace(scheduler._job.wave_delay)
         scheduler._set_status(worker_id, phase="idle", message="")
+
+    def _watchdog(
+        self,
+        threads: list[threading.Thread],
+        task_queue: "queue.Queue[BatchTask | None]",
+        pending: _PendingCount,
+        stats: StatsAccumulator,
+    ) -> None:
+        """
+        Watch the workers; reassign the batch of one that has wedged.
+
+        Parallel mode has no lockstep, so there is no wave for a stuck worker
+        to hold up — but the worker itself is gone from the pool until it
+        unwedges, and its batch would go with it. A worker holding a batch
+        past `stuck_limit()` has that batch bumped a generation — so the late
+        result the wedged worker eventually produces is discarded by the stale
+        checks in `_process_task_inner` — and requeued for whoever is free
+        (`_PendingCount` is bumped so shutdown waits for it). The worker's
+        panel line says `resting`; if its executor unwedges it returns to the
+        queue like any other worker, and if it never does, the run still
+        finishes because the batch was not lost with it.
+
+        The loop ends when every thread is dead or the run is stopped. A
+        wedged worker is a daemon thread; a worker that finishes its queue
+        work blocks on get() and is released by the strategy's sentinels.
+        """
+        scheduler = self._s
+        limit = scheduler.stuck_limit()
+        interval = min(5.0, max(1.0, limit / 8))
+        handled: set[int] = set()
+
+        while not scheduler._stop.is_set():
+            # Exit on DRAINED, not on "no alive threads": a healthy worker that
+            # finished the queue is still alive, blocked in get() waiting for
+            # the sentinels only run() sends after this returns — waiting on
+            # thread death here would deadlock every idle-but-live worker.
+            if pending.done.wait(timeout=interval):
+                return
+            if scheduler._stop.is_set():
+                return
+            for worker_id, task in scheduler._stuck_workers(limit):
+                thread = threads[worker_id - 1] \
+                    if 0 < worker_id <= len(threads) else None
+                if thread is None or not thread.is_alive():
+                    continue
+                if worker_id in handled:
+                    continue
+                handled.add(worker_id)
+                # The wedged worker will never settle its episode; the
+                # requeued batch is one fresh pending unit. Net count is
+                # unchanged (transfer), done atomically so the drained event
+                # cannot fire between closing the old episode and opening the
+                # new one.
+                pending.transfer()
+                scheduler._reassign(worker_id, task, task_queue, pending, stats)
 
 
 class WaveStrategy(ExecutionStrategy):
@@ -745,7 +1108,11 @@ class WaveStrategy(ExecutionStrategy):
     provider that counts requests per minute.
 
     The cost is real and deliberate: one slow batch holds its whole wave. That
-    trade is the reason the mode is opt-in and `parallel` stays the default.
+    trade is the reason the mode is opt-in and `parallel` stays the default —
+    but it is no longer unbounded: a worker that runs past `stuck_limit()` has
+    its batch reassigned to the next wave and rests for one wave (its slot
+    stays empty while it does), so a wedged worker costs the run one wave, not
+    the whole run.
 
     Executors are created once per worker slot rather than once per wave, so a
     worker keeps its connection lease and client across waves exactly as it
@@ -755,75 +1122,103 @@ class WaveStrategy(ExecutionStrategy):
     def run(self, tasks: list[BatchTask], stats: StatsAccumulator) -> None:
         scheduler = self._s
         workers = scheduler._effective_workers()
-        waves = split_waves(tasks, workers)
         executors = {
             worker_id: scheduler._make_executor(worker_id)
             for worker_id in range(1, workers + 1)
         }
+        # The work still to place, in order. A wave takes the first `workers`
+        # items (minus resting slots), rather than a precomputed split: a stuck
+        # worker's batch goes back to the front of this list, and the split
+        # recomputing per wave is what keeps every batch run exactly once no
+        # matter how many reassignments happen.
+        pending: list[BatchTask] = list(tasks)
+        resting: set[int] = set()
+        limit = scheduler.stuck_limit()
+        wave_number = 0
 
-        for wave_number, wave in enumerate(waves, start=1):
-            if scheduler._stop.is_set():
-                scheduler._emit_event("aborted", "Cancelled by user.")
-                return
+        while pending and not scheduler._stop.is_set():
+            wave_number += 1
+            # Take one task per non-resting worker slot.
+            free_slots = [wid for wid in range(1, workers + 1)
+                          if wid not in resting]
+            wave: list[tuple[int, BatchTask]] = []
+            for wid in free_slots:
+                if pending:
+                    wave.append((wid, pending.pop(0)))
+
+            if resting:
+                for wid in sorted(resting):
+                    scheduler._set_status(
+                        wid, phase="resting",
+                        message="resting after a stuck batch",
+                        started_at=time.time(),
+                    )
 
             scheduler._emit_event(
                 "wave_start",
-                f"wave {wave_number}/{len(waves)}: {len(wave)} batch(es)",
-                wave[0].batch_num,
+                f"wave {wave_number}: {len(wave)} batch(es)",
+                wave[0][1].batch_num if wave else 0,
             )
-            # Workers not in this wave are waiting, and should say so rather
-            # than showing a stale `done` from the previous wave.
-            for worker_id in range(len(wave) + 1, workers + 1):
-                scheduler._set_status(
-                    worker_id, phase="waiting", message="next wave",
-                    started_at=time.time(),
-                )
+            for wid in range(1, workers + 1):
+                if wid not in dict(wave) and wid not in resting:
+                    scheduler._set_status(
+                        wid, phase="waiting", message="next wave",
+                        started_at=time.time(),
+                    )
 
             threads = [
                 threading.Thread(
                     target=scheduler._process_task,
-                    args=(worker_id, task, executors[worker_id], stats),
-                    name=f"uet-worker-{worker_id}",
+                    args=(wid, task, executors[wid], stats),
+                    name=f"uet-worker-{wid}",
                     daemon=True,
                 )
-                for worker_id, task in enumerate(wave, start=1)
+                for wid, task in wave
             ]
             for thread in threads:
                 thread.start()
-            # The lockstep itself: nothing starts until every worker is done.
-            for thread in threads:
-                thread.join()
+            # Lockstep with a deadline: wait for every worker, but no longer
+            # than the stuck limit past the first join — a worker that is
+            # still running then is wedged, not slow.
+            deadline = time.time() + limit
+            stuck: dict[int, threading.Thread] = {}
+            for wid, thread in zip((wid for wid, _t in wave), threads):
+                remaining = max(0.0, deadline - time.time())
+                thread.join(timeout=remaining)
+                if thread.is_alive():
+                    # Still wedged: take the batch off it, queue the batch for
+                    # the next wave, and rest the worker for one wave.
+                    task = dict(wave)[wid]
+                    scheduler._reassign_wave(wid, task, pending, stats)
+                    resting.add(wid)
+                    stuck[wid] = thread
 
             scheduler._emit_event(
                 "wave_done",
-                f"wave {wave_number}/{len(waves)} complete",
-                wave[-1].batch_num,
+                f"wave {wave_number} complete",
+                wave[-1][1].batch_num if wave else 0,
             )
 
-            if wave_number < len(waves) and not scheduler._stop.is_set():
+            if pending and not scheduler._stop.is_set():
                 # One delay for the whole wave, not one per worker (AC-302).
-                for worker_id in range(1, workers + 1):
-                    scheduler._set_status(
-                        worker_id, phase="waiting", message="wave cooldown",
-                        started_at=time.time(),
-                    )
+                for wid in range(1, workers + 1):
+                    if wid not in resting:
+                        scheduler._set_status(
+                            wid, phase="waiting", message="wave cooldown",
+                            started_at=time.time(),
+                        )
                 scheduler._pace(scheduler._job.wave_delay)
 
-        for worker_id in range(1, workers + 1):
-            scheduler._set_status(worker_id, phase="idle", message="")
+            # Resting is a ONE-wave state (the requirement): after the wave it
+            # sat out, the slot is returned to the rotation whether or not the
+            # wedged thread ever came back. The thread itself is a daemon and
+            # harmless — its late result is discarded by the stale check — and
+            # the slot must not stay empty forever, or one wedge would shrink
+            # the run's width permanently.
+            resting.clear()
 
-
-def split_waves(tasks: list, n_workers: int) -> list[list]:
-    """
-    Split batches into waves of at most `n_workers`, order preserved.
-
-    Exposed as a plain function so the split can be tested without a provider,
-    a pool or a thread: `split_waves(range(10), 3)` → sizes `[3, 3, 3, 1]`
-    (AC-301). A worker count below 1 is treated as 1 rather than refused —
-    a clamp belongs closer to the UI than to arithmetic.
-    """
-    size = max(1, int(n_workers or 1))
-    return [list(tasks[i:i + size]) for i in range(0, len(tasks), size)]
+        for wid in range(1, workers + 1):
+            scheduler._set_status(wid, phase="idle", message="")
 
 
 def _quick_mode(workers: int) -> str:
