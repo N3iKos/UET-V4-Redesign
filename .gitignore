@@ -6,3 +6,5 @@ __pycache__/
 translator.zip
 graphify-out/
 *.log
+*.csv
+*.rar
