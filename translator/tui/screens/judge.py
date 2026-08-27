@@ -2122,16 +2122,21 @@ class JudgeRunScreen(BaseScreen):
                     yield self.activity
                 with VerticalScroll(id="judge-events-scroll"):
                     yield self.events
+                # Fatal errors render here — the bottom of the rail, not below
+                # the grid. An ErrorBox that grows under the grid shoves the
+                # whole report out of frame, which is worse than the error: the
+                # user loses the work they were reading to read a message they
+                # can do nothing about until the operation ends. In the rail it
+                # is bounded (max-height) and scrollable, and the grid never
+                # moves a line.
+                self._error = ErrorBox(id="judge-error")
+                yield self._error
         yield self.indicator
         # Provider trouble shows here — a small card, bottom-right, not a
         # full-width wall of duplicated errors. The raw errors still go to the
         # events rail and the log.
         self._notice = ProviderNotice()
         yield self._notice
-        # Kept for the fatal/summary case where the whole evaluation could not
-        # run; the results screen never fills with per-request errors now.
-        self._error = ErrorBox()
-        yield self._error
 
     DEFAULT_CSS = f"""
     #judge-filters {{ height: auto; }}
@@ -2148,6 +2153,15 @@ class JudgeRunScreen(BaseScreen):
     #judge-events-scroll {{ height: 1fr; width: 1fr; scrollbar-size: 1 1; }}
     #judge-activity {{ height: auto; width: 1fr; }}
     #judge-events {{ height: auto; width: 1fr; }}
+    #judge-error {{
+        height: auto;
+        max-height: 8;
+        width: 1fr;
+        overflow-y: auto;
+        scrollbar-size: 1 1;
+        border-top: solid {MUTED};
+        margin-top: 0;
+    }}
     #judge-indicator {{ height: auto; padding: 0 1; }}
     """
 

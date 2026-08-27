@@ -720,10 +720,18 @@ class ErrorBox(Static):
     Renders a provider's raw error text verbatim. v4 talks to arbitrary
     endpoints, so the real message must always reach the user
     (03_PROVIDER_SYSTEM.md §7).
+
+    CSS on the call site bounds its height (`max-height` + overflow scroll), so
+    a long provider payload can be scrolled rather than pushing the layout
+    around it — wherever the box sits, it never grows without limit.
     """
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(id="error-box", **kwargs)
+        # The id is a fallback: a call site that passes its own id (the Judge
+        # rail, say) needs the CSS to match that instead, and `id` cannot be
+        # passed twice into the same constructor.
+        kwargs.setdefault("id", "error-box")
+        super().__init__(**kwargs)
         self.display = False
         self._title = ""
         self._body = ""
