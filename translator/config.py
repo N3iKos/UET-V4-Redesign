@@ -140,3 +140,14 @@ MAX_FALLBACK_SAVE_RANGE     = 99
 # ── Network ───────────────────────────────────────────────────────────────────
 DEFAULT_HTTP_TIMEOUT = 120.0
 PING_TIMEOUT         = 15.0
+
+# How long a single generate request may run before it is treated as hung and
+# retried on another attempt/connection (Settings: request_timeout). A request
+# that exceeds this raises a read timeout inside the client, which the retry
+# loop counts as a failed attempt — so a model that stops streaming never holds
+# its worker hostage. User-configurable because "too long" depends entirely on
+# the model: a reasoning model on a big batch can legitimately need several
+# minutes, while a fast chat model that goes past two minutes is stuck.
+DEFAULT_REQUEST_TIMEOUT  = 120     # seconds
+MIN_REQUEST_TIMEOUT      = 30
+MAX_REQUEST_TIMEOUT      = 600

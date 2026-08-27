@@ -74,9 +74,12 @@ class SettingsScreen(MenuScreen):
             Option("Max tokens per request (Safety)", "tokens",
                    hint=f"{prefs['max_tokens_per_request']:,} — Context Exceeded safety net"),
             Option("Default rows per Fix All request", "fix_rows",
-                   hint=f"{prefs['fix_batch_rows']} rows — what the Fix All wizard opens with"),
+                    hint=f"{prefs['fix_batch_rows']} rows — what the Fix All wizard opens with"),
+            Option("Request timeout before retry", "request_timeout",
+                    hint=f"{prefs['request_timeout']}s — a request that runs longer is "
+                         f"cancelled and retried"),
             Option("Locked-output fallback range", "fallback_range",
-                   hint=_fallback_hint(prefs["fallback_save_range"])),
+                    hint=_fallback_hint(prefs["fallback_save_range"])),
             Option("Change vault password", "password"),
             Option("Lock vault and quit", "lock"),
             Option("About", "about"),
@@ -113,6 +116,8 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(MaxTokensModal(), self._tokens_done)
         elif option.value == "fix_rows":
             self.app.push_screen(FixBatchRowsModal(), self._fix_rows_done)
+        elif option.value == "request_timeout":
+            self.app.push_screen(RequestTimeoutModal(), self._request_timeout_done)
         elif option.value == "fallback_range":
             self.app.push_screen(FallbackRangeModal(), self._fallback_range_done)
         elif option.value == "password":
@@ -220,6 +225,25 @@ class SettingsScreen(MenuScreen):
             note += (
                 f" ({value} was outside the allowed range "
                 f"{config.MIN_FALLBACK_SAVE_RANGE}-{config.MAX_FALLBACK_SAVE_RANGE}.)"
+            )
+        self.notify_status(note, OK if stored == value else WARN)
+
+    def _request_timeout_done(self, value: int | None) -> None:
+        # Guard is `is None` rather than falsiness — a timeout is never 0 in
+        # practice (the clamp floor is 30), but the convention keeps the
+        # callback honest about "cancelled" vs "typed nothing".
+        if value is None:
+            return
+        stored = app_prefs.set_request_timeout(value)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        note = (
+            f"A request that runs past {stored}s is cancelled and retried on "
+            f"another attempt/connection."
+        )
+        if stored != value:
+            note += (
+                f" ({value} was outside the allowed range "
+                f"{config.MIN_REQUEST_TIMEOUT}-{config.MAX_REQUEST_TIMEOUT}.)"
             )
         self.notify_status(note, OK if stored == value else WARN)
 
@@ -584,6 +608,59 @@ class FallbackRangeModal(ModalScreen[int]):
             number = int(self._value.value)
         except ValueError:
             self.query_one("#fallback-error", Label).update("That must be a number.")
+            return
+        self.dismiss(number)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class RequestTimeoutModal(ModalScreen[int]):
+    """
+    How long a single generate request may run before it counts as hung.
+
+    Past this the client raises a read timeout, the retry loop counts a failed
+    attempt, and the next attempt may land on a different connection or combo
+    member — a model that stopped answering must not hold its worker hostage
+    until the user notices a frozen run.
+
+    120s is the default because it is generous for an ordinary chat model on a
+    full batch, while a reasoning model on a slow endpoint may legitimately
+    need the room the ceiling (600s) allows. Out-of-range values are clamped
+    rather than refused, so a typo cannot empty the setting.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Request timeout before retry", classes="title")
+            yield Label(
+                "A request that runs longer than this is cancelled and retried "
+                "(up to 3 attempts), then another connection or combo member "
+                "takes over. Raise it for slow reasoning models; lower it to "
+                "recover faster from a provider that stops mid-reply.",
+                classes="hint",
+            )
+            self._value = LabeledInput(
+                "Seconds",
+                value=str(app_prefs.request_timeout()),
+                default=str(config.DEFAULT_REQUEST_TIMEOUT),
+                hint=f"{config.MIN_REQUEST_TIMEOUT}–{config.MAX_REQUEST_TIMEOUT}s "
+                     f"(default {config.DEFAULT_REQUEST_TIMEOUT}s)",
+            )
+            yield self._value
+            yield Label("", id="timeout-error", classes="error")
+            yield KeyHints([("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        self._value.focus_input()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        try:
+            number = int(self._value.value)
+        except ValueError:
+            self.query_one("#timeout-error", Label).update("That must be a number.")
             return
         self.dismiss(number)
 

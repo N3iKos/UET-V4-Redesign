@@ -433,10 +433,14 @@ class ProviderClient:
                 timeout=(10, self.timeout),
             )
         except requests.exceptions.Timeout:
+            # A read timeout is how the user's `request_timeout` setting is
+            # enforced: the retry loop counts this as a failed attempt (server
+            # class, like a 504) and the next attempt may land elsewhere.
             raise ProviderError(
                 f"Connection timed out after {self.timeout:.0f}s",
                 status_code=504,
                 retry_delay=config.RETRY_DELAY_ERR,
+                kind=ProviderError.KIND_SERVER,
             )
         except requests.exceptions.RequestException as exc:
             raise ProviderError(
@@ -560,6 +564,7 @@ class ProviderClient:
                 f"Connection timed out after {self.timeout:.0f}s",
                 status_code=504,
                 retry_delay=config.RETRY_DELAY_ERR,
+                kind=ProviderError.KIND_SERVER,
             )
         except requests.exceptions.RequestException as exc:
             raise ProviderError(

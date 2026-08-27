@@ -40,6 +40,7 @@ DEFAULTS: dict = {
     "fallback_save_range": config.DEFAULT_FALLBACK_SAVE_RANGE,
     "preferred_rows_per_request": config.DEFAULT_PREFERRED_ROWS_PER_REQUEST,
     "max_rows_per_request_cap": config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP,
+    "request_timeout": config.DEFAULT_REQUEST_TIMEOUT,
 }
 
 
@@ -83,6 +84,9 @@ def load_prefs() -> dict:
         payload.get("max_rows_per_request_cap"),
         default=config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP,
     )
+    prefs["request_timeout"] = _clamp_request_timeout(
+        payload.get("request_timeout")
+    )
     return prefs
 
 
@@ -116,6 +120,9 @@ def save_prefs(prefs: dict) -> None:
     current["max_rows_per_request_cap"] = _clamp_preferred_rows(
         current.get("max_rows_per_request_cap"),
         default=config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP,
+    )
+    current["request_timeout"] = _clamp_request_timeout(
+        current.get("request_timeout")
     )
     try:
         _write(current)
@@ -172,6 +179,17 @@ def preferred_rows_per_request() -> int:
 def max_rows_per_request_cap() -> int:
     """The ceiling the Processing form never auto-suggests above (Settings)."""
     return load_prefs()["max_rows_per_request_cap"]
+
+def request_timeout() -> int:
+    """
+    Seconds a single generate request may run before it counts as hung.
+
+    Beyond this the client raises a read timeout, the retry loop counts a
+    failed attempt, and the next attempt may land on a different connection or
+    (for a combo) a different member model — which is the whole point: a model
+    that stopped answering must not hold its worker hostage.
+    """
+    return load_prefs()["request_timeout"]
 
 
 def set_default_processing_mode(mode: str) -> str:
@@ -231,6 +249,12 @@ def set_max_rows_per_request_cap(value: int) -> int:
         value, default=config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP
     )
     save_prefs({"max_rows_per_request_cap": clamped})
+    return clamped
+
+def set_request_timeout(value: int) -> int:
+    """Store the per-request timeout (seconds), clamped. Returns stored value."""
+    clamped = _clamp_request_timeout(value)
+    save_prefs({"request_timeout": clamped})
     return clamped
 
 
@@ -296,6 +320,23 @@ def _clamp_fallback_range(value) -> int:
         return int(DEFAULTS["fallback_save_range"])
     return max(config.MIN_FALLBACK_SAVE_RANGE,
                min(config.MAX_FALLBACK_SAVE_RANGE, number))
+
+
+def _clamp_request_timeout(value) -> int:
+    """
+    Per-request timeout in seconds, clamped to the Settings range.
+
+    The floor is 30 rather than 1 because a legitimate slow reply — a reasoning
+    model on a big batch — takes tens of seconds, and a timeout below that
+    would kill healthy requests and turn the retry loop into a churn machine.
+    The ceiling (600s) exists so a typo cannot make a hung request wait forever.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return int(DEFAULTS["request_timeout"])
+    return max(config.MIN_REQUEST_TIMEOUT,
+               min(config.MAX_REQUEST_TIMEOUT, number))
 
 
 def _write(prefs: dict) -> None:

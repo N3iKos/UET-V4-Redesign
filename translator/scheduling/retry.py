@@ -323,15 +323,37 @@ class RetryExecutor:
         Keyed by both because a combo can put two members with different base
         URLs behind the same API key — a single-key cache would then send one
         member's request to the other's endpoint.
+
+        The per-request timeout comes from Settings (`request_timeout`), read
+        once per client rather than per attempt: a mid-run Settings change
+        applies from the *next* client built, which is the same freshness rule
+        every other preference here follows. A request that exceeds it raises
+        a read timeout inside the client, which this loop counts as a failed
+        attempt — so a hung model loses its slot instead of holding it.
         """
         url = base_url or self._base_url
         cache_key = f"{url}\n{key}"
         with self._clients_lock:
             client = self._clients.get(cache_key)
             if client is None:
-                client = ProviderClient(url, key or None)
+                client = ProviderClient(url, key or None,
+                                        timeout=self._request_timeout())
                 self._clients[cache_key] = client
             return client
+
+    @staticmethod
+    def _request_timeout() -> float:
+        """
+        The user's per-request timeout, in seconds. Never raises: prefs are a
+        convenience, and a request must never fail because the prefs file
+        could not be read — the shipped default is the answer then.
+        """
+        try:
+            from ..data.app_prefs import request_timeout
+
+            return float(request_timeout())
+        except Exception:
+            return float(config.DEFAULT_REQUEST_TIMEOUT)
 
     def _max_completion_tokens(self) -> int:
         """
