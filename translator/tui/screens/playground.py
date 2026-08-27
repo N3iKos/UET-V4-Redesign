@@ -75,8 +75,10 @@ REASONING_CHOICES = [
 
 
 def _reasoning_label(override: bool | None) -> str:
-    return next(label for value, label, _hint in REASONING_CHOICES
-                if value is override)
+    for value, label, _hint in REASONING_CHOICES:
+        if value is override or label == override:
+            return label
+    return "reasoning: model default"
 
 
 # ── Section menu ──────────────────────────────────────────────────────────────

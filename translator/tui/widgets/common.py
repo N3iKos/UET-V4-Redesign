@@ -47,18 +47,21 @@ from ..theme import (
 )
 
 
+_UNSET = object()
+
+
 @dataclass
 class Option:
     """One row in a Picker."""
     label: str
-    value: Any = None
+    value: Any = _UNSET
     hint: str = ""              # dim text shown after the label
     enabled: bool = True
     selected: bool = False      # multi-select state
     style: str = ""             # optional colour override for the label
 
     def __post_init__(self) -> None:
-        if self.value is None:
+        if self.value is _UNSET:
             self.value = self.label
 
 
