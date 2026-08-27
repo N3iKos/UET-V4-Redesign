@@ -89,18 +89,22 @@ _FIX_SYS = (
     "You are a professional translation editor.\n"
     "Your ONLY job is to correct the flawed TRANSLATION using the stated PROBLEM / CORRECTION NOTE as your primary guide.\n"
     "CRITICAL RULES:\n"
-    "1. Follow the correction instructed in PROBLEM / CORRECTION NOTE strictly. Replace the incorrect words/meanings identified in the problem note with the correct ones.\n"
-    "2. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
-    "3. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
-    "4. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
-    "5. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks."
+    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive. Execute the FIX directive exactly — it names the words to replace, the placeholder to restore, or the direction to move the register in.\n"
+    "2. Follow the FIX directive strictly. Replace the incorrect words/meanings identified in the note with the correct ones the note specifies.\n"
+    "3. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
+    "4. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
+    "5. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
+    "6. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks."
 )
 
 # How a comment must be written. Vague comments ("awkward phrasing") are
 # unactionable: a reviewer cannot verify them and a repair model cannot use
-# them. Quoting the offending fragment makes the claim checkable, and stating
-# the correct meaning — only where it is unambiguous — turns the comment into
-# something Fix All can act on without guessing.
+# them. The comment is the *instruction a repair model will execute*, so it is
+# written as one: WHAT is wrong (with both halves of the comparison quoted so
+# the claim is checkable), WHY it is wrong against this line's own source, and
+# a FIX directive stating what the corrected line must contain — the exact
+# words, a placeholder, or the direction to move in when several valid
+# phrasings exist.
 #
 # Quoting the SOURCE as well as the TRANSLATION is not decoration. A comment
 # that only quotes the translation can be written without ever looking at the
@@ -109,18 +113,27 @@ _FIX_SYS = (
 # makes the comparison the comment claims to have made visible — and a reviewer
 # who cannot produce that pair has no finding to report.
 _COMMENT_RULES = (
-    "For every reported line, the comment MUST:\n"
-    "  1. Quote the exact word or phrase at fault from the TRANSLATION, AND "
-    "quote the part of THAT LINE'S OWN SOURCE it fails to render. Write the "
-    "pair out, in this shape: SOURCE says \"...\" but TRANSLATION says \"...\".\n"
-    "  2. State plainly what is wrong with it in relation to that SOURCE.\n"
-    "  3. Where the fix is unambiguous (a dropped negation, a swapped name or "
-    "number, a literal value replacing a placeholder), state the correct "
-    "meaning directly.\n"
-    "  4. Where several valid phrasings exist (a pure style or register issue), "
-    "describe the direction needed without dictating exact wording.\n"
-    "If you cannot fill in both halves of that pair from this line alone, you "
-    "have no finding — do not report the line."
+    "For every reported line, write the comment as a repair instruction with "
+    "THREE parts, in this exact shape:\n"
+    "  WHAT: SOURCE says \"...\" but TRANSLATION says \"...\" — quote the exact "
+    "word or phrase at fault from the TRANSLATION, and the part of THAT LINE'S "
+    "OWN SOURCE it fails to render.\n"
+    "  WHY: one sentence stating what is wrong in relation to that SOURCE "
+    "(meaning changed, negation dropped, placeholder broken, register clash).\n"
+    "  FIX: the correction a repairer can apply without guessing —\n"
+    "    - when the fix is unambiguous, give the exact corrected wording or the "
+    "exact term/name/number that must appear instead, e.g. FIX: replace "
+    "\"kucing merah\" with \"kucing hitam\";\n"
+    "    - when a placeholder is broken, name the exact token that must be "
+    "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
+    "    - when several valid phrasings exist (pure style/register), describe "
+    "the direction, e.g. FIX: use casual register matching the surrounding "
+    "lines, keep the meaning unchanged.\n"
+    "The FIX part is what a repair model executes verbatim: make it concrete "
+    "enough that following it fixes the line. Never write only a judgement "
+    "(\"awkward\", \"unnatural\") with no instruction.\n"
+    "If you cannot fill in WHAT and WHY from this line alone, you have no "
+    "finding — do not report the line."
 )
 
 # Severity is graded on impact to a reader, not on distance from a hypothetical
@@ -399,7 +412,10 @@ def build_judge_prompt(
         f'{{"lines": [{{"row": {example_row}, '
         f'"error_types": ["mistranslation"], '
         + ('"severity": "critical", ' if graded else "")
-        + '"comment": "one short sentence naming what is wrong"}]}'
+        + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
+        '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
+        'misread the story · FIX: replace \\"kucing merah\\" with \\"kucing '
+        'hitam\\""}]}'
     )
 
     return (
