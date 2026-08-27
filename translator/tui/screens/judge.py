@@ -2044,6 +2044,11 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_rows: list[int] = []
         self._rejudge_seen: set[int] = set()
         self._rejudge_flagged: list[tuple[int, object]] = []
+        # Every row a re-judge has covered, single (g) or batch (G), so the
+        # filter bar can offer exactly the second verdicts as their own view:
+        # "which of my repairs did the judge look at again, and how did they
+        # come out" is a question the severity chips cannot answer.
+        self._rejudged_rows: set[int] = set()
         # Requests finished and requests planned, for the second progress line.
         # A row count alone cannot show a run sitting on one slow request.
         self._sections_done = 0
@@ -2266,18 +2271,23 @@ class JudgeRunScreen(BaseScreen):
         repaired one, default for a clean row (UET_UX §6).
 
         A repaired row keeps its place in whatever filter it was flagged under —
-        it is just green now instead of red — so `_before` wins over the issue
-        colour when both apply.
+        it is just green now instead of red — *unless a re-judge flagged it
+        again*: the row is back in `report.issues`, and the colour must say so.
+        Green on a row the judge just re-flagged would read as "fixed and
+        holding" when it is exactly the opposite, so `report.issues` wins over
+        `_before` when both apply.
         """
         report = self._report
         styles: dict[int, str] = {}
         if report is None:
             return styles
+        for row in self._before:
+            if row not in report.issues:
+                # Repaired and not re-flagged — green. A row that IS in
+                # report.issues is painted below with its new severity.
+                styles[row] = OK
         for row, issue in report.issues.items():
             styles[row] = _SEVERITY_STYLES.get(issue.severity, WARN)
-        for row in self._before:
-            # Repaired — green, whatever it used to be flagged as.
-            styles[row] = OK
         return styles
 
     def _grid_stat(self, report: JudgeReport) -> str:
@@ -2288,6 +2298,8 @@ class JudgeRunScreen(BaseScreen):
             return f"{len(report.problem_rows)} flagged of {len(report.rows)}"
         if self._filter == "fixed":
             return f"{len(self._before)} row(s) repaired"
+        if self._filter == "rejudged":
+            return f"{len(self._rejudged_rows)} row(s) re-judged"
         return f"{shown} row(s) with {self._filter}"
 
     def _model_id(self) -> str:
@@ -3116,6 +3128,11 @@ class JudgeRunScreen(BaseScreen):
             # Only after something has been applied, and last, because it is a
             # record of what happened rather than a kind of problem.
             chips.append(("fixed", "fixed", len(self._before)))
+        if self._rejudged_rows:
+            # The second verdicts: rows the judge looked at again after a fix,
+            # with the outcome carried by the row's colour (severity = still
+            # wrong, green = holds up). A record, like `fixed`, so it sits last.
+            chips.append(("rejudged", "re-judged", len(self._rejudged_rows)))
         return chips
 
     def _rows_for_filter(self, key: str) -> list[int] | None:
@@ -3136,6 +3153,12 @@ class JudgeRunScreen(BaseScreen):
             return sorted(set(report.problem_rows) | set(self._before))
         if key == "fixed":
             return sorted(self._before)
+        if key == "rejudged":
+            # Every row the judge has looked at twice — passed or still wrong,
+            # the colour tells them apart. Kept separately from `fixed` because
+            # a row can be repaired and not yet re-checked, and vice versa a
+            # re-check can cover a row repaired by hand before any Fix All.
+            return sorted(self._rejudged_rows)
         if key.startswith("sev:"):
             severity = key[4:]
             live = {row for row, issue in report.issues.items()
@@ -3267,6 +3290,12 @@ class JudgeRunScreen(BaseScreen):
                 f"showing {len(self._before)} repaired row(s) — before and after, "
                 f"r reverts the one under the cursor",
                 OK,
+            )
+        elif key == "rejudged":
+            self.notify_status(
+                f"showing {len(self._rejudged_rows)} re-judged row(s) — "
+                f"severity colour = still wrong, green = the fix holds up",
+                ACCENT,
             )
         elif key.startswith("sev:"):
             severity = key[4:]
@@ -3887,11 +3916,25 @@ class JudgeRunScreen(BaseScreen):
 
         The flag each row carried is kept too, because a revert has to put it
         back — the problem is in the file again the moment the old text is.
+
+        A "fix" whose text is identical to what the file already held is not a
+        repair: writing it changed nothing, so the row keeps its flag and its
+        severity colour rather than turning green. A green row that still carries
+        the exact text the judge flagged would read as "fixed" while the problem
+        the judge named is still in it — which is precisely what Fix All exists
+        to remove.
         """
         report = self._report
         if not applied or report is None:
             return
+        changed: dict[int, str] = {}
+        unchanged: list[int] = []
         for row, text in applied.items():
+            if (text or "").strip() == (report.translation_for(row) or "").strip():
+                unchanged.append(row)
+                continue
+            changed[row] = text
+        for row, text in changed.items():
             # Recorded before the report is updated, or "before" would already
             # be the fix. First write wins, so fixing a row twice still compares
             # against what the file originally held.
@@ -3903,15 +3946,34 @@ class JudgeRunScreen(BaseScreen):
             report.drop(row)
         # Stay on the current filter: a fixed row keeps its place there, now
         # green, so there is nothing to switch away to.
-        self._cursor_row = min(applied)
+        if changed:
+            self._cursor_row = min(changed)
+        elif unchanged:
+            self._cursor_row = min(unchanged)
         self._fill_grid()
         self._paint_rail()
-        self.notify_status(
-            f"{len(applied)} row(s) written to column "
-            f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
-            f"Click a row to see before/after, g re-judges it, r reverts it.",
-            OK,
-        )
+        if unchanged and not changed:
+            self.notify_status(
+                f"{len(unchanged)} row(s) were written back IDENTICAL to the "
+                f"file — the problem the judge named is still in them, so they "
+                f"stay flagged. Open a row to edit it by hand, or try a "
+                f"stronger repair model.",
+                WARN,
+            )
+        elif unchanged:
+            self.notify_status(
+                f"{len(changed)} row(s) written to column "
+                f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
+                f"{len(unchanged)} row(s) came back identical and stay flagged.",
+                OK,
+            )
+        else:
+            self.notify_status(
+                f"{len(changed)} row(s) written to column "
+                f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
+                f"Click a row to see before/after, g re-judges it, r reverts it.",
+                OK,
+            )
 
     # ── Judge Again (one row, small indicator) ────────────────────────────────
 
@@ -3997,6 +4059,10 @@ class JudgeRunScreen(BaseScreen):
         report = self._report
         if report is None:
             return
+        # A re-check happened, so the row joins the re-judged view whatever the
+        # verdict was: the chip answers "what did the judge say the second
+        # time", and that includes the rows that passed.
+        self._rejudged_rows.add(verdict.row)
         repaired = verdict.row in self._before
         if verdict.passed:
             report.drop(verdict.row)
@@ -4163,6 +4229,9 @@ class JudgeRunScreen(BaseScreen):
         for row in rows:
             if row in unevaluated:
                 continue
+            # Judged again, whatever the outcome: the re-judged chip is a
+            # record of the second verdicts, not only the bad ones.
+            self._rejudged_rows.add(row)
             if row in report.issues:
                 report.drop(row)
             issue = fresh.issues.get(row)
@@ -4181,7 +4250,7 @@ class JudgeRunScreen(BaseScreen):
                 "provider response",
             )
 
-        self._filter = "fixed"
+        self._filter = "rejudged" if self._rejudged_rows else "fixed"
         if still:
             self._cursor_row = still[0]
         self._fill_grid()
