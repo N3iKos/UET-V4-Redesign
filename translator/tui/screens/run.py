@@ -123,6 +123,10 @@ class RunScreen(BaseScreen):
         super().__init__(**kwargs)
         self.job = job
         self._stop = threading.Event()
+        # When the first `c` (graceful stop) landed; a second press within
+        # the window force-severs the in-flight request instead of waiting
+        # for the current batch to finish. Same contract as Judge's `c`.
+        self._cancel_requested_at = 0.0
         self._engine: ProcessingEngine | None = None
         self._started = time.time()
         self._workers: dict[int, WorkerStatus] = {}
@@ -551,8 +555,34 @@ class RunScreen(BaseScreen):
         self._feed_pane().scroll_end(animate=False)
 
     def action_pause(self) -> None:
+        """
+        `c` — stop the run.
+
+        First press is graceful: the stop flag is set and the batch in flight
+        finishes — its rows are written and kept, nothing new is sent. Second
+        press (while the first is still pending) is a force stop: the sockets
+        under every in-flight request are closed, so the run ends now.
+        """
+        now = time.monotonic()
+        pending = not self._finished and self._stop.is_set()
+        if pending and (now - self._cancel_requested_at) <= 5.0:
+            from ...providers.client import abort_all_for
+            self._stop.set()
+            try:
+                abort_all_for(self._stop)
+            except Exception:
+                pass
+            self.notify_status(
+                "Force-stopping — aborting the request in flight…", ERROR,
+            )
+            return
+
+        self._cancel_requested_at = now
         self._stop.set()
-        self.notify_status("Stopping after the current batch…", WARN)
+        self.notify_status(
+            "Stopping after the current batch — press c again to abort "
+            "immediately.", WARN,
+        )
 
     def action_toggle_activity(self) -> None:
         """

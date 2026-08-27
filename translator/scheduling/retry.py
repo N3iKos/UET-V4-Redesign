@@ -238,6 +238,14 @@ class RetryExecutor:
         preview = exc.preview()
         kind = getattr(exc, "kind", ProviderError.KIND_UNKNOWN)
 
+        # A force-cancel severed the socket under this read. Not an error to
+        # handle, retry or rotate on: the stop flag is already set, the run is
+        # ending, and the loop's `while not stop.is_set()` exits on the next
+        # turn. Saying nothing keeps the events rail free of a spurious
+        # "connection error" line for a cancellation the user asked for.
+        if self._stop.is_set() and "aborted" in (exc.response_text or str(exc)).lower():
+            return
+
         # Confirmed quota / daily / billing wall — the *only* case that retires
         # a connection. Everything else is temporary and must leave it usable.
         if kind == ProviderError.KIND_QUOTA:
@@ -343,14 +351,21 @@ class RetryExecutor:
         every other preference here follows. A request that exceeds it raises
         a read timeout inside the client, which this loop counts as a failed
         attempt — so a hung model loses its slot instead of holding it.
+
+        The client also gets the stop event, so a force-cancel can sever a
+        blocked read from the UI thread (the client closes the socket; the
+        blocked recv raises here as a cancelled ProviderError).
         """
         url = base_url or self._base_url
         cache_key = f"{url}\n{key}"
         with self._clients_lock:
             client = self._clients.get(cache_key)
             if client is None:
-                client = ProviderClient(url, key or None,
-                                        timeout=self._request_timeout())
+                client = ProviderClient(
+                    url, key or None,
+                    timeout=self._request_timeout(),
+                    abort_event=self._stop,
+                )
                 self._clients[cache_key] = client
             return client
 

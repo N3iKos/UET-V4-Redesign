@@ -25,7 +25,9 @@ module builds and never invents one of its own.
 from __future__ import annotations
 
 import json
+import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -122,6 +124,49 @@ class ListModelsResult:
         rejecting the provider (03_PROVIDER_SYSTEM.md §3).
         """
         return self.status_code in (404, 405, 501) or (self.is_ok and not self.models)
+
+
+# ── Force-abort registry ─────────────────────────────────────────────────────
+#
+# A run's owner (a screen or the engine) holds one threading.Event; every
+# client built with that event registers itself here so the owner can sever
+# every in-flight request without knowing which executors/workers/clients
+# exist. Weak, so a finished run's clients vanish from the registry without
+# anyone having to unregister them.
+
+_ABORT_REGISTRY: "weakref.WeakKeyDictionary[object, weakref.WeakSet]" = \
+    weakref.WeakKeyDictionary()
+_ABORT_REGISTRY_LOCK = threading.Lock()
+
+
+def _register_abortable(abort_event, client: "ProviderClient") -> None:
+    with _ABORT_REGISTRY_LOCK:
+        clients = _ABORT_REGISTRY.get(abort_event)
+        if clients is None:
+            clients = weakref.WeakSet()
+            _ABORT_REGISTRY[abort_event] = clients
+        clients.add(client)
+
+
+def abort_all_for(abort_event) -> int:
+    """
+    Sever every in-flight request of every client tied to this event.
+
+    Returns how many clients were told to abort (not how many had a request
+    in flight — a client may be idle). Safe to call with no registry entry
+    and safe to call twice; the second call is a no-op because the sockets
+    are already closed.
+    """
+    closed = 0
+    with _ABORT_REGISTRY_LOCK:
+        clients = list(_ABORT_REGISTRY.get(abort_event) or ())
+    for client in clients:
+        try:
+            client.abort_active_request()
+            closed += 1
+        except Exception:
+            pass
+    return closed
 
 
 def parse_body(text: str) -> dict:
@@ -235,14 +280,27 @@ class ProviderClient:
         base_url: str,
         api_key: str | None = None,
         timeout: float = config.DEFAULT_HTTP_TIMEOUT,
+        abort_event=None,
     ) -> None:
         self.base_url = normalize_base_url(base_url)
         self.api_key = (api_key or "").strip() or None
         self.timeout = timeout
+        # Set by the run's owner (screen/engine) so an HTTP request in flight
+        # can be severed from another thread: `requests` cannot be interrupted
+        # mid-read, but closing the underlying socket makes the blocked read
+        # raise immediately. None (the default) keeps the client fully
+        # synchronous, which is what every existing caller expects.
+        self.abort_event = abort_event
         # Streaming replies carry no token counts unless asked; some servers
         # reject the field that asks. Set false after one such rejection so
         # the rest of the session stops paying for the round trip.
         self._ask_for_usage = True
+        # The response currently being read, if any, and the lock that guards
+        # it — the abort path closes it from another thread.
+        self._active_response = None
+        self._response_lock = threading.Lock()
+        if abort_event is not None:
+            _register_abortable(abort_event, self)
 
     # ── URLs / headers ────────────────────────────────────────────────────────
 
@@ -259,6 +317,55 @@ class ProviderClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+    # ── Abort ──────────────────────────────────────────────────────────────────
+
+    def abort_active_request(self) -> None:
+        """
+        Sever whatever HTTP request this client is currently reading.
+
+        Called from the UI thread on a force-cancel. `requests`/urllib3 offer
+        no cooperative cancellation for a blocked read, but closing the
+        underlying socket makes the blocked recv() raise immediately in the
+        worker thread, which surfaces there as a ProviderError. Idempotent and
+        safe when nothing is in flight.
+        """
+        with self._response_lock:
+            response = self._active_response
+        if response is None:
+            return
+        try:
+            response.close()
+        except Exception:
+            pass        # already closed, or the socket died on its own
+
+    def _abortable_post(self, json_body: dict, stream: bool = False):
+        """
+        requests.post with the response registered for aborting.
+
+        The response is registered the moment it exists and unregistered in a
+        finally, so the abort window covers the whole read — body and stream
+        alike. A closed socket turns into requests.exceptions.ConnectionError /
+        ChunkedEncodingError on the reading thread, which the callers already
+        map to a ProviderError.
+        """
+        resp = requests.post(
+            self.generate_url,
+            headers=self._headers(),
+            json=json_body,
+            timeout=(10, self.timeout),
+            stream=stream,
+        )
+        with self._response_lock:
+            self._active_response = resp
+        return resp
+
+    def _release_response(self) -> None:
+        with self._response_lock:
+            self._active_response = None
+
+    def _aborted(self) -> bool:
+        return self.abort_event is not None and self.abort_event.is_set()
 
     # ── list_models ───────────────────────────────────────────────────────────
 
@@ -426,12 +533,12 @@ class ProviderClient:
 
         started = time.time()
         try:
-            resp = requests.post(
-                self.generate_url,
-                headers=self._headers(),
-                json=body,
-                timeout=(10, self.timeout),
-            )
+            resp = self._abortable_post(body)
+            try:
+                latency_ms = (time.time() - started) * 1000.0
+                headers, text = dict(resp.headers), resp.text
+            finally:
+                self._release_response()
         except requests.exceptions.Timeout:
             # A read timeout is how the user's `request_timeout` setting is
             # enforced: the retry loop counts this as a failed attempt (server
@@ -444,6 +551,23 @@ class ProviderClient:
                 retry_delay=config.RETRY_DELAY_ERR,
                 kind=ProviderError.KIND_SERVER,
                 is_timeout=True,
+            )
+        except requests.exceptions.ConnectionError as exc:
+            if self._aborted():
+                # The force-cancel path closed the socket under this read.
+                # Report it as a cancellation, not a connection failure —
+                # the retry loop checks the stop flag and gives up quietly
+                # instead of rotating and re-issuing.
+                raise ProviderError(
+                    "Request aborted (force cancel)",
+                    status_code=0,
+                    retry_delay=0,
+                    kind=ProviderError.KIND_UNKNOWN,
+                )
+            raise ProviderError(
+                f"HTTP request failed: {type(exc).__name__}: {exc}",
+                status_code=0,
+                retry_delay=config.RETRY_DELAY_ERR,
             )
         except requests.exceptions.RequestException as exc:
             raise ProviderError(
@@ -555,13 +679,7 @@ class ProviderClient:
     ) -> StreamStats:
         started = time.time()
         try:
-            resp = requests.post(
-                self.generate_url,
-                headers=self._headers(),
-                json=body,
-                timeout=(10, self.timeout),
-                stream=True,
-            )
+            resp = self._abortable_post(body, stream=True)
         except requests.exceptions.Timeout:
             raise ProviderError(
                 f"Connection timed out after {self.timeout:.0f}s",
@@ -586,9 +704,13 @@ class ProviderClient:
             pieces: list[str] = []
             thinking: list[str] = []
             usage: dict = {}
+            aborted_mid_stream = False
             for raw in resp.iter_lines(decode_unicode=True):
                 if stop_event is not None and stop_event.is_set():
                     stats.stopped = True
+                    break
+                if self._aborted():
+                    aborted_mid_stream = True
                     break
                 if not raw:
                     continue
@@ -631,7 +753,16 @@ class ProviderClient:
                 pieces.append(piece)
                 on_delta(piece)
         finally:
+            self._release_response()
             resp.close()
+
+        if aborted_mid_stream:
+            raise ProviderError(
+                "Request aborted (force cancel)",
+                status_code=0,
+                retry_delay=0,
+                kind=ProviderError.KIND_UNKNOWN,
+            )
 
         stats.latency_ms = (time.time() - started) * 1000.0
         stats.content = "".join(pieces)

@@ -1988,6 +1988,14 @@ class JudgeRunScreen(BaseScreen):
         # disagree with what Review showed.
         self._processing: dict = dict(processing or {})
         self._stop = threading.Event()
+        # ── Force-cancel (double `c`) ─────────────────────────────────────────
+        # The first `c` sets the stop flag and lets the request in flight
+        # finish — its result is real work and is kept. A second `c` while the
+        # first is still pending SEVERS the request: every client the executors
+        # hold gets its socket closed, the blocked read raises in the worker
+        # thread, and the run ends now instead of after the current output.
+        self._cancel_requested_at = 0.0    # when the first `c` landed
+        self._aborted_run = False
         self._report: JudgeReport | None = None
         self._runner: JudgeRunner | None = None
         self._workers: dict[int, object] = {}
@@ -2088,11 +2096,6 @@ class JudgeRunScreen(BaseScreen):
         # (bug #1/#9). (label, model_slot).
         self._op_label = "Judge"
         self._op_slot = self._model_slot
-        # Set when the run stopped because every connection/model was gone, so
-        # `_evaluated` can land on `paused` (with a retry offer) rather than
-        # `completed` — a run that never finished must not read as finished
-        # (bug #4).
-        self._aborted_run = False
         # Rows a paused-run Retry is re-sending, for reference/diagnostics.
         self._retry_rows: list[int] = []
 
@@ -2172,6 +2175,10 @@ class JudgeRunScreen(BaseScreen):
             keys = [("↑↓", "scroll"), ("a", "activity")]
             if not self._follow_live:
                 keys.append(("f", "follow latest"))
+            if self._stop.is_set():
+                # A graceful cancel is pending: the second press severs the
+                # request in flight, and that is worth saying in the footer.
+                return keys + [("c", "force stop")]
             return keys + [("c", "stop")]
         if self._report is None:
             return [("↑↓", "move"), ("←", "back")]
@@ -3361,6 +3368,10 @@ class JudgeRunScreen(BaseScreen):
         # started after the previous one finished — would be instantly
         # cancelled by the flag an earlier cancel left behind.
         self._stop.clear()
+        # And a fresh cancel window: the double-press force-cancel counts
+        # presses against the *current* operation only, so a `c` pressed long
+        # after the last one is a first press again.
+        self._cancel_requested_at = 0.0
         # A new operation starts clean: any card left from a previous one is no
         # longer relevant, and a stale "recovered"/"failed" line must not linger.
         self._issue_active = False
@@ -3643,23 +3654,64 @@ class JudgeRunScreen(BaseScreen):
 
     def action_cancel_operation(self) -> None:
         """
-        Stop whatever is running (batch or single-row) and stay right here.
+        `c` — stop whatever is running (batch or single-row) and stay here.
 
-        The runner, the scheduler and every request check the shared stop
-        event, so setting it halts the in-flight work at its next checkpoint.
-        The results screen — the report, the grid, the fixes already applied —
-        is untouched and remains in front of the user. The next operation
-        clears the stop event when it starts (`_begin_op`), so a later Fix Row
-        or Fix All is not instantly cancelled by an earlier one.
+        The FIRST press is a graceful stop: the stop flag is set, and the
+        request in flight is allowed to finish — its reply is real work the
+        report keeps. Nothing new is sent after it.
+
+        The SECOND press, while the first is still pending, is a force stop:
+        every request actually in flight is severed at the socket, so the run
+        ends immediately instead of after the current output. Two presses
+        because a graceful stop can still wait out a slow generation, and
+        "wait" is sometimes exactly what the user no longer wants.
         """
+        now = time.monotonic()
+        pending = (self._busy_batch or self._busy_row) and self._stop.is_set()
+        if pending and (now - self._cancel_requested_at) <= 5.0:
+            # Second press inside the window: force. Sever the sockets under
+            # every in-flight request; the blocked reads raise in their worker
+            # threads, which see the stop flag and give up without retrying.
+            self._force_abort()
+            self._run_state = "cancelled"
+            self.notify_status(
+                "Force-cancelling — aborting the request in flight…", ERROR,
+            )
+            self.refresh_keys()
+            return
+
+        self._cancel_requested_at = now
         self._stop.set()
         if self._busy_batch:
             self._run_state = "cancelled"
         self.notify_status(
-            "Cancelled the current operation — results so far are kept. "
-            "Press c to confirm & save, or start a new fix.", WARN,
+            "Cancelling after the current output — press c again to abort "
+            "immediately.",
+            WARN,
         )
         self.refresh_keys()
+
+    def _force_abort(self) -> None:
+        """
+        Sever every HTTP request this screen's operation has in flight.
+
+        Every client the executors built carries this screen's stop event, and
+        the client module keeps a registry of (event → clients); `abort_all_for`
+        closes each registered client's live socket. The blocked reads raise
+        in their worker threads as cancelled ProviderErrors, which the retry
+        loop sees (stop flag set) and gives up on without rotating or
+        re-issuing.
+        """
+        from ...providers.client import abort_all_for
+
+        self._stop.set()
+        try:
+            abort_all_for(self._stop)
+        except Exception:
+            # The registry is best-effort: with or without it, the stop flag
+            # alone still ends the run at the next checkpoint — every result
+            # already read is kept, and nothing new is sent.
+            pass
 
     def action_follow_latest(self) -> None:
         """
