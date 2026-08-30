@@ -503,7 +503,7 @@ class JudgeRunner:
                     section.error = ""
                 section.unparsed = result.unparsed
 
-        def parse(raw: str, task: BatchTask) -> BatchResult:
+        def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
             index = task.extra["index"]
             result = parse_evaluation(raw, graded=self.graded)
             # A reply that is not Judge JSON is re-asked before anything is
@@ -513,7 +513,7 @@ class JudgeRunner:
             # to the scheduler's own recovery ladder (mini-batch, then solo)
             # before any of them is counted as unevaluated.
             if result.unparsed:
-                result = self._format_retry(task, index, result, contexts)
+                result = self._format_retry(task, index, result, contexts, report)
             apply_result(index, task, result)
             if result.unparsed:
                 # Every row of this section came back with no verdict even
@@ -649,7 +649,7 @@ class JudgeRunner:
 
     def _format_retry(
         self, task: BatchTask, index: int, first: JudgeResult,
-        contexts: dict[int, str],
+        contexts: dict[int, str], report=None,
     ) -> JudgeResult:
         """
         Re-ask a section whose reply was not Judge JSON, up to three times.
@@ -659,6 +659,11 @@ class JudgeRunner:
         whole evaluation — is the cheap way to get a usable reply. Each attempt
         re-issues the section's own prompt, so nothing outside this section is
         touched (no other section, no earlier result).
+
+        `report` is the scheduler's phase channel: each re-ask flips the
+        worker back to a live "sending" phase with a fresh timer, and back to
+        "parsing" when the reply lands — without it the panel would show
+        "parsing 250s" while whole requests are in flight.
 
         Returns the last result whether it parsed or not. The caller reports
         the section; the events rail gets one short line per attempt so the
@@ -683,7 +688,13 @@ class JudgeRunner:
             self._retry_event(
                 f"Request {index} · invalid Judge format · retry {attempts}/{MAX_FORMAT_RETRIES}"
             )
-            content, error = self._one_request(prompt, label=f"judge retry {index}")
+            self._report_phase(report, "request")
+            content, error = self._one_request(
+                prompt, label=f"judge retry {index}",
+                on_phase=lambda phase, active: self._report_phase(report, "request"),
+                on_event=self._retry_exec_event(index),
+            )
+            self._report_phase(report, "parse")
             if error:
                 result.unparsed = True
                 result.error = error
@@ -697,6 +708,35 @@ class JudgeRunner:
         if result.unparsed:
             self._retry_event(f"Request {index} · unevaluated after retries")
         return result
+
+    @staticmethod
+    def _report_phase(report, kind: str) -> None:
+        """Tell the scheduler's panel a format-retry phase change, if wired."""
+        if report is None:
+            return
+        try:
+            report(kind)
+        except Exception:
+            pass
+
+    def _retry_exec_event(self, index: int):
+        """
+        Executor events from a format-retry request, onto the events rail.
+
+        Without this the retry request's own trouble (rate limit, cooldown
+        park, server error) was invisible: the attempt just took however long
+        it took. One concise line per event, same shape as the ladder's own
+        messages, so the rail reads as one story.
+        """
+
+        def on_event(event) -> None:
+            kind = getattr(event, "kind", "")
+            if kind not in ("rate_limit", "cooldown", "server_error", "error"):
+                return
+            message = getattr(event, "message", "") or getattr(event, "label", "")
+            self._retry_event(f"Request {index} · {kind.replace('_', ' ')}: {message}")
+
+        return on_event
 
     def _retry_event(self, message: str) -> None:
         """One concise retry line on the events rail — never a raw response."""
@@ -814,7 +854,9 @@ class JudgeRunner:
                 severities=severities,
             )
 
-        def parse(raw: str, task: BatchTask) -> BatchResult:
+        def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
+            # Local-only parse (the fix path has no format-retry ladder), so
+            # the scheduler's `report` channel is accepted and unused.
             expected = task.row_numbers
             from ..parsing.recovery import ParseRecoveryPipeline
 
@@ -1167,7 +1209,7 @@ class JudgeRunner:
                     )
                 continue
             try:
-                result = parse(content or "", task)
+                result = parse(content or "", task, None)
             except Exception as exc:            # a parse must not sink the run
                 message = f"parse error: {exc}"
                 if errors is not None:
@@ -1198,13 +1240,28 @@ class JudgeRunner:
             if on_result is not None:
                 on_result(task, result)
 
-    def _one_request(self, prompt: str, label: str = "") -> tuple[str | None, str]:
+    def _one_request(
+        self, prompt: str, label: str = "", on_phase=None, on_event=None
+    ) -> tuple[str | None, str]:
         """
         One request, on whichever path is available.
 
         Returns `(content, error)` rather than raising: a failed Judge request
         is an answer to show, exactly as it is in the playground, and the
         provider's own words are what gets shown.
+
+        `on_phase` / `on_event` are the scheduler's panel channels, wired for
+        the format-retry ladder so its requests are visible as a live
+        "sending" phase and its rate-limit / cooldown events reach the rail.
+
+        The pooled branch runs a **single attempt**: the callers here are
+        already retry loops of their own (the format-retry ladder re-asks up
+        to three times; solo recovery walks the rows), and letting the
+        executor loop inside each step multiplied one visible "retry" into
+        up to three hidden ones plus connection cooldowns — one step could
+        outlast three request timeouts. One attempt per call keeps every
+        step bounded by a single timeout, which is what the panel and the
+        user both expect a "retry" to mean.
         """
         from ..core.models import ProviderError
 
@@ -1213,9 +1270,11 @@ class JudgeRunner:
 
             executor = RetryExecutor(
                 connection_pool=self._pool,
-                job=self._job,
+                job=self._single_attempt_job(),
                 base_url=getattr(self._provider, "base_url", ""),
                 stop_event=self._stop,
+                on_phase=on_phase,
+                on_event=on_event,
             )
             outcome = executor.execute(prompt, label=label, rows=1)
             self._tokens_used += outcome.tokens
@@ -1257,6 +1316,22 @@ class JudgeRunner:
             self._log_raw(label, prompt, None, latency)
             self.write_log(f"client exception: {label} - {err_text}")
             return None, err_text
+
+    def _single_attempt_job(self) -> JobConfig:
+        """
+        This job with the executor's inner retry loop switched off.
+
+        Only the retry knobs change: the single-attempt contract lives here
+        while the job itself (model, temperature, reasoning, pacing) stays
+        exactly what the operation was configured with, so a format-retry
+        request is the same request the first attempt was — just not wrapped
+        in another ladder.
+        """
+        import dataclasses
+
+        return dataclasses.replace(
+            self._job, max_attempts=1, retry_mode="fixed",
+        )
 
     # ── Plumbing ──────────────────────────────────────────────────────────────
 

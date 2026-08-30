@@ -182,7 +182,13 @@ class StatsAccumulator:
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 PromptBuilder = Callable[[BatchTask], str]
-ResponseParser = Callable[[str, BatchTask], BatchResult]
+# `report` lets a parser announce that its own work includes more requests —
+# the Judge format-retry ladder re-asks the model from inside `parse`, and
+# without this the panel keeps saying "parsing" while a full request is in
+# flight. Kinds: "request" (a new LLM request started) / "parse" (back to
+# local parsing).
+ParsePhaseReporter = Callable[[str], None]
+ResponseParser = Callable[[str, BatchTask, ParsePhaseReporter | None], BatchResult]
 ResultSink = Callable[[BatchTask, BatchResult], None]
 SoloPromptBuilder = Callable[[int, BatchTask], str]
 SoloParser = Callable[[str, int, BatchTask], str]
@@ -543,7 +549,7 @@ class Scheduler:
 
         self._set_status(worker_id, phase="parsing", started_at=time.time())
         try:
-            result = self._parse(outcome.content, task)
+            result = self._parse(outcome.content, task, self._parse_reporter(worker_id, task, my_generation))
         except Exception as exc:
             self._fail_task(worker_id, task, stats, f"parse error: {exc}")
             self._note_failure(task, worker_id, f"parse error: {exc}", "")
@@ -624,7 +630,10 @@ class Scheduler:
 
         if mini.content is not None:
             try:
-                mini_result = self._parse(mini.content, mini_task)
+                mini_result = self._parse(
+                    mini.content, mini_task,
+                    self._parse_reporter(worker_id, task, task.generation),
+                )
                 result.results.update(
                     {rn: text for rn, text in mini_result.results.items() if text}
                 )
@@ -804,6 +813,35 @@ class Scheduler:
         )
 
     # ── Plumbing ──────────────────────────────────────────────────────────────
+
+    def _parse_reporter(
+        self, worker_id: int, task: BatchTask, generation: int
+    ) -> ParsePhaseReporter:
+        """
+        The callback a parser uses to say "my work is not local any more".
+
+        The Judge format-retry ladder re-issues whole LLM requests from inside
+        `parse`, so the panel's "parsing" line would otherwise keep counting
+        up (and keep its label) while a full request is in flight. Each report
+        re-anchors the phase and its timer, the same way the executor's own
+        `on_phase` does for the first request.
+
+        Stale-proofed by generation: if the watchdog reassigned this batch
+        mid-parse, the worker's line may already belong to the takeover, and a
+        late report from the old attempt must not repaint it. And like every
+        status write, it must never raise into the parser.
+        """
+
+        def report(kind: str) -> None:
+            try:
+                if task.generation != generation:
+                    return
+                phase = "generating" if kind == "request" else "parsing"
+                self._set_status(worker_id, phase=phase, started_at=time.time())
+            except Exception:
+                pass
+
+        return report
 
     def _make_executor(self, worker_id: int) -> RetryExecutor:
         def on_event(event: RetryEvent) -> None:

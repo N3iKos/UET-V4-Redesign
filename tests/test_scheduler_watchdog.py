@@ -94,7 +94,7 @@ def _scheduler(job: JobConfig, executor: _ScriptedExecutor) -> Scheduler:
         connection_pool=_StubPool(),       # type: ignore[arg-type]
         base_url="",
         prompt_builder=lambda task: "prompt",
-        parse_response=lambda raw, task: BatchResult(
+        parse_response=lambda raw, task, report=None: BatchResult(
             results={row: raw for row, _src in task.rows}),
         stop_event=threading.Event(),
     )

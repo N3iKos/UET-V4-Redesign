@@ -538,7 +538,10 @@ class ProcessingEngine:
     def _make_translate_parser(self, source_map: dict[int, str]):
         job = self._job
 
-        def parse(raw: str, task: BatchTask) -> BatchResult:
+        def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
+            # `report` is the Judge path's channel for saying "this parse is
+            # re-asking the model"; translate parsing is purely local, so it
+            # is accepted and ignored rather than wired to anything.
             expected = task.row_numbers
             if job.prompt_format == "json":
                 parsed = parse_json_response(raw, expected)
@@ -566,7 +569,9 @@ class ProcessingEngine:
         return parse
 
     def _make_repair_parser(self):
-        def parse(raw: str, task: BatchTask) -> BatchResult:
+        def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
+            # Same contract as the translate parser: local only, `report`
+            # unused (see _make_translate_parser).
             expected = task.row_numbers
             parsed = self._parser.recover(raw, expected)
             results = {
