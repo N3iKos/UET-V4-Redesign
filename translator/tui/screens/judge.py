@@ -122,7 +122,14 @@ from ...providers.selection import (
 )
 from ..app import BaseScreen, MenuScreen
 from ..theme import ACCENT, ERROR, MUTED, OK, WARN
-from ..widgets.activity import ActivityPanel, EventsPanel, SmallIndicator, WorkerLedger
+from ..widgets.activity import (
+    ActivityHeader,
+    ActivityPanel,
+    EventsHeader,
+    EventsPanel,
+    SmallIndicator,
+    WorkerLedger,
+)
 from ..widgets.common import (
     ColumnPreview,
     ColumnRole,
@@ -1932,7 +1939,8 @@ class JudgeRunScreen(BaseScreen):
     breadcrumb = "Judge · results"
 
     BINDINGS = [
-        Binding("a", "toggle_activity", "activity", show=False),
+        Binding("a", "toggle_workers", "workers", show=False),
+        Binding("e", "toggle_events", "events", show=False),
         Binding("enter", "open_row", "open row", show=False),
         # `f` and `c` are context-sensitive: while a batch runs they mean
         # "follow the latest row" and "stop", which are the only two things worth
@@ -2104,7 +2112,11 @@ class JudgeRunScreen(BaseScreen):
     def compose_body(self) -> ComposeResult:
         self.grid = CompareGrid(id="judge-grid")
         self.activity = ActivityPanel(title="Workers", id="judge-activity")
+        self.activity_header = ActivityHeader(self.activity, id="judge-activity-header")
+        self.activity.header_widget = self.activity_header
         self.events = EventsPanel(title="Events", id="judge-events")
+        self.events_header = EventsHeader(self.events, id="judge-events-header")
+        self.events.header_widget = self.events_header
         self.rail = Static("", id="judge-rail")
         self.indicator = SmallIndicator(id="judge-indicator")
         # Chips rather than a dropdown: every filter and its row count is
@@ -2118,11 +2130,14 @@ class JudgeRunScreen(BaseScreen):
                 yield self.grid
             with Vertical(id="judge-rail-pane"):
                 # Right rail: the fixed state block on top (score, rows,
-                # severity), then Worker above Events, each in its own bounded
-                # scroll area — a long run never grows the rail without bound.
+                # severity), then Worker above Events, each with a fixed
+                # header above its own bounded scroll area — a long run never
+                # grows the rail without bound.
                 yield self.rail
+                yield self.activity_header
                 with VerticalScroll(id="judge-workers-scroll"):
                     yield self.activity
+                yield self.events_header
                 with VerticalScroll(id="judge-events-scroll"):
                     yield self.events
                 # Fatal errors render here — the bottom of the rail, not below
@@ -2152,7 +2167,9 @@ class JudgeRunScreen(BaseScreen):
         height: 1fr;
     }}
     #judge-rail {{ height: auto; }}
+    #judge-activity-header {{ height: 1; }}
     #judge-workers-scroll {{ height: 1fr; width: 1fr; scrollbar-size: 1 1; }}
+    #judge-events-header {{ height: 1; }}
     #judge-events-scroll {{ height: 1fr; width: 1fr; scrollbar-size: 1 1; }}
     #judge-activity {{ height: auto; width: 1fr; }}
     #judge-events {{ height: auto; width: 1fr; }}
@@ -2172,7 +2189,7 @@ class JudgeRunScreen(BaseScreen):
         if self._busy_batch:
             # `end` is offered because scrolling back is now possible mid-run and
             # a key that resumes following has to be findable.
-            keys = [("↑↓", "scroll"), ("a", "activity")]
+            keys = [("↑↓", "scroll"), ("a", "workers"), ("e", "events")]
             if not self._follow_live:
                 keys.append(("f", "follow latest"))
             if self._stop.is_set():
@@ -2182,7 +2199,10 @@ class JudgeRunScreen(BaseScreen):
             return keys + [("c", "stop")]
         if self._report is None:
             return [("↑↓", "move"), ("←", "back")]
-        keys = [("↑↓", "row"), ("⏎", "open"), ("tab", "filter"), ("a", "activity")]
+        keys = [
+            ("↑↓", "row"), ("⏎", "open"), ("tab", "filter"),
+            ("a", "workers"), ("e", "events"),
+        ]
         row = self._cursor_row
         flagged = row in self._report.issues
         repaired = row in self._before
@@ -2682,7 +2702,7 @@ class JudgeRunScreen(BaseScreen):
         return getattr(self, "_expected_rows", []) or []
 
     def _log(self, message: str, style: str = "") -> None:
-        body = escape_markup(message)[:90]
+        body = escape_markup(message)
         # Collapse an identical message repeated back-to-back into one counted
         # line rather than a wall of the same provider error (bug #8). The raw
         # text still reaches the log; this is only the on-screen events rail.
@@ -2934,7 +2954,7 @@ class JudgeRunScreen(BaseScreen):
             n = len(report.failed_sections)
             self._notice.notify_issue(
                 "Some requests failed",
-                f"{n} request(s) — see Activity for details",
+                f"{n} request(s) — see Workers for details",
                 kind="warn",
             )
         if self._aborted_run:
@@ -3474,9 +3494,7 @@ class JudgeRunScreen(BaseScreen):
             )
 
     def on_provider_notice_clicked(self, _event: ProviderNotice.Clicked) -> None:
-        # Opening the Activity view is the "View" affordance — the raw errors
-        # live in the events rail it shows.
-        self.action_toggle_activity()
+        pass
 
     def _on_notice(self, kind: str, message: str) -> None:
         self._log(message, {"error": ERROR, "warn": WARN}.get(kind, MUTED))
@@ -3732,11 +3750,29 @@ class JudgeRunScreen(BaseScreen):
             self.notify_status("following the newest reviewed row", ACCENT)
         self.refresh_keys()
 
-    def action_toggle_activity(self) -> None:
+    def action_toggle_workers(self) -> None:
         open_now = self.activity.toggle()
         self.notify_status(
             "worker panel shown" if open_now else "worker panel hidden", MUTED
         )
+
+    def action_toggle_activity(self) -> None:
+        self.action_toggle_workers()
+
+    def action_toggle_events(self) -> None:
+        """Show or hide the events rail — `e`, or click its header."""
+        open_now = self.events.toggle()
+        self.refresh_keys()
+        self.notify_status(
+            "events panel shown" if open_now else "events panel hidden — e to show",
+            MUTED,
+        )
+
+    def on_events_panel_header_clicked(
+        self, _event: EventsPanel.HeaderClicked
+    ) -> None:
+        """Clicking the events header is the same gesture as pressing `e`."""
+        self.refresh_keys()
 
     # ── Fix It (one row, small indicator) ─────────────────────────────────────
 

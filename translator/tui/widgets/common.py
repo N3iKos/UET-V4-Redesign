@@ -846,13 +846,11 @@ class ProviderNotice(Static):
             except Exception:
                 pass
             self._fade_timer = None
-        # Only a recovery card fades on its own; warnings persist while the issue
-        # recurs (each recurrence re-arms nothing new), and errors are sticky.
-        if kind == "ok":
-            try:
-                self._fade_timer = self.set_timer(6.0, self.dismiss)
-            except Exception:
-                pass
+        # Auto-dismiss after 5 seconds
+        try:
+            self._fade_timer = self.set_timer(5.0, self.dismiss)
+        except Exception:
+            pass
 
     def dismiss(self) -> None:
         self.display = False
@@ -879,8 +877,6 @@ class ProviderNotice(Static):
         tail = "  ·  ".join(tail_bits)
         if tail:
             text.append(f"{tail}", style=MUTED)
-            text.append("        ", style=MUTED)
-        text.append("[View]" if self._kind != "ok" else "", style=colour)
         return text
 
 

@@ -42,7 +42,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 from ..theme import ACCENT, ERROR, HOVER_BG, MUTED, OK, WARN
-from .common import pad_cells, spinner_frame, strip_line, truncate
+from .common import pad_cells, render_console, spinner_frame, strip_line, truncate
 
 # Phase → (label, colour). `think` shares the accent with `generating` because
 # it is the same work seen one step earlier, not a different kind of progress.
@@ -269,18 +269,43 @@ def detail_lines(status, width: int = 34) -> list[Text]:
     return lines
 
 
+class ActivityHeader(Widget):
+    """
+    Fixed/sticky header for the Workers panel.
+    Stays in place outside the scroll container while workers list scrolls underneath.
+    """
+
+    ALLOW_SELECT = False
+
+    def __init__(self, panel: ActivityPanel, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.panel = panel
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.panel.toggle()
+        self.panel.post_message(self.panel.HeaderClicked())
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        return 1
+
+    def render_line(self, y: int) -> Strip:
+        if y != 0:
+            return Strip.blank(self.size.width)
+        header = Text()
+        header.append("▾ " if not self.panel.collapsed else "▸ ", style=MUTED)
+        header.append(self.panel._title, style=f"bold {ACCENT}")
+        summary = self.panel._summary()
+        if summary:
+            header.append(f"  {summary}", style=MUTED)
+        return strip_line(header, self.size.width, self.rich_style)
+
+
 class ActivityPanel(Widget):
     """
-    The panel itself: a toggleable header, one line per worker, and an
-    optionally expanded detail block under one of them.
-
-    It holds no timer and starts no work. A screen hands it snapshots on the
-    interval it already repaints its sidebar on, which is what makes the
-    coalescing free: whatever the workers did between two paints, only the
-    latest state is drawn.
-
-    Open by default (FR-201), because the panel is the answer to "why is this
-    slow" and someone who has to go and find it will not ask until later.
+    The panel itself: one line per worker, and an optionally expanded detail block
+    under one of them. The header is rendered separately in ActivityHeader so it
+    stays sticky/fixed above the scroll area.
     """
 
     ALLOW_SELECT = False
@@ -292,13 +317,14 @@ class ActivityPanel(Widget):
     class HeaderClicked(Message):
         """The header was clicked — the screen decides what that means."""
 
-    def __init__(self, title: str = "Activity", **kwargs) -> None:
+    def __init__(self, title: str = "Workers", **kwargs) -> None:
         super().__init__(**kwargs)
         self._title = title
         self._statuses: list = []
         self._tick = 0
         # (kind, worker_id) per rendered line, so a click knows what it hit.
         self._rows: list[tuple[str, int]] = []
+        self.header_widget: ActivityHeader | None = None
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -311,6 +337,8 @@ class ActivityPanel(Widget):
             list(statuses or []), key=lambda s: getattr(s, "worker_id", 0)
         )
         self._tick = tick
+        if self.header_widget is not None:
+            self.header_widget.refresh()
         self.refresh(layout=True)
 
     @property
@@ -319,6 +347,8 @@ class ActivityPanel(Widget):
 
     def toggle(self) -> bool:
         self.collapsed = not self.collapsed
+        if self.header_widget is not None:
+            self.header_widget.refresh()
         return not self.collapsed
 
     def cycle_detail(self) -> int:
@@ -343,6 +373,8 @@ class ActivityPanel(Widget):
     # ── Reactives ─────────────────────────────────────────────────────────────
 
     def watch_collapsed(self, _old: bool, _new: bool) -> None:
+        if self.header_widget is not None:
+            self.header_widget.refresh()
         self.refresh(layout=True)
 
     def watch_detail_worker(self, _old: int, _new: int) -> None:
@@ -373,10 +405,7 @@ class ActivityPanel(Widget):
             return
         event.stop()
         kind, worker_id = self._rows[row]
-        if kind == "header":
-            self.toggle()
-            self.post_message(self.HeaderClicked())
-        elif kind == "worker":
+        if kind == "worker":
             # Clicking the open one closes it again, which is the only gesture
             # anyone tries after opening it.
             self.detail_worker = 0 if self.detail_worker == worker_id else worker_id
@@ -387,12 +416,8 @@ class ActivityPanel(Widget):
         width = max(24, self.size.width or 34)
         connection_width = max(6, min(14, width - 22))
 
-        header = Text()
-        header.append("▾ " if not self.collapsed else "▸ ", style=MUTED)
-        header.append(self._title, style=f"bold {ACCENT}")
-        header.append(f"  {self._summary()}", style=MUTED)
-        lines = [header]
-        self._rows = [("header", 0)]
+        lines: list[Text] = []
+        self._rows = []
 
         if self.collapsed:
             return lines
@@ -451,15 +476,50 @@ class ActivityPanel(Widget):
         return self.rich_style
 
 
+class EventsHeader(Widget):
+    """
+    Fixed/sticky header for the Events panel, mirroring ActivityHeader: it
+    stays in place outside the scroll container while the event lines scroll
+    underneath. Clicking it minimizes/expands the panel.
+    """
+
+    ALLOW_SELECT = False
+
+    def __init__(self, panel: EventsPanel, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.panel = panel
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.panel.toggle()
+        self.panel.post_message(self.panel.HeaderClicked())
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        return 1
+
+    def render_line(self, y: int) -> Strip:
+        if y != 0:
+            return Strip.blank(self.size.width)
+        header = Text()
+        header.append("▾ " if not self.panel.collapsed else "▸ ", style=MUTED)
+        header.append(self.panel._title, style=f"bold {ACCENT}")
+        if self.panel._lines:
+            header.append(f"  {len(self.panel._lines)}", style=MUTED)
+        return strip_line(header, self.size.width, self.rich_style)
+
+
 class EventsPanel(Widget):
     """
     The Events rail — a bounded, scrollable list of event lines.
 
-    Sits below the Activity Panel and keeps its own scroll area: a long run
+    Sits below the Workers Panel and keeps its own scroll area: a long run
     must not push the events off the panel or grow the right rail without
     bound. Lines are passed in by whichever screen owns the sidebar timer
-    (`set_events`), exactly as the Activity Panel is fed worker snapshots, so
+    (`set_events`), exactly as the Workers Panel is fed worker snapshots, so
     one timer drives both panels (NFR-201).
+
+    The header is rendered separately in EventsHeader so it stays fixed above
+    the scroll area; only the event lines scroll.
 
     Painted as `rich.text.Text`, never markup: events carry provider text and
     JSON, and a stray `[bracket]` must not be able to kill a repaint.
@@ -469,10 +529,14 @@ class EventsPanel(Widget):
 
     collapsed: reactive = reactive(False)
 
+    class HeaderClicked(Message):
+        """The header was clicked — the screen decides what that means."""
+
     def __init__(self, title: str = "Events", **kwargs) -> None:
         super().__init__(**kwargs)
         self._title = title
         self._lines: list[str] = []
+        self.header_widget: EventsHeader | None = None
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -480,30 +544,32 @@ class EventsPanel(Widget):
         """Replace the panel's lines. Called from the screen's own timer."""
         if lines != self._lines:
             self._lines = list(lines)
+            if self.header_widget is not None:
+                self.header_widget.refresh()
             self.refresh(layout=True)
 
     def toggle(self) -> bool:
         self.collapsed = not self.collapsed
+        if self.header_widget is not None:
+            self.header_widget.refresh()
         return not self.collapsed
 
     def watch_collapsed(self, _old: bool, _new: bool) -> None:
+        if self.header_widget is not None:
+            self.header_widget.refresh()
         self.refresh(layout=True)
 
     # ── Render ────────────────────────────────────────────────────────────────
 
     def _build(self) -> list[Text]:
-        header = Text()
-        header.append("▾ " if not self.collapsed else "▸ ", style=MUTED)
-        header.append(self._title, style=f"bold {ACCENT}")
-        if self._lines:
-            header.append(f"  {len(self._lines)}", style=MUTED)
-        lines = [header]
+        lines: list[Text] = []
         if self.collapsed:
             return lines
         if not self._lines:
             lines.append(Text("  —", style=MUTED))
+        width = max(8, self.size.width or 34)
         for line in self._lines[-40:]:
-            lines.append(truncate_line(line))
+            lines.extend(wrap_event_line(line, width))
         return lines
 
     def get_content_height(self, container, viewport, width: int) -> int:
@@ -519,15 +585,21 @@ class EventsPanel(Widget):
         return strip_line(text, self.size.width, self.rich_style)
 
 
-def truncate_line(line: str) -> Text:
-    """One event line, capped so a long provider message never wraps the rail."""
+def wrap_event_line(line: str, width: int) -> list[Text]:
+    """
+    One event, wrapped to the panel width so the full error text is readable
+    (and reachable by scrolling) instead of clipped at one line.
+    """
     body = str(line or "")
-    if len(body) > 64:
-        body = body[:64] + "…"
     try:
-        return Text.from_markup(body)
+        text = Text.from_markup(body)
     except Exception:
-        return Text(body.replace("[", "\\["))
+        text = Text(body.replace("[", "\\["))
+    try:
+        wrapped = text.wrap(render_console(), max(8, width))
+        return wrapped or [Text(" ")]
+    except Exception:
+        return [text]
 
 
 class SmallIndicator(Widget):

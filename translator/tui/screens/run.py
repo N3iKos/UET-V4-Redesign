@@ -36,7 +36,13 @@ from ...scheduling.pools import build_pool
 from ...scheduling.scheduler import BatchTask, ScheduleEvent, WorkerStatus
 from ..app import BaseScreen, MenuScreen
 from ..theme import ACCENT, ERROR, MUTED, OK, WARN
-from ..widgets.activity import ActivityPanel, EventsPanel, WorkerLedger
+from ..widgets.activity import (
+    ActivityHeader,
+    ActivityPanel,
+    EventsHeader,
+    EventsPanel,
+    WorkerLedger,
+)
 from ..widgets.common import (
     Option,
     TranslationFeed,
@@ -106,7 +112,8 @@ class RunScreen(BaseScreen):
         Binding("f", "toggle_follow", "follow", show=False),
         Binding("p", "pause", "pause", show=False),
         Binding("c", "pause", "stop", show=False),
-        Binding("a", "toggle_activity", "activity", show=False),
+        Binding("a", "toggle_workers", "workers", show=False),
+        Binding("e", "toggle_events", "events", show=False),
         Binding("d", "worker_detail", "worker detail", show=False),
         Binding("escape", "noop", "", show=False),
         Binding("left", "noop", "", show=False),
@@ -166,8 +173,12 @@ class RunScreen(BaseScreen):
         # the rail without bound (NFR-201). One timer owns all three: the
         # `Sidebar` paints itself and feeds both panels (NFR-201).
         self.sidebar = Sidebar(self._sidebar_text, id="sidebar")
-        self.activity = ActivityPanel(id="activity")
+        self.activity = ActivityPanel(title="Workers", id="activity")
+        self.activity_header = ActivityHeader(self.activity, id="activity-header")
+        self.activity.header_widget = self.activity_header
         self.events = EventsPanel(id="events")
+        self.events_header = EventsHeader(self.events, id="events-header")
+        self.events.header_widget = self.events_header
         self.narrow_bar = Static("", id="narrow-bar")
         self.narrow_bar.display = False
 
@@ -177,8 +188,10 @@ class RunScreen(BaseScreen):
                 yield self.feed
             with Vertical(id="sidebar-pane"):
                 yield self.sidebar
+                yield self.activity_header
                 with VerticalScroll(id="workers-scroll"):
                     yield self.activity
+                yield self.events_header
                 with VerticalScroll(id="events-scroll"):
                     yield self.events
 
@@ -192,7 +205,10 @@ class RunScreen(BaseScreen):
         height: 1fr;
     }}
     #sidebar {{ height: auto; }}
+    #activity-header {{ height: 1; }}
+    #activity {{ height: auto; width: 1fr; }}
     #workers-scroll {{ height: 1fr; width: 1fr; scrollbar-size: 1 1; }}
+    #events-header {{ height: 1; }}
     #events-scroll {{ height: 1fr; width: 1fr; scrollbar-size: 1 1; }}
     #events {{ height: auto; width: 1fr; }}
     #narrow-bar {{ height: auto; color: {MUTED}; }}
@@ -203,9 +219,11 @@ class RunScreen(BaseScreen):
             return [("↑↓", "scroll"), ("⏎", "summary")]
         follow = "unfollow" if getattr(self, "feed", None) and self.feed.follow \
             else "follow"
-        activity = "hide activity" if not self._activity_collapsed() \
-            else "show activity"
-        return [("↑↓", "scroll"), ("f", follow), ("a", activity),
+        workers = "hide workers" if not self._workers_collapsed() \
+            else "show workers"
+        events = "hide events" if not self._events_collapsed() \
+            else "show events"
+        return [("↑↓", "scroll"), ("f", follow), ("a", workers), ("e", events),
                 ("d", "worker detail"), ("c", "stop & save")]
 
     def on_screen_ready(self) -> None:
@@ -217,8 +235,12 @@ class RunScreen(BaseScreen):
         self._render_sidebar()
         self._run_job()
 
-    def _activity_collapsed(self) -> bool:
+    def _workers_collapsed(self) -> bool:
         panel = getattr(self, "activity", None)
+        return bool(panel is not None and panel.collapsed)
+
+    def _events_collapsed(self) -> bool:
+        panel = getattr(self, "events", None)
         return bool(panel is not None and panel.collapsed)
 
     def _apply_responsive(self) -> None:
@@ -373,7 +395,7 @@ class RunScreen(BaseScreen):
         # Provider errors routinely contain [brackets] and JSON — escape them
         # or Rich would try to parse them as markup and blow up the timer.
         stamp = time.strftime("%H:%M:%S")
-        body = escape_markup(str(message).replace("\n", " "))[:120]
+        body = escape_markup(str(message).replace("\n", " "))
         # Collapse an identical message repeated back-to-back into one line with
         # a count instead of a wall of the same error (bug #8). The raw text is
         # unchanged in the log file; this is only the on-screen events rail.
@@ -584,7 +606,7 @@ class RunScreen(BaseScreen):
             "immediately.", WARN,
         )
 
-    def action_toggle_activity(self) -> None:
+    def action_toggle_workers(self) -> None:
         """
         Show or hide the worker panel (FR-201).
 
@@ -595,9 +617,27 @@ class RunScreen(BaseScreen):
         open_now = self.activity.toggle()
         self.refresh_keys()
         self.notify_status(
-            "activity panel shown" if open_now else "activity panel hidden — a to show",
+            "worker panel shown" if open_now else "worker panel hidden — a to show",
             ACCENT if open_now else MUTED,
         )
+
+    def action_toggle_activity(self) -> None:
+        self.action_toggle_workers()
+
+    def action_toggle_events(self) -> None:
+        """Show or hide the events rail — `e`, or click its header."""
+        open_now = self.events.toggle()
+        self.refresh_keys()
+        self.notify_status(
+            "events panel shown" if open_now else "events panel hidden — e to show",
+            ACCENT if open_now else MUTED,
+        )
+
+    def on_events_panel_header_clicked(
+        self, _event: EventsPanel.HeaderClicked
+    ) -> None:
+        """Clicking the events header is the same gesture as pressing `e`."""
+        self.refresh_keys()
 
     def action_worker_detail(self) -> None:
         """Expand one worker's batch / connection / row count, then the next."""

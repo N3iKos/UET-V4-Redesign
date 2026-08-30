@@ -111,6 +111,26 @@ TranslationFeed {{
     width: 1fr;
 }}
 
+ActivityPanel {{
+    height: auto;
+    width: 1fr;
+}}
+
+ActivityHeader {{
+    height: 1;
+    width: 1fr;
+}}
+
+EventsPanel {{
+    height: auto;
+    width: 1fr;
+}}
+
+EventsHeader {{
+    height: 1;
+    width: 1fr;
+}}
+
 ColumnPreview {{
     height: auto;
     width: 1fr;
