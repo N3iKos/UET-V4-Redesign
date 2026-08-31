@@ -126,12 +126,13 @@ _FIX_SYS = (
     "You are a professional translation editor.\n"
     "Your ONLY job is to correct the flawed TRANSLATION using the stated PROBLEM / CORRECTION NOTE as your primary guide.\n"
     "CRITICAL RULES:\n"
-    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive. Execute the FIX directive exactly — it names the words to replace, the placeholder to restore, or the direction to move the register in.\n"
-    "2. Follow the FIX directive strictly. Replace the incorrect words/meanings identified in the note with the correct ones the note specifies.\n"
+    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive. The note describes the problem a reviewer found — treat it as a strong hint, not an order to copy blindly.\n"
+    "2. Apply the fix the note asks for — but FIRST check the suggested wording actually reads naturally in the target language for this line and its context. If the note's suggestion is stiff, archaic, dictionary-literal or otherwise unnatural, produce the natural target-language wording yourself while still fixing the actual problem the note identified. Never output a line that sounds machine-translated just because the note said so.\n"
     "3. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
     "4. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
     "5. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
-    "6. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks."
+    "6. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks.\n"
+    "7. Change only what is wrong. A line's register, tone and terminology must stay consistent with the surrounding work."
 )
 
 # How a comment must be written. Vague comments ("awkward phrasing") are
@@ -718,7 +719,8 @@ def build_fix_prompt(
         f"{_fix_style_rule(style_prompt)}"
         f"{_fix_scope_rule(criteria, severities)}"
         f"\nEach line below provides the SOURCE, the flawed TRANSLATION, and the CORRECTION NOTE.\n"
-        f"Apply the correction specified in the note directly to fix the translation.\n"
+        f"Apply the correction specified in the note, in the wording a native speaker of "
+        f"{target} would actually use for this line.\n"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
         f"\nOutput format:\n"
@@ -764,7 +766,10 @@ def build_fix_solo_prompt(
     parts.append(_extra_placeholders(custom_placeholders))
     parts.append(
         f"\nInstruction:\n"
-        f"Apply the correction from the Correction Note to produce the corrected translation in {target}.\n"
+        f"Apply the correction from the Correction Note, in the wording a native "
+        f"speaker of {target} would actually use for this line — if the note's "
+        f"suggested wording is stiff or unnatural, write the natural {target} "
+        f"wording yourself while still fixing the problem the note identified.\n"
         f"Do not keep the wrong words that were flagged.\n"
         f"Return ONLY the corrected translation — no prefix, no quotes, no explanation.\n"
         f"Keep every placeholder byte-for-byte.\n"
