@@ -525,20 +525,32 @@ class ProviderClient:
         `response_format` is an explicit per-model opt-in (structured output);
         it is never sent unless the caller asks for it, because plenty of
         OpenAI-compatible servers reject the field.
+
+        The HTTP request is sent with `stream=True` at the transport level
+        even though nothing is rendered incrementally: `requests.post` with
+        `stream=False` blocks inside the POST until the whole body has been
+        read, so the response object — the thing the abort registry closes —
+        only exists after the read is over. A force-cancel during the read had
+        nothing to sever and waited the request out. With `stream=True` the
+        response exists as soon as the headers arrive, is registered for
+        abort, and the body is then drained in one pass; `parse_body` already
+        understands SSE-framed chunks, so servers that answer a streamed
+        request with deltas are still read correctly.
         """
         body = self._chat_body(
             model, messages, temperature, reasoning,
-            max_completion_tokens, response_format, stream=False,
+            max_completion_tokens, response_format, stream=True,
         )
 
         started = time.time()
         try:
-            resp = self._abortable_post(body)
+            resp = self._abortable_post(body, stream=True)
             try:
                 latency_ms = (time.time() - started) * 1000.0
                 headers, text = dict(resp.headers), resp.text
             finally:
                 self._release_response()
+                resp.close()
         except requests.exceptions.Timeout:
             # A read timeout is how the user's `request_timeout` setting is
             # enforced: the retry loop counts this as a failed attempt (server
@@ -575,9 +587,6 @@ class ProviderClient:
                 status_code=0,
                 retry_delay=config.RETRY_DELAY_ERR,
             )
-
-        latency_ms = (time.time() - started) * 1000.0
-        headers, text = dict(resp.headers), resp.text
 
         self._raise_for_status(resp.status_code, text, headers)
 

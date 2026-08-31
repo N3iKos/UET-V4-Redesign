@@ -1338,6 +1338,19 @@ class JudgeRunner:
     def _direct_client(self):
         if self._client is None and self._client_factory is not None:
             self._client = self._client_factory()
+            # The direct path must honour a force-cancel too. The pooled path
+            # gets this for free (its executor builds clients with the stop
+            # event); a factory-built client knows nothing about it, so a real
+            # ProviderClient gets the event attached and registered here. A
+            # client that already carries an event — or a test fake that is
+            # not a ProviderClient at all — is left exactly as built.
+            client = self._client
+            if self._stop is not None:
+                from ..providers.client import ProviderClient, _register_abortable
+
+                if isinstance(client, ProviderClient) and client.abort_event is None:
+                    client.abort_event = self._stop
+                    _register_abortable(self._stop, client)
         return self._client
 
     def _model_id(self) -> str:

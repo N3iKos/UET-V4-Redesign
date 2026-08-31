@@ -17,7 +17,11 @@ object whose close() the test observes.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from translator.providers.client import (
     ProviderClient,
@@ -85,6 +89,73 @@ class TestAbortRegistry:
         abort_all_for(event)
         assert not fake.closed.is_set(), \
             "a released (finished) response is not severed by a later abort"
+
+
+class TestAbortablePost:
+    def test_generate_chat_streams_so_abort_covers_the_read(self, monkeypatch):
+        """
+        The core of the double-`c` bug: `requests.post(stream=False)` blocks
+        until the whole body is read, so the response object only exists
+        AFTER the read — the abort registry had nothing to close and a
+        force-cancel waited the request out. `generate_chat` must therefore
+        send with stream=True and register the response before draining it.
+
+        Pinned here by patching requests.post: the transport-level `stream`
+        kwarg must be True for the generate call.
+        """
+        import translator.providers.client as client_module
+
+        seen: dict = {}
+
+        class _Resp:
+            status_code = 200
+            headers = {}
+            text = '{"choices": [{"message": {"role": "a", "content": "ok"}}]}'
+
+            def close(self):
+                pass
+
+        def _fake_post(url, **kwargs):
+            seen.update(kwargs)
+            return _Resp()
+
+        monkeypatch.setattr(client_module.requests, "post", _fake_post)
+        event = threading.Event()
+        client = ProviderClient("http://localhost:1", abort_event=event)
+        client.generate_chat("m", [{"role": "user", "content": "hi"}])
+        assert seen.get("stream") is True, \
+            "generate_chat must send stream=True so the response exists (and is abortable) before the body read"
+
+    def test_abortable_post_registers_before_body_read(self, monkeypatch):
+        """
+        `_abortable_post` must return with the response already registered:
+        the abort window covers the body read, not only what follows it.
+        """
+        import translator.providers.client as client_module
+
+        registered_at_post: list[object] = []
+
+        class _Resp:
+            status_code = 200
+            headers = {}
+            # A body read that must never happen inside _abortable_post.
+            text = property(lambda self: (_ for _ in ()).throw(
+                AssertionError("body read must not happen in _abortable_post")))
+
+            def close(self):
+                pass
+
+        def _fake_post(url, **kwargs):
+            return _Resp()
+
+        monkeypatch.setattr(client_module.requests, "post", _fake_post)
+        event = threading.Event()
+        client = ProviderClient("http://localhost:1", abort_event=event)
+        resp = client._abortable_post({"x": 1})
+        with client._response_lock:
+            registered_at_post.append(client._active_response)
+        assert registered_at_post == [resp], \
+            "the response must be registered for abort as soon as it exists"
 
     def test_registry_entry_vanishes_with_the_client(self):
         # Weak: dropping the last strong reference removes the client from

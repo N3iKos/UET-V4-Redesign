@@ -2292,7 +2292,10 @@ class JudgeRunScreen(BaseScreen):
                 where=self._model_id(),
                 state="done",
                 rows=dict(self._live_rows),
-                stat=f"{len(self._live_rows):,} reviewed so far",
+                # The grid only paints flagged rows mid-run; this stat is what
+                # proves the run itself is moving when the grid is quiet.
+                stat=f"{len(self._reviewed_rows):,} reviewed · "
+                     f"{len(self._flagged_live):,} flagged",
             )
             return [live]
 
@@ -2413,16 +2416,22 @@ class JudgeRunScreen(BaseScreen):
         for row, issue in landed:
             source, translation = self._by_row.get(row, ("", ""))
             self._live_rows[row] = translation
+            # While the evaluation runs, only the rows the judge actually
+            # FLAGGED enter the grid. The clean ones are real progress — the
+            # bar and the counters move — but painting thousands of passing
+            # rows buries the handful a reviewer came to read, and a clean
+            # file looks exactly like a stalled one when both show a wall of
+            # green-less lines. Everything reviewed is still kept in memory
+            # (`_live_rows`), and the finished report shows the full file
+            # through the filter bar as always.
+            if issue is None:
+                continue
             fresh.append((row, source))
-            if issue is not None:
-                self._live_notes[row] = f"{issue.label} · {issue.comment}"
-                self._live_styles[row] = _SEVERITY_STYLES.get(
-                    getattr(issue, "severity", ""), WARN
-                )
+            self._live_notes[row] = f"{issue.label} · {issue.comment}"
+            self._live_styles[row] = _SEVERITY_STYLES.get(
+                getattr(issue, "severity", ""), WARN
+            )
 
-        # While the evaluation runs the grid shows everything it has reviewed,
-        # flagged or not: the filter bar has no counts to offer yet, and hiding
-        # the rows that passed would make a clean file look like a stalled one.
         # One rebuild for all three changes rather than three.
         with self.grid.batched():
             self.grid.set_columns(self._columns())
