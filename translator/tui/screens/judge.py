@@ -377,7 +377,205 @@ def _fix_model_options(registry, current) -> list[Option]:
     ]
 
 
-class RowFixModal(ModalScreen["tuple | None"]):
+class RejudgeSetupScreen(ModalScreen["tuple | None"]):
+    """
+    The setup step for a re-judge: which model, at what pacing (UET_UX bug #10).
+
+    A re-judge is a grading job in its own right, so it asks which model to
+    grade with rather than silently reusing the Judge or Fix model — and
+    unlike a single-row Fix, it runs as a batch, so the rows/request and
+    worker count are its pacing and worth their own fields.
+
+    The `Don't ask again for this model` checkbox is per-model and persisted:
+    ticking it for Model A stores A's settings (model, rows, workers) in the
+    app preferences, and the next re-judge that lands on A runs immediately
+    with them — while Model B still asks, because B has no stored settings.
+    Unticking removes the entry, so "stop remembering" is one checkbox, not
+    a hunt through Settings.
+
+    Returns `(slot, max_rows, workers)` or None.
+    """
+
+    DEFAULT_CSS = """
+    RejudgeSetupScreen .modal { width: 76; height: auto; max-height: 95%; }
+    RejudgeSetupScreen #rejudge-body { height: auto; max-height: 1fr; }
+    RejudgeSetupScreen #rejudge-foot { dock: bottom; height: auto; }
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(
+        self,
+        model_slot: tuple[str, str, str],
+        scope_label: str = "",
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._judge_slot = model_slot
+        self._scope = scope_label
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Re-judge with", classes="title")
+            if self._scope:
+                yield Label(self._scope, classes="hint")
+            with VerticalScroll(id="rejudge-body"):
+                self._model = Picker(click_activates=False)
+                yield self._model
+                self._batch = LabeledInput(
+                    "Rows / request",
+                    value=str(_rejudge_rows_default()),
+                    default=str(_rejudge_rows_default()),
+                )
+                self._workers = LabeledInput("Workers")
+                yield self._batch
+                yield self._workers
+                self._remember = Picker([
+                    Option("Don't ask again for this model", "remember"),
+                ], multi_select=True)
+                yield self._remember
+                yield Static("", id="rejudge-scope", classes="hint")
+            with Vertical(id="rejudge-foot"):
+                self._error = ErrorBox()
+                yield self._error
+                self._confirm = Picker([
+                    Option("Start re-judging", "go", style=OK),
+                    Option("Cancel", "cancel"),
+                ])
+                yield self._confirm
+                yield KeyHints([
+                    ("↑↓", "move"), ("tab", "field"), ("⏎", "start"),
+                    ("esc", "cancel"),
+                ])
+
+    def on_mount(self) -> None:
+        self._model.set_options(_fix_model_options(self.app.registry, self._judge_slot))
+        self._workers.value = str(self._derived_workers())
+        self._apply_remembered()
+        self._paint_scope()
+
+    # ── Options ───────────────────────────────────────────────────────────────
+
+    def _chosen_slot(self) -> tuple[str, str, str] | None:
+        option = self._model.current
+        return option.value if option and option.value else None
+
+    def _typed_batch(self) -> int:
+        try:
+            return max(1, int(self._batch.value))
+        except (ValueError, AttributeError):
+            return _rejudge_rows_default()
+
+    def _derived_workers(self) -> int:
+        """What this model's rate limit affords at the chosen batch size."""
+        slot = self._chosen_slot()
+        if slot is None:
+            return 1
+        choice = resolve_choice(self.app.registry, *slot)
+        return choice.preset.workers_for(
+            self._typed_batch(), tok_per_row=config.TOKEN_EST_MIN_PER_ROW * 2
+        )
+
+    def _apply_remembered(self) -> None:
+        """
+        Prefill from this model's stored settings, when there are any.
+
+        A remembered model keeps its rows and workers figures rather than the
+        rate-limit derivation — the derivation is a guess, and the stored
+        numbers are what the user last chose to run with.
+        """
+        slot = self._chosen_slot()
+        if slot is None:
+            return
+        from ...data.app_prefs import remembered_judge_settings
+
+        remembered = remembered_judge_settings(slot)
+        if remembered is None:
+            return
+        self._batch.value = str(remembered["max_rows"])
+        self._workers.value = str(remembered["workers"])
+
+    def _paint_scope(self) -> None:
+        panel = self.query_one("#rejudge-scope", Static)
+        slot = self._chosen_slot()
+        batch = self._typed_batch()
+        lines: list[str] = []
+        if slot is not None:
+            choice = resolve_choice(self.app.registry, *slot)
+            lines.append(
+                f"[{MUTED}]Limits[/]    "
+                f"{escape_markup(choice.preset.describe_limits(batch, tok_per_row=config.TOKEN_EST_MIN_PER_ROW * 2))}"
+            )
+        panel.update("\n".join(lines))
+
+    # ── Events ────────────────────────────────────────────────────────────────
+
+    def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
+        if event.picker is self._model:
+            self._apply_remembered()
+            self._workers.value = str(self._derived_workers())
+            self._paint_scope()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input is self._batch.input:
+            self._paint_scope()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input is self._batch.input:
+            self._workers.focus_input()
+            return
+        self._start()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        if event.picker is self._confirm:
+            if event.option.value == "go":
+                self._start()
+            else:
+                self.dismiss(None)
+            return
+        if event.picker is self._model:
+            self._batch.focus_input()
+
+    # ── Confirming ────────────────────────────────────────────────────────────
+
+    def _start(self) -> None:
+        self._error.clear()
+        slot = self._chosen_slot()
+        if slot is None:
+            self._error.show("Pick a model to re-judge with.", "cannot start")
+            return
+        try:
+            workers = max(1, int(self._workers.value))
+        except ValueError:
+            self._error.show("Workers must be a number.", "cannot start")
+            return
+        try:
+            rows = self._typed_batch()
+        except (ValueError, AttributeError):
+            self._error.show("Rows per request must be a number.", "cannot start")
+            return
+
+        from ...data.app_prefs import remember_judge_settings
+
+        remember_judge_settings(
+            slot, max_rows=rows, workers=workers,
+            remember="remember" in self._remember.selected_values(),
+        )
+        self.dismiss((slot, rows, workers))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+def _rejudge_rows_default() -> int:
+    """The rows/request a re-judge form opens with."""
+    from ...data.app_prefs import max_rows_per_request
+
+    return max_rows_per_request()
+
+
     """
     One flagged row, in a single popup (UET_UX §6 Fix one row).
 
@@ -4111,34 +4309,55 @@ class JudgeRunScreen(BaseScreen):
                 "nothing to re-check.".format(row), MUTED
             )
             return
-        self._with_rejudge_model(lambda slot: self._begin_rejudge_row(row, slot))
+        self._with_rejudge_model(
+            lambda slot, rows, workers: self._begin_rejudge_row(
+                row, slot, rows_per_request=rows, workers=workers
+            )
+        )
 
     def _with_rejudge_model(self, then) -> None:
         """
         Resolve the model a Rejudge should use, asking if necessary.
 
-        Reuses the session's remembered Rejudge slot when one is set; otherwise
-        pops the model chooser and remembers it only if the user ticks the box.
+        The remembered slot comes from the per-model preferences store: a model
+        whose settings were ticked "Don't ask again" runs immediately with its
+        stored rows/workers, and any other model opens the full setup form.
         Kept separate from the Fix slot so the two never bleed into each other.
         """
+        from ...data.app_prefs import remembered_judge_settings
+
         session_slot = getattr(self.app, "judge_rejudge_slot", None)
         if session_slot is not None:
-            then(session_slot)
-            return
+            remembered = remembered_judge_settings(session_slot)
+            if remembered is not None:
+                then(session_slot, remembered["max_rows"], remembered["workers"])
+                return
         self.app.push_screen(
-            FixModelPopup(model_slot=self._model_slot, title="Re-judge with"),
+            RejudgeSetupScreen(
+                model_slot=self._model_slot,
+                scope_label=self._rejudge_scope_label(),
+            ),
             lambda result: self._rejudge_model_chosen(result, then),
         )
+
+    def _rejudge_scope_label(self) -> str:
+        """What the setup popup says is being re-judged."""
+        if self._rejudging or getattr(self, "_rejudge_rows", None):
+            n = len(getattr(self, "_rejudge_rows", []) or [])
+            return f"{n} applied fix(es)" if n else ""
+        row = self._current_row()
+        return f"row {row}" if row else ""
 
     def _rejudge_model_chosen(self, result, then) -> None:
         if not result:
             return
-        slot, remember = result
-        if remember:
-            self.app.judge_rejudge_slot = slot
-        then(slot)
+        slot, rows, workers = result
+        then(slot, rows, workers)
 
-    def _begin_rejudge_row(self, row: int, slot: tuple[str, str, str]) -> None:
+    def _begin_rejudge_row(
+        self, row: int, slot: tuple[str, str, str],
+        rows_per_request: int | None = None, workers: int | None = None,
+    ) -> None:
         self._busy_row = row
         self._rejudge_row_slot = slot
         self._begin_op("Rejudge", slot)
@@ -4236,9 +4455,16 @@ class JudgeRunScreen(BaseScreen):
                 MUTED,
             )
             return
-        self._with_rejudge_model(lambda slot: self._begin_rejudge_fixed(rows, slot))
+        self._with_rejudge_model(
+            lambda slot, rows, workers: self._begin_rejudge_fixed(
+                rows, slot, rows_per_request=rows, workers=workers
+            )
+        )
 
-    def _begin_rejudge_fixed(self, rows: list[int], slot: tuple[str, str, str]) -> None:
+    def _begin_rejudge_fixed(
+        self, rows: list[int], slot: tuple[str, str, str],
+        rows_per_request: int | None = None, workers: int | None = None,
+    ) -> None:
         self._busy_batch = True
         self._rejudging = True
         self._rejudge_slot = slot
@@ -4252,15 +4478,19 @@ class JudgeRunScreen(BaseScreen):
             f"evaluation did — batched, with neighbours…",
             ACCENT,
         )
-        self._rejudge_many(list(rows), slot)
+        self._rejudge_many(list(rows), slot, workers=workers)
 
     @work(thread=True)
-    def _rejudge_many(self, rows: list[int], slot: tuple[str, str, str] | None = None) -> None:
+    def _rejudge_many(
+        self, rows: list[int], slot: tuple[str, str, str] | None = None,
+        workers: int | None = None,
+    ) -> None:
         app = self._app
         wanted = set(rows)
         try:
             runner = self._make_runner(
                 model_slot=slot,
+                workers=workers,
                 on_row=lambda row, issue: app.call_from_thread(
                     self._rejudge_row_landed, row, issue
                 ),
@@ -4706,7 +4936,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
                     yield self._batch
                     yield self._workers
                     self._remember = Picker([
-                        Option("Don't ask model again this session", "remember"),
+                        Option("Don't ask again for this model", "remember"),
                     ], multi_select=True)
                     yield self._remember
                     yield Static("", id="fix-scope", classes="hint")
@@ -4723,6 +4953,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         self._filters.set_options(self._filter_options())
         self._model.set_options(self._model_options())
         self._workers.value = str(self._derived_workers())
+        self._apply_remembered()
         self._show_step(1)
 
     def _filter_options(self) -> list[Option]:
@@ -4971,8 +5202,27 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
         if event.picker is self._model:
+            self._apply_remembered()
             self._workers.value = str(self._derived_workers())
             self._paint_scope()
+
+    def _apply_remembered(self) -> None:
+        """
+        Prefill rows/workers from this model's stored settings, if any.
+
+        Stored numbers win over the rate-limit derivation: they are what the
+        user last chose to run with on this exact model.
+        """
+        slot = self._chosen_slot()
+        if slot is None:
+            return
+        from ...data.app_prefs import remembered_judge_settings
+
+        remembered = remembered_judge_settings(slot)
+        if remembered is None:
+            return
+        self._batch.value = str(remembered["max_rows"])
+        self._workers.value = str(remembered["workers"])
 
     def on_picker_toggled(self, event: Picker.Toggled) -> None:
         self._error.clear()
@@ -5060,9 +5310,19 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             self._error.show("Workers must be a number.", "cannot start")
             return
 
+        # Per-model and persisted: ticking stores this model's rows/workers in
+        # the app preferences, so the next Fix All that opens on this model is
+        # prefilled with them; unticking removes the entry. The scope filters
+        # are never remembered (UET_UX §6).
+        from ...data.app_prefs import remember_judge_settings
+
+        remember_judge_settings(
+            slot, max_rows=self._typed_batch(), workers=workers,
+            remember="remember" in self._remember.selected_values(),
+        )
         if "remember" in self._remember.selected_values():
-            # The model choice sticks for the rest of the session; the scope
-            # never does (UET_UX §6).
+            # Session convenience alongside the persisted entry: single-row Fix
+            # It reuses the slot without a popup for the rest of the session.
             self.app.judge_fix_slot = slot
 
         self.dismiss(FixAllPlan(

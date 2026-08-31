@@ -41,6 +41,11 @@ DEFAULTS: dict = {
     "preferred_rows_per_request": config.DEFAULT_PREFERRED_ROWS_PER_REQUEST,
     "max_rows_per_request_cap": config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP,
     "request_timeout": config.DEFAULT_REQUEST_TIMEOUT,
+    # Per-model remembered Judge operation settings (re-judge / fix). Keyed by
+    # "<provider_id>\n<connection_id>\n<model_id>" so two models with the same
+    # name on different connections stay separate. Values:
+    # {"remember": bool, "max_rows": int, "workers": int}
+    "judge_model_prefs": {},
 }
 
 
@@ -87,6 +92,9 @@ def load_prefs() -> dict:
     prefs["request_timeout"] = _clamp_request_timeout(
         payload.get("request_timeout")
     )
+    prefs["judge_model_prefs"] = _clean_judge_model_prefs(
+        payload.get("judge_model_prefs")
+    )
     return prefs
 
 
@@ -123,6 +131,9 @@ def save_prefs(prefs: dict) -> None:
     )
     current["request_timeout"] = _clamp_request_timeout(
         current.get("request_timeout")
+    )
+    current["judge_model_prefs"] = _clean_judge_model_prefs(
+        current.get("judge_model_prefs")
     )
     try:
         _write(current)
@@ -256,6 +267,100 @@ def set_request_timeout(value: int) -> int:
     clamped = _clamp_request_timeout(value)
     save_prefs({"request_timeout": clamped})
     return clamped
+
+
+# ── Per-model Judge operation settings ───────────────────────────────────────
+
+def judge_model_prefs_key(slot: tuple[str, str, str] | list) -> str:
+    """
+    The store key for one model slot.
+
+    The full triple rather than the model id alone: two connections can carry
+    a model with the same id, and remembering settings for one of them must
+    not silently apply them to the other.
+    """
+    try:
+        provider, connection, model = (list(slot) + ["", "", ""])[:3]
+    except TypeError:
+        return ""
+    return "\n".join(str(part) for part in (provider, connection, model))
+
+
+def remembered_judge_settings(
+    slot: tuple[str, str, str] | list,
+) -> dict | None:
+    """
+    The remembered re-judge/fix settings for one model, or None.
+
+    None (rather than a dict) means "this model has no remembered settings" —
+    the caller must ask. A stored entry with `remember: false` counts as no
+    entry: it is a draft the user chose not to persist.
+    """
+    key = judge_model_prefs_key(slot)
+    if not key:
+        return None
+    entry = (load_prefs()["judge_model_prefs"] or {}).get(key)
+    if not isinstance(entry, dict) or not entry.get("remember"):
+        return None
+    return {
+        "max_rows": _clamp_rows(entry.get("max_rows")),
+        "workers": _clamp_workers(entry.get("workers")),
+    }
+
+
+def remember_judge_settings(
+    slot: tuple[str, str, str] | list,
+    max_rows: int,
+    workers: int,
+    remember: bool,
+) -> None:
+    """
+    Store (or clear) the remembered settings for one model.
+
+    `remember=False` removes the entry entirely — the next use of this model
+    asks again — rather than leaving a dormant draft behind.
+    """
+    key = judge_model_prefs_key(slot)
+    if not key:
+        return
+    prefs = load_prefs()
+    store = dict(prefs["judge_model_prefs"] or {})
+    if remember:
+        store[key] = {
+            "remember": True,
+            "max_rows": _clamp_rows(max_rows),
+            "workers": _clamp_workers(workers),
+        }
+    else:
+        store.pop(key, None)
+    save_prefs({"judge_model_prefs": store})
+
+
+def _clean_judge_model_prefs(value) -> dict:
+    """Keep only well-formed entries; a hand-mangled file starts empty."""
+    if not isinstance(value, dict):
+        return {}
+    clean: dict = {}
+    for key, entry in value.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            continue
+        if not entry.get("remember"):
+            continue
+        clean[key] = {
+            "remember": True,
+            "max_rows": _clamp_rows(entry.get("max_rows")),
+            "workers": _clamp_workers(entry.get("workers")),
+        }
+    return clean
+
+
+def _clamp_workers(value) -> int:
+    """Worker count for a remembered Judge operation, clamped to 1–50."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(50, number))
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────
