@@ -425,6 +425,15 @@ class ProcessingEngine:
             context_rows = None
             if context_map and job.op_mode == "translate_context":
                 context_rows = [(rn, context_map.get(rn, "")) for rn, _ in task.rows]
+            # The Settings "batch context" switch: the rows of a batch are
+            # consecutive lines of the file either way; this only decides
+            # whether the prompt says so and asks for continuity across them.
+            from ..data.app_prefs import translate_batch_context
+
+            try:
+                batch_context = translate_batch_context()
+            except Exception:
+                batch_context = False
             return build_translate_prompt(
                 rows=task.rows,
                 src_lang=job.src_lang,
@@ -434,6 +443,7 @@ class ProcessingEngine:
                 global_context=job.global_context,
                 custom_placeholders=job.custom_placeholders,
                 prompt_format=job.prompt_format,
+                batch_context=batch_context,
             )
 
         def solo_prompt_builder(row_num: int, task: BatchTask) -> str:

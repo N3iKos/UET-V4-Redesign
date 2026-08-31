@@ -69,6 +69,43 @@ _JUDGE_SYS = (
     "if it is wrong against the SOURCE printed directly above it."
 )
 
+# The chain-mode counterpart of _JUDGE_SYS: the rows of a request are treated
+# as what they physically are — consecutive lines of the file — and the model
+# is allowed (and asked) to reason across them. The scene-break guard is the
+# difference between "chain context" and "the old false-positive machine":
+# game scripts switch scenes mid-batch, and a model that force-connects every
+# pair of neighbours re-invents the 'Missing Black Cat' bug this file's
+# isolation rule was written to kill.
+_JUDGE_SYS_CHAIN = (
+    "You are a strict, impartial translation reviewer. "
+    "You review only what is in front of you, you never rewrite the source, "
+    "and you report a line only when something is actually wrong with it.\n"
+    "The rows below are CONSECUTIVE lines of the same work, in file order: a "
+    "dialogue stream or narrative sequence. Use the surrounding lines as "
+    "context — pronoun references, speaker reactions, callbacks, terminology "
+    "and register continuity — when judging each line against its OWN source. "
+    "A line may be wrong because it breaks what the surrounding lines "
+    "established (a name the scene already fixed, a pronoun whose referent is "
+    "the previous line, a register that clashes with its neighbours).\n"
+    "Scene breaks may occur anywhere: when the topic, speaker or setting "
+    "clearly shifts, do NOT force connections across the break — a line after "
+    "the break is judged against its own source and the lines on its side of "
+    "the break only.\n"
+    "When your finding relies on another line, quote BOTH halves in the "
+    "comment: this line's text and the neighbouring line it contradicts or "
+    "fails to follow."
+)
+
+# Rows injected as neighbours in a re-judge: shown, never judged. Stated as a
+# hard contract because the row numbers are real sheet numbers and a verdict
+# aimed at a neighbour would corrupt the report.
+_CHAIN_NEIGHBOUR_RULE = (
+    "Rows marked CONTEXT ONLY are there so you can see the conversation around "
+    "the rows under review. They are NOT under review: they must NEVER appear "
+    "in the \"lines\" array, no matter what you think of them. Only rows "
+    "marked UNDER REVIEW may be reported."
+)
+
 # Hard output-contract for every evaluation reply. Models that answer in prose
 # or wrap the JSON in explanation waste a whole request and leave the section
 # unevaluated, so the contract is stated as commands, not preferences.
@@ -253,6 +290,32 @@ _PLACEHOLDER_RULE = (
 )
 
 
+def _naturalness_rule(tgt_lang: str) -> str:
+    """
+    The guard against dictionary-literal suggestions.
+
+    Written against the target language the user chose — never a named
+    language — because "natural" means "what a native speaker of THAT
+    language writes in this genre", and the judge cannot verify a suggestion
+    it never checked. The FIX directive is the part a repair model executes
+    verbatim, so an unnatural suggestion propagates straight into the file
+    (the 'kayuhan for goresan' class of fix).
+    """
+    target = (tgt_lang or "").strip() or "the target language"
+    return (
+        f"Naturalness is judged as a native speaker of {target} would read the "
+        f"line in this genre — not against dictionary equivalence. Before "
+        f"writing the FIX, verify the corrected wording you propose is a word "
+        f"or phrasing a native speaker of {target} would genuinely use for "
+        f"this thing in this context. If the current translation already "
+        f"reads naturally in {target} and preserves the source's meaning, a "
+        f"merely different phrasing is NOT a finding — do not report the line. "
+        f"Never propose a stiffer or more literal wording than the source "
+        f"genre calls for. Write every comment in {target}, the language of "
+        f"the TRANSLATION, so whoever repairs the row reads the note natively."
+    )
+
+
 def _chosen_criteria(criteria: list[str], with_context: bool) -> list[str]:
     """
     The criteria actually in play, in a fixed order, with `context` dropped when
@@ -386,6 +449,7 @@ def build_judge_prompt(
     context_map: dict[int, str] | None = None,
     custom_placeholders: str = "",
     grading_mode: str = "severity",
+    chain: bool = False,
 ) -> str:
     """
     Review one section. The reply is JSON listing only the problem rows.
@@ -400,6 +464,11 @@ def build_judge_prompt(
     judgement call. `"severity"` is the default: knowing which of 300 flagged
     rows would actually confuse a player is the difference between a report and
     a list.
+
+    `chain` swaps the per-line isolation for dialogue-stream mode: the rows are
+    consecutive lines of the file, neighbours may be used as context, and the
+    scene-break guard replaces the blanket ban. Off (the default) keeps the
+    isolation that protects against cross-line false positives.
     """
     has_context = bool(context_map) and any(
         (context_map.get(row) or "").strip() for row, _s, _t in rows
@@ -418,8 +487,25 @@ def build_judge_prompt(
         'hitam\\""}]}'
     )
 
+    system = _JUDGE_SYS_CHAIN if chain else _JUDGE_SYS
+    if chain:
+        lines_rule = (
+            f"- Judge each line against its own SOURCE, using the surrounding "
+            f"lines as context where they clearly continue the same scene.\n"
+            f"- A cross-line finding must quote both halves: this line and the "
+            f"neighbour it contradicts or fails to follow.\n"
+            f"- Do NOT force connections across a clear scene break.\n"
+        )
+    else:
+        lines_rule = (
+            f"- Judge each line against its own SOURCE only. The other lines in "
+            f"this request are unrelated work batched together; they are not "
+            f"context, and a disagreement between two lines is not evidence "
+            f"that either is wrong.\n"
+        )
+
     return (
-        f"{_JUDGE_SYS}\n\n"
+        f"{system}\n\n"
         f"{_OUTPUT_CONTRACT}\n\n"
         f"Review {len(rows)} translated line(s).\n"
         f"{_lang_line(src_lang, tgt_lang)}"
@@ -430,13 +516,11 @@ def build_judge_prompt(
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
         f"\n{_COMMENT_RULES}\n"
+        f"\n{_naturalness_rule(tgt_lang)}\n"
         + (f"\n{_SEVERITY_RULES}\n" if graded else "")
         + f"\nRules:\n"
         f"- Report a line ONLY if it is wrong on one of the criteria above.\n"
-        f"- Judge each line against its own SOURCE only. The other lines in this "
-        f"request are unrelated work batched together; they are not context, and "
-        f"a disagreement between two lines is not evidence that either is "
-        f"wrong.\n"
+        f"{lines_rule}"
         f"- Say nothing about lines that are acceptable — omit them entirely.\n"
         f"- Do not penalise a valid alternative wording that means the same thing.\n"
         f"- Do not penalise a name or term kept in the source's own spelling.\n"
@@ -476,6 +560,110 @@ def build_judge_single_prompt(
         context_map={row: context} if (context or "").strip() else None,
         custom_placeholders=custom_placeholders,
         grading_mode=grading_mode,
+    )
+
+
+def build_judge_rechain_prompt(
+    rows: list[tuple[int, str, str]],
+    neighbours: dict[int, tuple[str, str]],
+    criteria: list[str],
+    src_lang: str = "",
+    tgt_lang: str = "",
+    style_prompt: str = "",
+    custom_placeholders: str = "",
+    grading_mode: str = "severity",
+) -> str:
+    """
+    Re-check flagged rows with their physical neighbours as context.
+
+    The rows under review are the flagged ones and nothing else — they are the
+    batch, the progress figure and the verdicts. `neighbours` carries the
+    rows physically adjacent to them in the file (row ± window), read by the
+    caller from the sheet: they are printed as CONTEXT ONLY rows, marked so in
+    the block, and the hard rule above the lines keeps the model from
+    reporting them. A neighbour that is itself flagged appears once, as an
+    UNDER REVIEW row, from whichever side owns it — the caller de-duplicates.
+
+    Same JSON reply shape as a section, so the same parser reads it; a verdict
+    aimed at a CONTEXT ONLY row is dropped by the caller, which knows the
+    difference.
+    """
+    has_review = bool(rows)
+    if not has_review:
+        return build_judge_prompt(
+            rows=[], criteria=criteria, src_lang=src_lang, tgt_lang=tgt_lang,
+            style_prompt=style_prompt, custom_placeholders=custom_placeholders,
+            grading_mode=grading_mode, chain=True,
+        )
+
+    graded = grading_mode == "severity"
+    example_row = rows[0][0]
+
+    example = (
+        f'{{"lines": [{{"row": {example_row}, '
+        f'"error_types": ["mistranslation"], '
+        + ('"severity": "critical", ' if graded else "")
+        + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
+        '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
+        'misread the story · FIX: replace \\"kucing merah\\" with \\"kucing '
+        'hitam\\""}]}'
+    )
+
+    # One merged block, in row-number order, so the stream reads as the file
+    # does. A neighbour colliding with a reviewed row is printed by its
+    # reviewed entry alone.
+    review_numbers = {row for row, _s, _t in rows}
+    entries: list[tuple[int, str]] = []
+    for row, source, translation in rows:
+        entries.append((row, (
+            f"[{row}] — UNDER REVIEW\n"
+            f"  SOURCE      : {encode_placeholders(source or '')}\n"
+            f"  TRANSLATION : {encode_placeholders(translation or '')}"
+        )))
+    for row, (source, translation) in neighbours.items():
+        if row in review_numbers:
+            continue
+        entries.append((row, (
+            f"[{row}] — CONTEXT ONLY, not under review\n"
+            f"  SOURCE      : {encode_placeholders(source or '')}\n"
+            f"  TRANSLATION : {encode_placeholders(translation or '')}"
+        )))
+    entries.sort(key=lambda pair: pair[0])
+    lines_block = "\n".join(text for _row, text in entries)
+
+    return (
+        f"{_JUDGE_SYS_CHAIN}\n\n"
+        f"{_CHAIN_NEIGHBOUR_RULE}\n\n"
+        f"{_OUTPUT_CONTRACT}\n\n"
+        f"Re-check {len(rows)} flagged line(s), each shown with its neighbouring "
+        f"lines from the file.\n"
+        f"{_lang_line(src_lang, tgt_lang)}"
+        f"{_style_line(style_prompt)}"
+        f"\nJudge each UNDER REVIEW line ONLY on these criteria:\n"
+        f"{_criteria_block(criteria, False)}\n"
+        f"{_style_guidance(style_prompt, _chosen_criteria(criteria, False))}"
+        f"\n{_PLACEHOLDER_RULE}\n"
+        f"{_extra_placeholders(custom_placeholders)}"
+        f"\n{_COMMENT_RULES}\n"
+        f"\n{_naturalness_rule(tgt_lang)}\n"
+        + (f"\n{_SEVERITY_RULES}\n" if graded else "")
+        + f"\nRules:\n"
+        f"- Report an UNDER REVIEW line ONLY if it is wrong on one of the "
+        f"criteria above.\n"
+        f"- Use the CONTEXT ONLY rows to understand the conversation; never "
+        f"report them, and never treat a neighbour's wording as the standard a "
+        f"reviewed line must copy.\n"
+        f"- A cross-line finding must quote both halves: the reviewed line and "
+        f"the neighbour it contradicts or fails to follow.\n"
+        f"- Do NOT force connections across a clear scene break.\n"
+        f"- Say nothing about lines that are acceptable — omit them entirely.\n"
+        f"- Do not penalise a valid alternative wording that means the same thing.\n"
+        f"- Do not rewrite the line here; describe what is wrong, briefly.\n"
+        f"- Use the row numbers exactly as given.\n"
+        f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
+        f"{example}\n"
+        f'If every reviewed line is acceptable, reply exactly: {{"lines": []}}\n'
+        f"\nLines:\n{lines_block}\n"
     )
 
 

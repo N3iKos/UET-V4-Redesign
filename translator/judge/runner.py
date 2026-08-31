@@ -60,6 +60,7 @@ from .prompts import (
     build_fix_prompt,
     build_fix_solo_prompt,
     build_judge_prompt,
+    build_judge_rechain_prompt,
     build_judge_single_prompt,
 )
 
@@ -118,6 +119,11 @@ class EvaluationPlan:
 
     The setup screen shows this and asks for confirmation when it is large
     (FR-106), so it has to be computable without sending anything.
+
+    `rechain` marks a chain-mode re-judge plan: the sections' rows are the
+    flagged rows under review, and `rechain_neighbours` carries their physical
+    neighbours from the file as CONTEXT ONLY rows the prompt shows but the
+    verdicts must never touch.
     """
 
     rows: list[tuple[int, str, str]] = field(default_factory=list)
@@ -125,6 +131,8 @@ class EvaluationPlan:
     prejudged: dict[int, RowIssue] = field(default_factory=dict)
     estimated_tokens: int = 0
     max_tokens: int = config.MAX_TOKENS_PER_REQUEST
+    rechain: bool = False
+    rechain_neighbours: dict[int, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def total_rows(self) -> int:
@@ -409,6 +417,53 @@ class JudgeRunner:
             max_tokens=self._max_tokens,
         )
 
+    def rechain_plan(self, rows: list[tuple[int, str, str]]) -> EvaluationPlan:
+        """
+        A re-judge plan in dialogue-chain mode: flagged rows under review,
+        their file neighbours injected as CONTEXT ONLY.
+
+        The sections are built from the flagged rows exactly as `plan` builds
+        them — same splitter, same budget — so a chain re-judge is paced like
+        the evaluation it follows. The neighbours are the rows physically
+        adjacent in the file (row ± window), read from the same loaded set,
+        and a neighbour that is itself flagged appears once, as an under-
+        review row: `build_judge_rechain_prompt` skips it from the context
+        side, so it is never printed twice.
+
+        Only meaningful when the chain setting is on; the caller decides, the
+        plan simply carries the mode.
+        """
+        sections = estimator.split_sections(
+            rows, max_tokens=self._max_tokens, max_rows=self._max_rows
+        )
+        window = self._chain_window()
+        flagged = {row for row, _s, _t in rows}
+        neighbours: dict[int, tuple[str, str]] = {}
+        try:
+            all_rows, _contexts = self.load_rows()
+            by_number = {row: (source, translation) for row, source, translation in all_rows}
+            numbers = sorted(by_number)
+            for row in flagged:
+                position = numbers.index(row)
+                for offset in range(-window, window + 1):
+                    if offset == 0:
+                        continue
+                    index = position + offset
+                    if 0 <= index < len(numbers):
+                        neighbour = numbers[index]
+                        if neighbour not in flagged:
+                            neighbours[neighbour] = by_number[neighbour]
+        except Exception:
+            neighbours = {}       # no file to read neighbours from: plain re-judge
+        return EvaluationPlan(
+            rows=rows,
+            sections=sections,
+            estimated_tokens=estimator.estimate_sections(sections),
+            max_tokens=self._max_tokens,
+            rechain=True,
+            rechain_neighbours=neighbours,
+        )
+
     # ── Evaluation ────────────────────────────────────────────────────────────
 
     def evaluate(
@@ -472,6 +527,20 @@ class JudgeRunner:
 
         def build_prompt(task: BatchTask) -> str:
             rows = task.extra["rows"]
+            if plan.rechain:
+                # Chain-mode re-judge: the section's rows are the flagged ones
+                # under review, and their physical neighbours from the file are
+                # printed as CONTEXT ONLY rows around them.
+                return build_judge_rechain_prompt(
+                    rows=rows,
+                    neighbours=plan.rechain_neighbours,
+                    criteria=self.criteria,
+                    src_lang=self._target.src_lang,
+                    tgt_lang=self._target.tgt_lang,
+                    style_prompt=self._target.style_prompt,
+                    custom_placeholders=self._target.custom_placeholders,
+                    grading_mode=self._grading_mode,
+                )
             return build_judge_prompt(
                 rows=rows,
                 criteria=self.criteria,
@@ -481,6 +550,7 @@ class JudgeRunner:
                 context_map=self._section_context(rows, contexts),
                 custom_placeholders=self._target.custom_placeholders,
                 grading_mode=self._grading_mode,
+                chain=self._chain_enabled(),
             )
 
         def apply_result(index: int, task: BatchTask, result: JudgeResult) -> None:
@@ -506,6 +576,13 @@ class JudgeRunner:
         def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
             index = task.extra["index"]
             result = parse_evaluation(raw, graded=self.graded)
+            if plan.rechain:
+                # Defensive: the prompt forbids verdicts on CONTEXT ONLY rows,
+                # but a row number is a real sheet number and a model that
+                # reports a neighbour anyway must not corrupt the report —
+                # its verdict is dropped, not folded in.
+                for neighbour in plan.rechain_neighbours:
+                    result.issues.pop(neighbour, None)
             # A reply that is not Judge JSON is re-asked before anything is
             # written off: the model was told the format, it may simply have
             # drifted, and a re-ask costs far less than leaving the section
@@ -1360,6 +1437,13 @@ class JudgeRunner:
         return getattr(self._job, "temperature", config.DEFAULT_TEMPERATURE) \
             if self._job else config.DEFAULT_TEMPERATURE
 
+    def _chain_enabled(self) -> bool:
+        """The dialogue-chain setting, read once per prompt build."""
+        return _saved_chain_context()
+
+    def _chain_window(self) -> int:
+        return _saved_chain_window()
+
     def _reasoning(self):
         """
         The reasoning spec for a direct request.
@@ -1490,6 +1574,26 @@ def _saved_fix_rows() -> int:
         return fix_batch_rows()
     except Exception:
         return DEFAULT_FIX_BATCH_ROWS
+
+
+def _saved_chain_context() -> bool:
+    """Whether Judge runs in dialogue-chain mode (Settings, default off)."""
+    try:
+        from ..data.app_prefs import judge_chain_context
+
+        return judge_chain_context()
+    except Exception:
+        return False
+
+
+def _saved_chain_window() -> int:
+    """Neighbour rows per side for a chain-mode re-judge, 1–5."""
+    try:
+        from ..data.app_prefs import judge_chain_window
+
+        return judge_chain_window()
+    except Exception:
+        return 1
 
 
 def _clean_grading_mode(mode: str | None) -> str:

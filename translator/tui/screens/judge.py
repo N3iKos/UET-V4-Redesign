@@ -4506,8 +4506,15 @@ class JudgeRunScreen(BaseScreen):
                 app.call_from_thread(self._rejudged_many, None, [])
                 return
             # The same planner the first evaluation used, over these rows only,
-            # so the sections are built and priced identically.
-            plan = runner.plan(subset)
+            # so the sections are built and priced identically. In chain mode
+            # the plan also carries the flagged rows' file neighbours as
+            # CONTEXT ONLY rows the prompt shows around them.
+            from ...data.app_prefs import judge_chain_context
+
+            if judge_chain_context():
+                plan = runner.rechain_plan(subset)
+            else:
+                plan = runner.plan(subset)
             fresh = runner.evaluate(plan=plan)
         except Exception as exc:
             app.call_from_thread(

@@ -41,6 +41,14 @@ DEFAULTS: dict = {
     "preferred_rows_per_request": config.DEFAULT_PREFERRED_ROWS_PER_REQUEST,
     "max_rows_per_request_cap": config.DEFAULT_MAX_ROWS_PER_REQUEST_CAP,
     "request_timeout": config.DEFAULT_REQUEST_TIMEOUT,
+    # Judge: treat the rows of a request as a chronological dialogue stream
+    # (opt-in). OFF keeps the strict per-line isolation that protects against
+    # cross-line false positives.
+    "judge_chain_context": False,
+    "judge_chain_window": 1,
+    # Translate: ask the model to keep terminology/tone continuity across the
+    # rows of one batch (they are consecutive lines of the file).
+    "translate_batch_context": False,
     # Per-model remembered Judge operation settings (re-judge / fix). Keyed by
     # "<provider_id>\n<connection_id>\n<model_id>" so two models with the same
     # name on different connections stay separate. Values:
@@ -95,6 +103,13 @@ def load_prefs() -> dict:
     prefs["judge_model_prefs"] = _clean_judge_model_prefs(
         payload.get("judge_model_prefs")
     )
+    prefs["judge_chain_context"] = bool(payload.get("judge_chain_context", False))
+    prefs["judge_chain_window"] = _clamp_chain_window(
+        payload.get("judge_chain_window")
+    )
+    prefs["translate_batch_context"] = bool(
+        payload.get("translate_batch_context", False)
+    )
     return prefs
 
 
@@ -134,6 +149,13 @@ def save_prefs(prefs: dict) -> None:
     )
     current["judge_model_prefs"] = _clean_judge_model_prefs(
         current.get("judge_model_prefs")
+    )
+    current["judge_chain_context"] = bool(current.get("judge_chain_context", False))
+    current["judge_chain_window"] = _clamp_chain_window(
+        current.get("judge_chain_window")
+    )
+    current["translate_batch_context"] = bool(
+        current.get("translate_batch_context", False)
     )
     try:
         _write(current)
@@ -361,6 +383,68 @@ def _clamp_workers(value) -> int:
     except (TypeError, ValueError):
         return 1
     return max(1, min(50, number))
+
+
+def _clamp_chain_window(value) -> int:
+    """
+    Neighbour rows per side for the Judge dialogue-chain context, 1–5.
+
+    The floor is 1 because 0 neighbours would be "the feature is on but shows
+    no neighbours", which is just the feature off with extra steps; the ceiling
+    keeps the injected context from costing more tokens than the rows it
+    explains.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(5, number))
+
+
+# ── Dialogue-chain / batch context settings ──────────────────────────────────
+
+def judge_chain_context() -> bool:
+    """
+    Whether Judge treats a request's rows as a chronological dialogue stream.
+
+    OFF (the default) keeps the strict per-line isolation: a batch is not a
+    passage, and one line's verdict must not lean on another's. ON swaps the
+    prompt for a chain-aware one — surrounding lines may be used as context,
+    with a scene-break guard — and re-judge prompts gain injected neighbour
+    rows as CONTEXT ONLY.
+    """
+    return bool(load_prefs()["judge_chain_context"])
+
+
+def judge_chain_window() -> int:
+    """Neighbour rows per side injected as context in a re-judge, 1–5."""
+    return int(load_prefs()["judge_chain_window"])
+
+
+def set_judge_chain_context(enabled: bool) -> bool:
+    save_prefs({"judge_chain_context": bool(enabled)})
+    return bool(enabled)
+
+
+def set_judge_chain_window(value: int) -> int:
+    clamped = _clamp_chain_window(value)
+    save_prefs({"judge_chain_window": clamped})
+    return clamped
+
+
+def translate_batch_context() -> bool:
+    """
+    Whether a translate batch is told to keep continuity across its rows.
+
+    The rows of one batch are consecutive lines of the file either way; this
+    only decides whether the prompt says so.
+    """
+    return bool(load_prefs()["translate_batch_context"])
+
+
+def set_translate_batch_context(enabled: bool) -> bool:
+    save_prefs({"translate_batch_context": bool(enabled)})
+    return bool(enabled)
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────

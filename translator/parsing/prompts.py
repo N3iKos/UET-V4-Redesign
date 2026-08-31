@@ -41,7 +41,16 @@ def build_translate_prompt(
     global_context: str = "",
     custom_placeholders: str = "",
     prompt_format: str = "plain",
+    batch_context: bool = False,
 ) -> str:
+    """
+    One batch prompt. `batch_context` (Settings, default off) tells the model
+    the rows are consecutive lines of the same work and asks it to keep
+    terminology, tone and continuity across them — the rows are physically
+    consecutive either way, so this is purely a prompt-mode switch. The
+    anti-merge rule stays on in both modes: [N]-prefixed output requires each
+    row's answer to stay in its own line.
+    """
     n = len(rows)
     encoded_rows = [(rn, encode_placeholders(txt)) for rn, txt in rows]
 
@@ -68,10 +77,22 @@ def build_translate_prompt(
             f"other than {src_lang}, COPY IT EXACTLY character by character.\n"
         )
 
+    if batch_context:
+        lines_rule = (
+            f"- The lines below are CONSECUTIVE lines of the same work, in order. "
+            f"Keep terminology, names, register and tone consistent across them: "
+            f"a line may refer back to an earlier one, and the same term must be "
+            f"translated the same way throughout.\n"
+        )
+    else:
+        lines_rule = (
+            f"- Each line is COMPLETELY INDEPENDENT — translate it exactly as-is\n"
+        )
+
     rules = (
         f"RULES:\n"
         f"- Output EXACTLY {n} lines in the same order\n"
-        f"- Each line is COMPLETELY INDEPENDENT — translate it exactly as-is\n"
+        f"{lines_rule}"
         f"- Do NOT merge, combine, or absorb content from adjacent lines — "
         f"if a sentence is split across two lines, translate each fragment SEPARATELY\n"
         f"- Do NOT complete, fix, or extend incomplete lines — "

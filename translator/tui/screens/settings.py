@@ -50,6 +50,24 @@ def _fallback_hint(value: int) -> str:
     )
 
 
+def _chain_hint(prefs: dict) -> str:
+    """One line describing the dialogue-chain setting's current state."""
+    if not prefs.get("judge_chain_context"):
+        return "off — each row judged alone (safest against false positives)"
+    window = prefs.get("judge_chain_window", 1)
+    return (
+        f"on — rows read as consecutive dialogue; re-judge shows {window} "
+        f"neighbour(s) per side as context"
+    )
+
+
+def _translate_chain_hint(prefs: dict) -> str:
+    """One line describing the translate batch-continuity setting."""
+    if not prefs.get("translate_batch_context"):
+        return "off — each line translated independently (current default)"
+    return "on — one batch's lines keep terminology and tone together"
+
+
 class SettingsScreen(MenuScreen):
     breadcrumb = "Settings"
     title_text = "Settings"
@@ -62,9 +80,11 @@ class SettingsScreen(MenuScreen):
             Option("Default processing mode", "mode",
                    hint=f"{mode} — {MODE_HINTS.get(mode, '')}"),
             Option("Judge grading mode", "grading",
-                   hint=f"{grading} — {GRADING_HINTS.get(grading, '')}"),
+                    hint=f"{grading} — {GRADING_HINTS.get(grading, '')}"),
+            Option("Judge dialogue-chain context", "judge_chain",
+                    hint=_chain_hint(prefs)),
             Option("Max rows per request (Judge)", "rows",
-                   hint=f"{prefs['max_rows_per_request']} rows — Judge batching limit"),
+                    hint=f"{prefs['max_rows_per_request']} rows — Judge batching limit"),
             Option("Preferred rows/request (Processing)", "preferred_rows",
                    hint=f"{prefs['preferred_rows_per_request']} rows — what the shared "
                         f"Processing form aims for"),
@@ -78,6 +98,8 @@ class SettingsScreen(MenuScreen):
             Option("Request timeout before retry", "request_timeout",
                     hint=f"{prefs['request_timeout']}s — a request that runs longer is "
                          f"cancelled and retried"),
+            Option("Translate batch continuity", "translate_chain",
+                    hint=_translate_chain_hint(prefs)),
             Option("Locked-output fallback range", "fallback_range",
                     hint=_fallback_hint(prefs["fallback_save_range"])),
             Option("Change vault password", "password"),
@@ -106,6 +128,10 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(ProcessingModeModal(), self._mode_done)
         elif option.value == "grading":
             self.app.push_screen(GradingModeModal(), self._grading_done)
+        elif option.value == "judge_chain":
+            self.app.push_screen(JudgeChainModal(), self._judge_chain_done)
+        elif option.value == "translate_chain":
+            self.app.push_screen(TranslateChainModal(), self._translate_chain_done)
         elif option.value == "rows":
             self.app.push_screen(MaxRowsModal(), self._rows_done)
         elif option.value == "preferred_rows":
@@ -254,6 +280,42 @@ class SettingsScreen(MenuScreen):
             self.notify_status("Old password was wrong — nothing changed.", ERROR)
 
 
+    def _judge_chain_done(self, result: "tuple[str, int | None] | None") -> None:
+        """The chain modal came back: (mode, window) or None."""
+        if not result:
+            return
+        mode, window = result
+        enabled = app_prefs.set_judge_chain_context(mode == "on")
+        if window is not None and enabled:
+            app_prefs.set_judge_chain_window(window)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        if enabled:
+            w = app_prefs.judge_chain_window()
+            self.notify_status(
+                f"Judge reads rows as consecutive dialogue. Re-judge shows {w} "
+                f"neighbour(s) per side as context.", OK,
+            )
+        else:
+            self.notify_status(
+                "Judge judges each row alone again — the safest mode against "
+                "cross-line false positives.", MUTED,
+            )
+
+    def _translate_chain_done(self, mode: str | None) -> None:
+        if not mode:
+            return
+        enabled = app_prefs.set_translate_batch_context(mode == "on")
+        self.picker.set_options(self.build_options(), keep_index=True)
+        if enabled:
+            self.notify_status(
+                "Translate batches keep terminology and tone together.", OK,
+            )
+        else:
+            self.notify_status(
+                "Translate lines are independent again.", MUTED,
+            )
+
+
 class ProcessingModeModal(ModalScreen[str]):
     """
     The mode a new job starts from (FEATURE-003 FR-304).
@@ -349,6 +411,122 @@ class GradingModeModal(ModalScreen[str]):
             if name == current:
                 self.picker.index = index
                 break
+        self.picker.focus()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self.dismiss(event.option.value)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class JudgeChainModal(ModalScreen["tuple[str, int | None] | None"]):
+    """
+    The Judge dialogue-chain context switch, plus its window size.
+
+    OFF (the default) keeps the strict per-line isolation: a batch is not a
+    passage, and one line's verdict must not lean on another's — that rule
+    exists because cross-line reading produced documented false positives.
+    ON swaps the prompt for a chain-aware one with a scene-break guard, and a
+    re-judge injects the flagged rows' physical neighbours as CONTEXT ONLY
+    rows the model may read but never report.
+
+    Returns ("on"|"off", window-or-None), or None when cancelled. The window
+    is asked for only when the mode is on.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        current = "on" if app_prefs.judge_chain_context() else "off"
+        with Vertical(classes="modal"):
+            yield Label("Judge dialogue-chain context", classes="title")
+            yield Label(
+                "Applies to the next evaluation and re-judge. Off is the "
+                "safest mode against cross-line false positives; on reads the "
+                "rows of a request as consecutive dialogue.",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option("Off" + ("   (current)" if current == "off" else ""),
+                       "off",
+                       hint="each row judged against its own source alone"),
+                Option("On" + ("   (current)" if current == "on" else ""),
+                       "on",
+                       hint="neighbouring lines may be used as context, with a "
+                            "scene-break guard"),
+            ])
+            yield self.picker
+            yield Label("")
+            self._window = LabeledInput(
+                "Neighbour rows per side (when on)",
+                value=str(app_prefs.judge_chain_window()),
+                default=str(app_prefs.judge_chain_window()),
+            )
+            yield self._window
+            yield KeyHints([("↑↓", "move"), ("tab", "field"),
+                            ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        current = "on" if app_prefs.judge_chain_context() else "off"
+        self.picker.index = 0 if current == "off" else 1
+        self.picker.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        mode = self.picker.current.value if self.picker.current else "off"
+        window = None
+        if mode == "on":
+            try:
+                window = int(self._window.value)
+            except ValueError:
+                window = None          # clamped to the stored value by prefs
+        self.dismiss((mode, window))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class TranslateChainModal(ModalScreen[str]):
+    """
+    Whether a translate batch is told to keep continuity across its rows.
+
+    The rows of one batch are consecutive lines of the file either way; this
+    only decides whether the prompt says so. Off keeps the per-line
+    independence rule that stops a model from merging or completing lines.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        current = "on" if app_prefs.translate_batch_context() else "off"
+        with Vertical(classes="modal"):
+            yield Label("Translate batch continuity", classes="title")
+            yield Label(
+                "Applies to the next translate run. On asks the model to keep "
+                "terminology, names and tone consistent across the lines of "
+                "one batch; the anti-merge rules stay on either way.",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option("Off" + ("   (current)" if current == "off" else ""),
+                       "off",
+                       hint="each line translated independently (default)"),
+                Option("On" + ("   (current)" if current == "on" else ""),
+                       "on",
+                       hint="one batch's lines keep terminology and tone together"),
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        current = "on" if app_prefs.translate_batch_context() else "off"
+        self.picker.index = 0 if current == "off" else 1
         self.picker.focus()
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
