@@ -576,6 +576,7 @@ def _rejudge_rows_default() -> int:
     return max_rows_per_request()
 
 
+class RowFixModal(ModalScreen["tuple | None"]):
     """
     One flagged row, in a single popup (UET_UX §6 Fix one row).
 
@@ -4456,8 +4457,8 @@ class JudgeRunScreen(BaseScreen):
             )
             return
         self._with_rejudge_model(
-            lambda slot, rows, workers: self._begin_rejudge_fixed(
-                rows, slot, rows_per_request=rows, workers=workers
+            lambda slot, batch, workers: self._begin_rejudge_fixed(
+                rows, slot, rows_per_request=batch, workers=workers
             )
         )
 

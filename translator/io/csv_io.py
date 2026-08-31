@@ -27,12 +27,35 @@ from typing import Iterator
 # common case for spreadsheets exported on Windows.
 _ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
 
-# csv caps fields at 128 KB by default; translation rows can exceed that.
-csv.field_size_limit(10 * 1024 * 1024)
-
 
 def is_csv(path: str) -> bool:
     return os.path.splitext(path)[1].lower() in (".csv", ".tsv", ".txt")
+
+
+def _decode_whole_file(raw: bytes) -> tuple[str, str] | None:
+    """
+    Strict-decode the WHOLE file as one UTF-8 family encoding.
+
+    The 64 KB sniff window can only prove a file is not UTF-8 by failing, and
+    a partial multi-byte character at the window's edge made strict decodes
+    fail on files that were perfectly fine. Worse, cp1252 accepts nearly
+    every byte sequence, so it "wins" far too easily — and once a real UTF-8
+    file is read as cp1252 and written back, the mojibake
+    (\u2026 becomes "â¦", — becomes "Ã¢Â\x80Â\x94") is baked into the file and
+    every later pass deepens it. Decoding the whole file removes both failure
+    modes: there is no window edge, and UTF-8 wins whenever the entire file
+    genuinely is UTF-8 — which for this app's files is the overwhelmingly
+    common case.
+
+    Returns (text, encoding) or None when no UTF-8 family decode succeeds.
+    """
+    for candidate in ("utf-8-sig", "utf-8"):
+        try:
+            text = raw.decode(candidate, errors="strict")
+            return text, "utf-8" if candidate == "utf-8-sig" else "utf-8"
+        except UnicodeDecodeError:
+            continue
+    return None
 
 
 class CsvFormat:
@@ -73,31 +96,33 @@ def sniff(path: str) -> CsvFormat:
     raw = b""
     try:
         with open(path, "rb") as handle:
-            raw = handle.read(64 * 1024)
+            raw = handle.read()
     except OSError:
         return CsvFormat()
 
     bom = raw.startswith(b"\xef\xbb\xbf")
 
-    text = ""
-    encoding = "utf-8"
-    for candidate in _ENCODINGS:
-        try:
-            # Decode the window incrementally with final=False. The window is a
-            # fixed 64 KB slice of the file, so a multi-byte character can be cut
-            # in half at its edge — a real UTF-8 file then fails a *strict*
-            # decode purely because of where we happened to stop reading, and
-            # the sniff falls through to latin-1, which decodes any byte and so
-            # never fails. That misread is what turns 日本語 into "æ¥æ¬èª":
-            # the file is UTF-8, gets read as latin-1, and every following write
-            # re-encodes the mojibake. Tolerating a dangling trailing sequence
-            # keeps UTF-8 from losing to latin-1 on that technicality.
-            decoder = codecs.getincrementaldecoder(candidate)("strict")
-            text = decoder.decode(raw, False)
-            encoding = "utf-8" if candidate == "utf-8-sig" else candidate
-            break
-        except UnicodeDecodeError:
-            continue
+    # Whole-file decode: cp1252 accepts nearly every byte, so a window-based
+    # sniff let it "win" over UTF-8 far too easily (a dangling sequence at the
+    # window edge, or one bad byte) — and one cp1252 read + UTF-8 write of a
+    # UTF-8 file bakes mojibake in permanently. UTF-8 now wins whenever the
+    # ENTIRE file is valid UTF-8, which is the overwhelmingly common case for
+    # this app's files. Only a file with genuinely non-UTF-8 bytes falls
+    # through to the legacy single-byte encodings.
+    decoded = _decode_whole_file(raw)
+    if decoded is not None:
+        text, encoding = decoded
+    else:
+        text = ""
+        encoding = "utf-8"
+        for candidate in _ENCODINGS:
+            try:
+                decoder = codecs.getincrementaldecoder(candidate)("strict")
+                text = decoder.decode(raw, False)
+                encoding = "utf-8" if candidate == "utf-8-sig" else candidate
+                break
+            except UnicodeDecodeError:
+                continue
 
     # Line terminator: look at the first break we see, before any parsing.
     lineterminator = "\r\n" if "\r\n" in text else ("\n" if "\n" in text else "\r\n")
@@ -140,6 +165,45 @@ def iter_rows(path: str, fmt: CsvFormat | None = None) -> Iterator[list[str]]:
         reader = csv.reader(handle, delimiter=fmt.delimiter, quotechar=fmt.quotechar)
         for row in reader:
             yield row
+
+
+def repair_mojibake(text: str) -> str:
+    """
+    Undo the cp1252-misread of UTF-8, one layer deep.
+
+    A UTF-8 file read as cp1252 and written back as UTF-8 turns
+    "\u2026" into "â¦" and "\\u2014" into "Ã¢\\x80\\x94". Re-encoding the
+    damaged text as cp1252 (latin-1 for the bytes cp1252 cannot produce)
+    recovers the original bytes, which then decode cleanly as UTF-8.
+    Only applied when the round trip is lossless and the result actually
+    decodes — text that was never mojibake is returned untouched, and a
+    mix (one pass already damaged, one clean) is repaired where it can be
+    and left alone where it cannot.
+    """
+    if not text or all(ord(ch) < 128 for ch in text):
+        return text          # pure ASCII: nothing to repair, nothing to break
+    try:
+        raw = text.encode("cp1252")
+    except UnicodeEncodeError:
+        try:
+            raw = text.encode("latin-1")
+        except UnicodeEncodeError:
+            return text      # characters outside both: not this damage pattern
+    try:
+        repaired = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return text          # the bytes are not valid UTF-8: original stands
+    return repaired
+
+
+def looks_mojibake(text: str) -> bool:
+    """
+    Quick heuristic: does this text carry the byte-shaped scars of a
+    cp1252 misread of UTF-8? Used to decide whether a repair pass is worth
+    running on a whole file rather than per cell.
+    """
+    markers = ("Ã¢", "Ã¢Â", "â€", "Â ", "Â·", "Â—", "â€™", "â€œ", "â€\x9d")
+    return any(marker in text for marker in markers)
 
 
 def write_rows(path: str, rows: list[list[str]], fmt: CsvFormat) -> None:

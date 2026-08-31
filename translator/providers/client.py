@@ -527,15 +527,18 @@ class ProviderClient:
         OpenAI-compatible servers reject the field.
 
         The HTTP request is sent with `stream=True` at the transport level
-        even though nothing is rendered incrementally: `requests.post` with
-        `stream=False` blocks inside the POST until the whole body has been
-        read, so the response object — the thing the abort registry closes —
-        only exists after the read is over. A force-cancel during the read had
-        nothing to sever and waited the request out. With `stream=True` the
-        response exists as soon as the headers arrive, is registered for
-        abort, and the body is then drained in one pass; `parse_body` already
-        understands SSE-framed chunks, so servers that answer a streamed
-        request with deltas are still read correctly.
+        only — the BODY still tells the server `"stream": false`, so the
+        provider computes the whole answer and sends it in one burst, exactly
+        as it did before: same latency profile, same usage blocks, no
+        per-token SSE. The transport-level stream exists for control, not
+        delivery: `requests.post` with `stream=False` blocks inside the POST
+        until the whole body has been read, so the response object — the
+        thing the abort registry and the deadline timer close — only exists
+        after the read is over. With `stream=True` the response exists as
+        soon as the headers arrive, is registered for abort, and the body is
+        then drained in one pass; `parse_body` already understands SSE-framed
+        chunks, so a server that answers a non-streaming request with SSE
+        anyway is still read correctly.
 
         **Total deadline.** `timeout=(connect, read)` is an *inactivity*
         timeout per socket read — a server that trickles one byte every few
@@ -551,7 +554,7 @@ class ProviderClient:
         """
         body = self._chat_body(
             model, messages, temperature, reasoning,
-            max_completion_tokens, response_format, stream=True,
+            max_completion_tokens, response_format, stream=False,
         )
 
         started = time.time()
