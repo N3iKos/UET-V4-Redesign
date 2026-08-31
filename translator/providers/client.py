@@ -536,6 +536,18 @@ class ProviderClient:
         abort, and the body is then drained in one pass; `parse_body` already
         understands SSE-framed chunks, so servers that answer a streamed
         request with deltas are still read correctly.
+
+        **Total deadline.** `timeout=(connect, read)` is an *inactivity*
+        timeout per socket read — a server that trickles one byte every few
+        seconds resets it forever, and a "120s timeout" run measured 227s and
+        beyond. So the user's `request_timeout` is now enforced as a
+        wall-clock cap on the WHOLE request: a deadline timer is armed when
+        the request is sent and closes the response — the same severing move
+        the force-cancel makes — the moment the cap is hit, whether or not
+        bytes are still arriving. The resulting read error is reported as an
+        ordinary timeout (`is_timeout=True`), so the retry loop rotates the
+        slot and re-issues exactly as it always did for a silent stall. The
+        timer is cancelled the moment the body has been read.
         """
         body = self._chat_body(
             model, messages, temperature, reasoning,
@@ -543,12 +555,20 @@ class ProviderClient:
         )
 
         started = time.time()
+        deadline_hit = threading.Event()
         try:
             resp = self._abortable_post(body, stream=True)
+            timer = threading.Timer(
+                max(1.0, self.timeout), self._sever_past_deadline,
+                args=(resp, deadline_hit),
+            )
+            timer.daemon = True
+            timer.start()
             try:
                 latency_ms = (time.time() - started) * 1000.0
                 headers, text = dict(resp.headers), resp.text
             finally:
+                timer.cancel()
                 self._release_response()
                 resp.close()
         except requests.exceptions.Timeout:
@@ -576,12 +596,36 @@ class ProviderClient:
                     retry_delay=0,
                     kind=ProviderError.KIND_UNKNOWN,
                 )
+            if deadline_hit.is_set():
+                # The deadline timer closed the socket under this read: the
+                # request outlived the user's timeout while bytes kept
+                # trickling in. Same handling as a silent read timeout —
+                # this is the enforcement, not a provider outage.
+                raise ProviderError(
+                    f"Request exceeded the {self.timeout:.0f}s total deadline "
+                    f"(still receiving data)",
+                    status_code=504,
+                    retry_delay=config.RETRY_DELAY_ERR,
+                    kind=ProviderError.KIND_SERVER,
+                    is_timeout=True,
+                )
             raise ProviderError(
                 f"HTTP request failed: {type(exc).__name__}: {exc}",
                 status_code=0,
                 retry_delay=config.RETRY_DELAY_ERR,
             )
         except requests.exceptions.RequestException as exc:
+            if deadline_hit.is_set() and not self._aborted():
+                # The deadline severs mid-read as a chunked-encoding/connection
+                # error rather than a Timeout, depending on where the read was.
+                raise ProviderError(
+                    f"Request exceeded the {self.timeout:.0f}s total deadline "
+                    f"(still receiving data)",
+                    status_code=504,
+                    retry_delay=config.RETRY_DELAY_ERR,
+                    kind=ProviderError.KIND_SERVER,
+                    is_timeout=True,
+                )
             raise ProviderError(
                 f"HTTP request failed: {type(exc).__name__}: {exc}",
                 status_code=0,
@@ -628,6 +672,22 @@ class ProviderClient:
             reasoning=reasoning if reasoning != content else "",
             reasoning_tokens=self._reasoning_tokens_from(data),
         )
+
+    def _sever_past_deadline(self, resp, deadline_hit: threading.Event) -> None:
+        """
+        Close the response because the request outlived the user's timeout.
+
+        Runs on the deadline timer's thread. Closing from another thread makes
+        the blocked `resp.text` read raise immediately — the same mechanism
+        `abort_active_request` uses for a force-cancel — and `deadline_hit`
+        tells the except clauses which of the three causes fired (deadline,
+        force-cancel, ordinary network failure).
+        """
+        deadline_hit.set()
+        try:
+            resp.close()
+        except Exception:
+            pass        # already closed, or the socket died on its own
 
     # ── stream_chat ───────────────────────────────────────────────────────────
 
