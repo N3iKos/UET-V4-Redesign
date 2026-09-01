@@ -46,6 +46,14 @@ DEFAULTS: dict = {
     # cross-line false positives.
     "judge_chain_context": False,
     "judge_chain_window": 1,
+    # Judge comment style — how the FIX part of a comment may be written:
+    #   auto     — the model picks per finding: exact word replacement when the
+    #               fix is unambiguous, direction-only critique for style
+    #   explicit — always give the exact replacement words (most precise fixes,
+    #               most prone to suggestion ping-pong)
+    #   critical — critique only, never dictate words (the fix model rewrites
+    #               freely; no word can be forced)
+    "judge_comment_style": "auto",
     # Translate: ask the model to keep terminology/tone continuity across the
     # rows of one batch (they are consecutive lines of the file).
     "translate_batch_context": False,
@@ -110,6 +118,9 @@ def load_prefs() -> dict:
     prefs["translate_batch_context"] = bool(
         payload.get("translate_batch_context", False)
     )
+    prefs["judge_comment_style"] = _clean_comment_style(
+        payload.get("judge_comment_style")
+    )
     return prefs
 
 
@@ -156,6 +167,9 @@ def save_prefs(prefs: dict) -> None:
     )
     current["translate_batch_context"] = bool(
         current.get("translate_batch_context", False)
+    )
+    current["judge_comment_style"] = _clean_comment_style(
+        current.get("judge_comment_style")
     )
     try:
         _write(current)
@@ -445,6 +459,36 @@ def translate_batch_context() -> bool:
 def set_translate_batch_context(enabled: bool) -> bool:
     save_prefs({"translate_batch_context": bool(enabled)})
     return bool(enabled)
+
+
+# ── Judge comment style ───────────────────────────────────────────────────────
+
+COMMENT_STYLES = ("auto", "explicit", "critical")
+
+
+def _clean_comment_style(value) -> str:
+    """`auto` unless a known style is stored — a mangled file never breaks runs."""
+    return value if value in COMMENT_STYLES else "auto"
+
+
+def judge_comment_style() -> str:
+    """
+    How the FIX part of a Judge comment may be written.
+
+    `auto` (default) lets the model choose per finding: an exact word
+    replacement when the fix is unambiguous, a direction-only critique for
+    matters of style. `explicit` always demands the exact replacement words —
+    the most precise repairs, and the most prone to suggestion ping-pong.
+    `critical` forbids dictating words entirely: critique only, and the fix
+    model rewrites freely.
+    """
+    return _clean_comment_style(load_prefs()["judge_comment_style"])
+
+
+def set_judge_comment_style(style: str) -> str:
+    stored = _clean_comment_style(style)
+    save_prefs({"judge_comment_style": stored})
+    return stored
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────

@@ -122,9 +122,21 @@ class RetryExecutor:
             if not infinite and attempt > job.max_attempts:
                 break
 
+            # A force-cancel must be able to wake a worker parked in the pool's
+            # acquire wait (a connection cooling down after an error), not just
+            # the ones blocked in a read. The pool checks this flag between
+            # waits; wiring it here means every executor shares the behaviour.
+            self._pool.stop_event = self._stop
+
             try:
                 lease = self._pool.acquire(rows=rows_to_charge)
             except AllConnectionsUnavailable as exc:
+                if self._stop.is_set():
+                    # The pool's stop check fired: a cancelled run, not a dead
+                    # provider. Say so and exit quietly — no cascade of
+                    # "exhausted" events for something the user asked for.
+                    self._emit("exhausted", label, attempt, message="Cancelled.")
+                    break
                 # Every connection is genuinely gone (confirmed quota, or nothing
                 # freed within the acquire timeout). Propagate rather than
                 # swallowing into a per-batch error: the scheduler stops the run
@@ -136,6 +148,7 @@ class RetryExecutor:
             connection_name = lease.name
 
             try:
+                lease.key_pool.stop_event = self._stop
                 key_state = lease.key_pool.acquire(timeout=self._acquire_timeout())
             except AllKeysExhausted as exc:
                 last_error = str(exc)
@@ -144,6 +157,12 @@ class RetryExecutor:
                            connection=connection_name, message=last_error)
                 continue
             except TimeoutError as exc:
+                if self._stop.is_set():
+                    # The key-pool stop check fired mid-wait: a cancelled run,
+                    # not a slow cooldown. Exit quietly rather than parking the
+                    # connection again.
+                    last_error = "Cancelled."
+                    break
                 last_error = str(exc)
                 self._pool.report_cooldown(
                     lease.connection_id, lease.key_pool.cooldown_remaining(), str(exc)
@@ -151,6 +170,12 @@ class RetryExecutor:
                 self._emit("cooldown", label, attempt,
                            connection=connection_name, message=last_error)
                 continue
+
+            # The one-shot abort may have fired while this worker was parked in
+            # the acquires above; without this check it would happily POST a
+            # brand-new request nobody will sever again.
+            if self._stop.is_set():
+                break
 
             key = key_state.key
             # The lease decides where this goes and, for a combo, which model to

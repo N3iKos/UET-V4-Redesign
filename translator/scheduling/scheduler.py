@@ -1048,9 +1048,14 @@ class ParallelStrategy(ExecutionStrategy):
             task_queue.put(None)
         # Wedged workers are daemons and cannot be joined in finite time; their
         # batches were reassigned, so the run's results are complete without
-        # them. Join with a generous timeout and move on.
+        # them. Join with a generous timeout and move on. After a force-cancel
+        # the join is short instead: the acquires and reads the stop event now
+        # interrupts mean a stuck worker is a rarity, and making the user stare
+        # at "Force-cancelling…" for another 120s per wedged worker is the bug
+        # this guard exists for. Their results are discarded either way.
+        join_timeout = 5.0 if scheduler._stop.is_set() else 120.0
         for thread in threads:
-            thread.join(timeout=120.0)
+            thread.join(timeout=join_timeout)
 
     def _worker_loop(
         self,

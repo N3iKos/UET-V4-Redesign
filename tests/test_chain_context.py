@@ -154,12 +154,19 @@ class TestDynamicLanguage:
         )
         assert "native speaker of Korean" in prompt
 
-    def test_fix_prompt_verifies_the_suggestion(self):
+    def test_fix_prompt_enforces_explicit_fixes(self):
+        """
+        The repair contract: a FIX directive naming specific words is an
+        ORDER, not a suggestion — a repair that returns the flagged wording
+        unchanged is a failed repair. Direction-only directives leave the
+        wording to the fix model.
+        """
         prompt = build_fix_prompt(
             ROWS, {2: "WHAT/WHY/FIX note"}, tgt_lang="Italian"
         )
         assert "native speaker of Italian" in prompt
-        assert "strong hint, not an order" in prompt
+        assert "you MUST make that exact change" in prompt
+        assert "may NOT survive into your output" in prompt
 
     def test_rechain_prompt_carries_the_target(self):
         prompt = build_judge_rechain_prompt(

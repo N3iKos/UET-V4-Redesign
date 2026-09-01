@@ -126,13 +126,14 @@ _FIX_SYS = (
     "You are a professional translation editor.\n"
     "Your ONLY job is to correct the flawed TRANSLATION using the stated PROBLEM / CORRECTION NOTE as your primary guide.\n"
     "CRITICAL RULES:\n"
-    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive. The note describes the problem a reviewer found — treat it as a strong hint, not an order to copy blindly.\n"
-    "2. Apply the fix the note asks for — but FIRST check the suggested wording actually reads naturally in the target language for this line and its context. If the note's suggestion is stiff, archaic, dictionary-literal or otherwise unnatural, produce the natural target-language wording yourself while still fixing the actual problem the note identified. Never output a line that sounds machine-translated just because the note said so.\n"
-    "3. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
-    "4. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
-    "5. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
-    "6. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks.\n"
-    "7. Change only what is wrong. A line's register, tone and terminology must stay consistent with the surrounding work."
+    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive.\n"
+    "2. When the FIX directive names specific words — \"replace X with Y\", \"restore [BR][NL]\", \"the name must be Z\" — you MUST make that exact change. The flagged words may NOT survive into your output. A repair that returns the flagged wording unchanged is a failed repair, no matter how natural it reads.\n"
+    "3. When the FIX directive is a direction only — register, tone, style — choose the wording yourself, in the natural voice of the target language for this line and its context. Never output a line that sounds machine-translated or dictionary-literal.\n"
+    "4. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
+    "5. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
+    "6. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
+    "7. Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks.\n"
+    "8. Change only what is wrong. A line's register, tone and terminology must stay consistent with the surrounding work."
 )
 
 # How a comment must be written. Vague comments ("awkward phrasing") are
@@ -140,9 +141,7 @@ _FIX_SYS = (
 # them. The comment is the *instruction a repair model will execute*, so it is
 # written as one: WHAT is wrong (with both halves of the comparison quoted so
 # the claim is checkable), WHY it is wrong against this line's own source, and
-# a FIX directive stating what the corrected line must contain — the exact
-# words, a placeholder, or the direction to move in when several valid
-# phrasings exist.
+# a FIX directive whose shape depends on the user's comment-style setting.
 #
 # Quoting the SOURCE as well as the TRANSLATION is not decoration. A comment
 # that only quotes the translation can be written without ever looking at the
@@ -150,29 +149,68 @@ _FIX_SYS = (
 # some *other* line in the batch. Being forced to write the source fragment out
 # makes the comparison the comment claims to have made visible — and a reviewer
 # who cannot produce that pair has no finding to report.
-_COMMENT_RULES = (
-    "For every reported line, write the comment as a repair instruction with "
-    "THREE parts, in this exact shape:\n"
-    "  WHAT: SOURCE says \"...\" but TRANSLATION says \"...\" — quote the exact "
-    "word or phrase at fault from the TRANSLATION, and the part of THAT LINE'S "
-    "OWN SOURCE it fails to render.\n"
-    "  WHY: one sentence stating what is wrong in relation to that SOURCE "
-    "(meaning changed, negation dropped, placeholder broken, register clash).\n"
-    "  FIX: the correction a repairer can apply without guessing —\n"
-    "    - when the fix is unambiguous, give the exact corrected wording or the "
-    "exact term/name/number that must appear instead, e.g. FIX: replace "
-    "\"kucing merah\" with \"kucing hitam\";\n"
-    "    - when a placeholder is broken, name the exact token that must be "
-    "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
-    "    - when several valid phrasings exist (pure style/register), describe "
-    "the direction, e.g. FIX: use casual register matching the surrounding "
-    "lines, keep the meaning unchanged.\n"
-    "The FIX part is what a repair model executes verbatim: make it concrete "
-    "enough that following it fixes the line. Never write only a judgement "
-    "(\"awkward\", \"unnatural\") with no instruction.\n"
-    "If you cannot fill in WHAT and WHY from this line alone, you have no "
-    "finding — do not report the line."
-)
+def _comment_rules(comment_style: str = "auto") -> str:
+    """
+    The WHAT/WHY/FIX contract, with the FIX clause shaped by the setting.
+
+    `auto`     — the model picks per finding: exact words when unambiguous,
+                 direction-only for style (the shipped behaviour).
+    `explicit` — the exact replacement is REQUIRED whenever the fix names
+                 specific words; the repair must be a precise instruction.
+    `critical` — dictating words is FORBIDDEN; only the critique and the
+                 direction may be stated, and the repair model rewrites freely.
+    """
+    head = (
+        "For every reported line, write the comment as a repair instruction with "
+        "THREE parts, in this exact shape:\n"
+        "  WHAT: SOURCE says \"...\" but TRANSLATION says \"...\" — quote the exact "
+        "word or phrase at fault from the TRANSLATION, and the part of THAT LINE'S "
+        "OWN SOURCE it fails to render.\n"
+        "  WHY: one sentence stating what is wrong in relation to that SOURCE "
+        "(meaning changed, negation dropped, placeholder broken, register clash).\n"
+    )
+    tail = (
+        "The FIX part is what a repair model executes verbatim: make it concrete "
+        "enough that following it fixes the line. Never write only a judgement "
+        "(\"awkward\", \"unnatural\") with no instruction.\n"
+        "If you cannot fill in WHAT and WHY from this line alone, you have no "
+        "finding — do not report the line."
+    )
+    if comment_style == "critical":
+        fix_clause = (
+            "  FIX: state the critique and the direction of the correction ONLY. "
+            "Do NOT dictate exact replacement words or rewrite the line yourself — "
+            "never write \"replace X with Y\". Describe what is wrong and what the "
+            "corrected line must achieve (meaning, register, tone, the placeholder "
+            "that must be present), and leave the wording to the repairer.\n"
+        )
+    elif comment_style == "explicit":
+        fix_clause = (
+            "  FIX: the exact correction a repairer applies without guessing —\n"
+            "    - whenever specific words are at fault, you MUST give the exact "
+            "replacement wording or the exact term/name/number that must appear "
+            "instead, e.g. FIX: replace \"kucing merah\" with \"kucing hitam\". "
+            "A finding about specific words without the specific fix is an "
+            "incomplete comment;\n"
+            "    - when a placeholder is broken, name the exact token that must be "
+            "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
+            "    - only for pure style/register with no specific word at fault, "
+            "describe the direction, e.g. FIX: use casual register matching the "
+            "surrounding lines, keep the meaning unchanged.\n"
+        )
+    else:      # auto
+        fix_clause = (
+            "  FIX: the correction a repairer can apply without guessing —\n"
+            "    - when the fix is unambiguous, give the exact corrected wording or the "
+            "exact term/name/number that must appear instead, e.g. FIX: replace "
+            "\"kucing merah\" with \"kucing hitam\";\n"
+            "    - when a placeholder is broken, name the exact token that must be "
+            "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
+            "    - when several valid phrasings exist (pure style/register), describe "
+            "the direction, e.g. FIX: use casual register matching the surrounding "
+            "lines, keep the meaning unchanged.\n"
+        )
+    return head + fix_clause + tail
 
 # Severity is graded on impact to a reader, not on distance from a hypothetical
 # perfect translation. Left to its own devices a model grades the latter and
@@ -451,6 +489,7 @@ def build_judge_prompt(
     custom_placeholders: str = "",
     grading_mode: str = "severity",
     chain: bool = False,
+    comment_style: str = "auto",
 ) -> str:
     """
     Review one section. The reply is JSON listing only the problem rows.
@@ -470,6 +509,10 @@ def build_judge_prompt(
     consecutive lines of the file, neighbours may be used as context, and the
     scene-break guard replaces the blanket ban. Off (the default) keeps the
     isolation that protects against cross-line false positives.
+
+    `comment_style` shapes the FIX clause of every comment (Settings):
+    `auto` (default) lets the model choose per finding, `explicit` demands
+    exact replacement words, `critical` forbids dictating words entirely.
     """
     has_context = bool(context_map) and any(
         (context_map.get(row) or "").strip() for row, _s, _t in rows
@@ -516,13 +559,16 @@ def build_judge_prompt(
         f"{_style_guidance(style_prompt, chosen)}"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
-        f"\n{_COMMENT_RULES}\n"
+        f"\n{_comment_rules(comment_style)}\n"
         f"\n{_naturalness_rule(tgt_lang)}\n"
         + (f"\n{_SEVERITY_RULES}\n" if graded else "")
         + f"\nRules:\n"
         f"- Report a line ONLY if it is wrong on one of the criteria above.\n"
         f"{lines_rule}"
         f"- Say nothing about lines that are acceptable — omit them entirely.\n"
+        f"- If your analysis concludes the line is acceptable, NEVER include it "
+        f"in the lines array with a comment saying it is fine. A verdict of "
+        f"\"acceptable\" means OMIT, not report.\n"
         f"- Do not penalise a valid alternative wording that means the same thing.\n"
         f"- Do not penalise a name or term kept in the source's own spelling.\n"
         f"- Do not rewrite the line here; describe what is wrong, briefly.\n"
@@ -573,6 +619,7 @@ def build_judge_rechain_prompt(
     style_prompt: str = "",
     custom_placeholders: str = "",
     grading_mode: str = "severity",
+    comment_style: str = "auto",
 ) -> str:
     """
     Re-check flagged rows with their physical neighbours as context.
@@ -594,7 +641,7 @@ def build_judge_rechain_prompt(
         return build_judge_prompt(
             rows=[], criteria=criteria, src_lang=src_lang, tgt_lang=tgt_lang,
             style_prompt=style_prompt, custom_placeholders=custom_placeholders,
-            grading_mode=grading_mode, chain=True,
+            grading_mode=grading_mode, chain=True, comment_style=comment_style,
         )
 
     graded = grading_mode == "severity"
@@ -645,7 +692,7 @@ def build_judge_rechain_prompt(
         f"{_style_guidance(style_prompt, _chosen_criteria(criteria, False))}"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
-        f"\n{_COMMENT_RULES}\n"
+        f"\n{_comment_rules(comment_style)}\n"
         f"\n{_naturalness_rule(tgt_lang)}\n"
         + (f"\n{_SEVERITY_RULES}\n" if graded else "")
         + f"\nRules:\n"
@@ -657,6 +704,10 @@ def build_judge_rechain_prompt(
         f"- A cross-line finding must quote both halves: the reviewed line and "
         f"the neighbour it contradicts or fails to follow.\n"
         f"- Do NOT force connections across a clear scene break.\n"
+        f"- Say nothing about lines that are acceptable — omit them entirely.\n"
+        f"- If your analysis concludes the line is acceptable, NEVER include it "
+        f"in the lines array with a comment saying it is fine. A verdict of "
+        f"\"acceptable\" means OMIT, not report.\n"
         f"- Say nothing about lines that are acceptable — omit them entirely.\n"
         f"- Do not penalise a valid alternative wording that means the same thing.\n"
         f"- Do not rewrite the line here; describe what is wrong, briefly.\n"

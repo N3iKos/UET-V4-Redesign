@@ -68,6 +68,19 @@ def _translate_chain_hint(prefs: dict) -> str:
     return "on — one batch's lines keep terminology and tone together"
 
 
+COMMENT_STYLE_HINTS = {
+    "auto": "AI picks per finding: exact words when clear, critique for style",
+    "explicit": "always suggest the exact replacement words — most precise fixes",
+    "critical": "critique only, never dictate words — the fix model rewrites freely",
+}
+
+
+def _comment_style_hint(prefs: dict) -> str:
+    """One line describing the comment-style setting's current mode."""
+    style = prefs.get("judge_comment_style", "auto")
+    return f"{style} — {COMMENT_STYLE_HINTS.get(style, '')}"
+
+
 class SettingsScreen(MenuScreen):
     breadcrumb = "Settings"
     title_text = "Settings"
@@ -81,6 +94,8 @@ class SettingsScreen(MenuScreen):
                    hint=f"{mode} — {MODE_HINTS.get(mode, '')}"),
             Option("Judge grading mode", "grading",
                     hint=f"{grading} — {GRADING_HINTS.get(grading, '')}"),
+            Option("Judge comment style", "comment_style",
+                    hint=_comment_style_hint(prefs)),
             Option("Judge dialogue-chain context", "judge_chain",
                     hint=_chain_hint(prefs)),
             Option("Max rows per request (Judge)", "rows",
@@ -128,6 +143,8 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(ProcessingModeModal(), self._mode_done)
         elif option.value == "grading":
             self.app.push_screen(GradingModeModal(), self._grading_done)
+        elif option.value == "comment_style":
+            self.app.push_screen(CommentStyleModal(), self._comment_style_done)
         elif option.value == "judge_chain":
             self.app.push_screen(JudgeChainModal(), self._judge_chain_done)
         elif option.value == "translate_chain":
@@ -174,6 +191,22 @@ class SettingsScreen(MenuScreen):
             else "New evaluations flag problems without ranking them."
         )
         self.notify_status(note, OK)
+
+    def _comment_style_done(self, style: str | None) -> None:
+        if not style:
+            return
+        stored = app_prefs.set_judge_comment_style(style)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        notes = {
+            "auto": "The judge picks per finding: exact words when the fix is "
+                    "clear, critique only for style.",
+            "explicit": "Judge comments always name the exact replacement "
+                        "words — repairs are precise, but watch for "
+                        "suggestion ping-pong on style rows.",
+            "critical": "Judge comments critique only and never dictate "
+                        "words — the fix model rewrites freely.",
+        }
+        self.notify_status(notes.get(stored, stored), OK)
 
     def _rows_done(self, value: int | None) -> None:
         if not value:
@@ -408,6 +441,68 @@ class GradingModeModal(ModalScreen[str]):
     def on_mount(self) -> None:
         current = app_prefs.judge_grading_mode()
         for index, name in enumerate(app_prefs.GRADING_MODES):
+            if name == current:
+                self.picker.index = index
+                break
+        self.picker.focus()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self.dismiss(event.option.value)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class CommentStyleModal(ModalScreen[str]):
+    """
+    How the FIX part of a Judge comment may be written.
+
+    Three modes, for comparing repair strategies per project:
+
+      **auto** (default) — the model picks per finding: an exact word
+      replacement when the fix is unambiguous, a direction-only critique for
+      matters of style.
+      **explicit** — the exact replacement is always demanded when specific
+      words are at fault. Most precise repairs; most prone to suggestion
+      ping-pong when the judge's taste differs from the fix model's.
+      **critical** — dictating words is forbidden: critique only, and the fix
+      model rewrites freely. No forced word can be wrong, but no repair is
+      guaranteed either.
+
+    Applies to the next evaluation. A report already on screen keeps the
+    comments it was produced with.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        current = app_prefs.judge_comment_style()
+        with Vertical(classes="modal"):
+            yield Label("Judge comment style", classes="title")
+            yield Label(
+                "Applies to the next evaluation. Change it between runs to "
+                "compare which repair strategy suits a project best.",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option("Auto" + ("   (current)" if current == "auto" else ""),
+                       "auto",
+                       hint=COMMENT_STYLE_HINTS["auto"]),
+                Option("Explicit — suggest exact words"
+                       + ("   (current)" if current == "explicit" else ""),
+                       "explicit",
+                       hint=COMMENT_STYLE_HINTS["explicit"]),
+                Option("Critical — critique only"
+                       + ("   (current)" if current == "critical" else ""),
+                       "critical",
+                       hint=COMMENT_STYLE_HINTS["critical"]),
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        current = app_prefs.judge_comment_style()
+        for index, name in enumerate(("auto", "explicit", "critical")):
             if name == current:
                 self.picker.index = index
                 break

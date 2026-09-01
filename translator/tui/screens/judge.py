@@ -570,10 +570,17 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
 
 
 def _rejudge_rows_default() -> int:
-    """The rows/request a re-judge form opens with."""
-    from ...data.app_prefs import max_rows_per_request
+    """
+    The rows/request a re-judge form opens with: 20, not the Judge ceiling.
 
-    return max_rows_per_request()
+    A re-judge re-asks rows the file already reviewed once, with neighbours
+    attached in chain mode — a smaller request keeps the second verdict
+    comparable to the first evaluation's sections and leaves room for the
+    injected context, while 100 (the Judge batching ceiling) made the form's
+    opening number a trap for exactly the runs that most need the smaller
+    size.
+    """
+    return 20
 
 
 class RowFixModal(ModalScreen["tuple | None"]):
@@ -2264,6 +2271,21 @@ class JudgeRunScreen(BaseScreen):
         # "which of my repairs did the judge look at again, and how did they
         # come out" is a question the severity chips cannot answer.
         self._rejudged_rows: set[int] = set()
+        # Rows that PASSED a re-judge (layer 2 — verdict persistence): the
+        # judge's verdicts fluctuate run to run on identical text (~9% flip
+        # rate measured), so a row that already survived one re-judge is only
+        # re-flaggable by a CRITICAL finding; a minor/style re-flag is treated
+        # as sampling noise and ignored. Cleared only when the row is written
+        # again (its text changed, so the old verdict no longer describes it).
+        self._verdict_stable: set[int] = set()
+        # Fix cycle counter per row (layer 3 — convergence guard): a row that
+        # has been fixed this many times and is STILL flagged leaves the
+        # automatic loop and is marked for human review instead, so the
+        # fix→re-judge cycle provably terminates.
+        self._fix_cycles: dict[int, int] = {}
+        # Rows whose fix budget is exhausted — flagged "needs manual review"
+        # and excluded from Fix All / G by default.
+        self._settled_rows: set[int] = set()
         # Requests finished and requests planned, for the second progress line.
         # A row count alone cannot show a run sitting on one slow request.
         self._sections_done = 0
@@ -3377,6 +3399,11 @@ class JudgeRunScreen(BaseScreen):
             # Only after something has been applied, and last, because it is a
             # record of what happened rather than a kind of problem.
             chips.append(("fixed", "fixed", len(self._before)))
+        if self._settled_rows:
+            # The convergence guard's output: rows three fix cycles deep and
+            # still flagged. They leave the automatic loop; this chip is where
+            # a human finds them.
+            chips.append(("settled", "settled", len(self._settled_rows)))
         if self._rejudged_rows:
             # The second verdicts: rows the judge looked at again after a fix,
             # with the outcome carried by the row's colour (severity = still
@@ -3392,16 +3419,25 @@ class JudgeRunScreen(BaseScreen):
         (UET_UX §6): `_fixed_issue` remembers the flag `report.drop` removed, so
         a critical row that has been fixed still appears under `critical` — now
         green — instead of vanishing. The `fixed` chip lists exactly those.
+
+        `problems` counts ONLY the rows still flagged now. It used to include
+        every row ever fixed (flagged ∪ _before), which made the number
+        mathematically incapable of going down no matter how much was repaired
+        — two contradictory numbers on one screen, and the one a user reads as
+        "how much is left" lied. The `fixed` chip is the tally of everything
+        already repaired; `problems` is what remains.
         """
         report = self._report
         if report is None or key == "all":
             return None
         if key == "problems":
-            # Still-flagged rows, plus repaired ones so the list does not shrink
-            # out from under someone as they fix.
-            return sorted(set(report.problem_rows) | set(self._before))
+            return sorted(set(report.problem_rows))
         if key == "fixed":
             return sorted(self._before)
+        if key == "settled":
+            # Rows whose three fix cycles are spent and are still flagged —
+            # the automatic loop is done with them; a human decides.
+            return sorted(self._settled_rows)
         if key == "rejudged":
             # Every row the judge has looked at twice — passed or still wrong,
             # the colour tells them apart. Kept separately from `fixed` because
@@ -3605,6 +3641,13 @@ class JudgeRunScreen(BaseScreen):
         self._issue_active = False
         try:
             self._notice.dismiss()
+        except Exception:
+            pass
+        # Same for the rail's error box: without this, a fatal error from an
+        # earlier operation stayed on screen through everything that followed,
+        # reading as live output of whatever is running now.
+        try:
+            self._error.clear()
         except Exception:
             pass
 
@@ -4192,7 +4235,18 @@ class JudgeRunScreen(BaseScreen):
         self._begin_op("Judge", self._model_slot)
         self.refresh_keys()
         if staged.errors:
-            self._error.show("\n\n".join(staged.errors[-3:]), "provider response")
+            # Per-request provider failures already reach the Events rail and
+            # the notice card; a second panel repeating the same raw strings
+            # was the duplication the rail lost space to.
+            self._log(
+                f"{len(staged.errors)} fix request(s) failed — see Events for "
+                f"the provider text", WARN,
+            )
+            self._notice.notify_issue(
+                "Some fix requests failed",
+                f"{len(staged.errors)} request(s) — see Events for details",
+                kind="warn",
+            )
         if not staged.texts:
             # `unchanged` is a result, not a failure: the model declined to guess
             # rather than returning something wrong, and saying so is the whole
@@ -4254,6 +4308,14 @@ class JudgeRunScreen(BaseScreen):
                 self._fixed_issue.setdefault(row, issue)
             report.replace_translation(row, text)
             report.drop(row)
+            # The text changed, so any verdict this row earned — including a
+            # pass the noise-suppressor was holding onto — no longer describes
+            # what is in the file: it must be re-earned on the next re-judge.
+            # A settled row that the human chose to rewrite by hand re-enters
+            # the loop too: new text, new chance.
+            self._verdict_stable.discard(row)
+            self._settled_rows.discard(row)
+            self._fix_cycles.pop(row, None)
         # Stay on the current filter: a fixed row keeps its place there, now
         # green, so there is nothing to switch away to.
         if changed:
@@ -4443,13 +4505,27 @@ class JudgeRunScreen(BaseScreen):
 
         It reads the translations from the file, so it covers applied fixes only.
         A staged fix has not been written yet and is not what the file says.
+
+        Settled rows (three fix cycles spent and still flagged) are excluded:
+        their verdict is not going to change on a fourth roll of the dice, and
+        re-rolling them is exactly the loop the cycle budget exists to end.
+        They stay visible under their severity filter, flagged for manual
+        review.
         """
         report = self._report
         if report is None or self._busy_batch or self._busy_row:
             return
-        rows = sorted(self._before)
+        rows = [
+            row for row in sorted(self._before)
+            if row not in self._settled_rows
+        ]
         if not rows:
+            settled = len(self._settled_rows)
             self.notify_status(
+                "Nothing left to re-judge automatically."
+                + (f" {settled} row(s) are settled after 3 fix cycles — "
+                   f"open them to review by hand." if settled else "")
+                if self._settled_rows else
                 "Nothing has been written yet — G re-checks the rows an applied "
                 "fix changed. A staged fix is not in the file, so there is "
                 "nothing to read back.",
@@ -4575,6 +4651,7 @@ class JudgeRunScreen(BaseScreen):
 
         still: list[int] = []
         cleared: list[int] = []
+        held_stable: list[int] = []      # layer 2: noise-suppressed re-flags
         for row in rows:
             if row in unevaluated:
                 continue
@@ -4586,17 +4663,40 @@ class JudgeRunScreen(BaseScreen):
             issue = fresh.issues.get(row)
             if issue is None:
                 cleared.append(row)
+                # Layer 2: a pass is remembered. Later re-judges may only
+                # overturn it with a critical finding; minor/style flips are
+                # sampling noise, and honouring them is what made the problem
+                # count oscillate instead of converge.
+                self._verdict_stable.add(row)
+                continue
+            if row in self._verdict_stable and \
+                    getattr(issue, "severity", "") != "critical":
+                # Layer 2 suppression: this row already passed a re-judge and
+                # the new finding is not critical — keep the pass, drop the
+                # flag. The verdict stays stable in the report and the count
+                # stays converged.
+                held_stable.append(row)
                 continue
             report.restore(issue)
             still.append(row)
 
+        # Layer 3: count fix cycles for rows that came back flagged. A row at
+        # the budget is settled: it leaves the automatic loop (Fix All / G
+        # skip it) and is marked for human review, so the cycle ends even if
+        # the model keeps disagreeing with itself.
+        newly_settled: list[int] = []
+        for row in still:
+            self._fix_cycles[row] = self._fix_cycles.get(row, 0) + 1
+            if self._fix_cycles[row] >= 3 and row not in self._settled_rows:
+                self._settled_rows.add(row)
+                newly_settled.append(row)
+
         if fresh.failed_sections:
-            self._error.show(
-                "\n\n".join(
-                    f"request {section.index}: {section.error}"
-                    for section in fresh.failed_sections
-                ),
-                "provider response",
+            # Per-request provider failures already reach the Events rail and
+            # the notice card; the ErrorBox below is for terminal failures only.
+            self._log(
+                f"{len(fresh.failed_sections)} re-judge request(s) failed — "
+                f"see Events for the provider text", WARN,
             )
 
         self._filter = "rejudged" if self._rejudged_rows else "fixed"
@@ -4606,8 +4706,17 @@ class JudgeRunScreen(BaseScreen):
         self._paint_rail()
 
         parts = [f"{len(cleared)} fix(es) hold up"]
+        if held_stable:
+            # Layer 2 in one number: flips the run suppressed because the row
+            # had already passed and the new finding was not critical.
+            parts.append(f"{len(held_stable)} noise suppressed")
         if still:
             parts.append(f"{len(still)} still wrong")
+        if newly_settled:
+            parts.append(
+                f"{len(newly_settled)} settled after 3 cycles — needs manual "
+                f"review"
+            )
         skipped = len(unevaluated & set(rows))
         if skipped:
             parts.append(f"{skipped} unjudged (request failed)")
@@ -4659,6 +4768,11 @@ class JudgeRunScreen(BaseScreen):
             self._fixed_issue.setdefault(row, issue)
         report.replace_translation(row, text)
         report.drop(row)
+        # New text: any prior verdict is void, and a settled row re-enters
+        # the loop — a human rewrite deserves a fresh check.
+        self._verdict_stable.discard(row)
+        self._settled_rows.discard(row)
+        self._fix_cycles.pop(row, None)
         self._cursor_row = row
         self._fill_grid()
         # The row stays put in its filter, now green. Keep the cursor on it so

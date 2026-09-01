@@ -154,6 +154,10 @@ class ConnectionPool:
         self._wave_size = max(0, wave_size)
         self._wave_index = 0
         self._index = 0
+        # Set by whoever runs requests over this pool (RetryExecutor): a
+        # force-cancel must wake a worker parked in acquire() immediately
+        # rather than after the cooldown it is waiting out.
+        self.stop_event: threading.Event | None = None
 
         candidates = provider.connections
         if connection_ids:
@@ -250,6 +254,12 @@ class ConnectionPool:
         Round-robin counts the rows against the current wave and rotates once
         the wave is full. Fallback keeps the current slot until
         report_* marks it unusable.
+
+        `stop_event` (an attribute set by the executor) is checked between
+        waits: a force-cancel must reach a worker parked in this loop
+        immediately, not after the cooldown it is waiting out. The wait is an
+        interruptible event-wait when the flag is wired, so the check above
+        runs the moment the stop fires.
         """
         deadline = time.time() + timeout
         while True:
@@ -271,12 +281,22 @@ class ConnectionPool:
                     raise AllConnectionsUnavailable(self._report_total_failure())
                 wait = self._soonest_cooldown_wait()
 
+            if self.stop_event is not None and self.stop_event.is_set():
+                raise AllConnectionsUnavailable(
+                    "Cancelled — every connection was still waiting out a "
+                    "cooldown when the run stopped."
+                )
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise AllConnectionsUnavailable(
                     "No connection became available before the timeout."
                 )
-            time.sleep(min(wait, remaining, 2.0))
+            if self.stop_event is not None:
+                # An interruptible wait: wakes the moment the stop fires, so
+                # the check above runs immediately instead of after the tick.
+                self.stop_event.wait(timeout=min(wait, remaining, 2.0))
+            else:
+                time.sleep(min(wait, remaining, 2.0))
 
     def _report_total_failure(self) -> str:
         """

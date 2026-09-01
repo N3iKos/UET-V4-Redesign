@@ -540,6 +540,7 @@ class JudgeRunner:
                     style_prompt=self._target.style_prompt,
                     custom_placeholders=self._target.custom_placeholders,
                     grading_mode=self._grading_mode,
+                    comment_style=self._comment_style(),
                 )
             return build_judge_prompt(
                 rows=rows,
@@ -551,6 +552,7 @@ class JudgeRunner:
                 custom_placeholders=self._target.custom_placeholders,
                 grading_mode=self._grading_mode,
                 chain=self._chain_enabled(),
+                comment_style=self._comment_style(),
             )
 
         def apply_result(index: int, task: BatchTask, result: JudgeResult) -> None:
@@ -1444,6 +1446,10 @@ class JudgeRunner:
     def _chain_window(self) -> int:
         return _saved_chain_window()
 
+    def _comment_style(self) -> str:
+        """The comment-style setting: auto / explicit / critical."""
+        return _saved_comment_style()
+
     def _reasoning(self):
         """
         The reasoning spec for a direct request.
@@ -1594,6 +1600,16 @@ def _saved_chain_window() -> int:
         return judge_chain_window()
     except Exception:
         return 1
+
+
+def _saved_comment_style() -> str:
+    """The comment-style setting (auto / explicit / critical)."""
+    try:
+        from ..data.app_prefs import judge_comment_style
+
+        return judge_comment_style()
+    except Exception:
+        return "auto"
 
 
 def _clean_grading_mode(mode: str | None) -> str:

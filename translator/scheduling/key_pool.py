@@ -85,6 +85,10 @@ class KeyPool:
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._on_event = on_event
+        # Set by the executor (via the connection pool): a force-cancel wakes
+        # a worker parked in acquire() instead of letting it wait out a key
+        # cooldown the run no longer cares about.
+        self.stop_event: threading.Event | None = None
         entries = [k for k in (keys or []) if k is not None]
         if not entries:
             entries = [""]      # keyless/local connection
@@ -99,6 +103,10 @@ class KeyPool:
         Block until a key is usable and return it.
         Raises AllKeysExhausted if every key hit a daily limit,
         TimeoutError if nothing frees up within `timeout`.
+
+        When `stop_event` is set by the executor, a stop during the wait raises
+        TimeoutError immediately with a "cancelled" message — the retry loop's
+        top-of-loop stop check then exits without another attempt.
         """
         deadline = time.time() + timeout
         while True:
@@ -115,10 +123,19 @@ class KeyPool:
                     return state
                 wait = self._soonest_cooldown_wait()
 
+            if self.stop_event is not None and self.stop_event.is_set():
+                raise TimeoutError(
+                    "Cancelled — keys were still cooling down when the run stopped."
+                )
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise TimeoutError("No key on this connection became available in time.")
-            self._event.wait(timeout=min(wait, remaining, 2.0))
+            if self.stop_event is not None:
+                waited = self.stop_event.wait(timeout=min(wait, remaining, 2.0))
+                if waited:
+                    continue          # loop back to the stop check above
+            else:
+                self._event.wait(timeout=min(wait, remaining, 2.0))
 
     def try_acquire(self) -> KeyState | None:
         """Non-blocking variant — None if nothing is usable right now."""

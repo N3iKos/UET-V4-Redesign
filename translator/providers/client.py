@@ -559,6 +559,15 @@ class ProviderClient:
 
         started = time.time()
         deadline_hit = threading.Event()
+        # A one-shot abort fired while this worker was parked elsewhere must
+        # not be answered by POSTing a brand-new request nothing will sever.
+        if self._aborted():
+            raise ProviderError(
+                "Request aborted (force cancel)",
+                status_code=0,
+                retry_delay=0,
+                kind=ProviderError.KIND_UNKNOWN,
+            )
         try:
             resp = self._abortable_post(body, stream=True)
             timer = threading.Timer(
@@ -618,7 +627,19 @@ class ProviderClient:
                 retry_delay=config.RETRY_DELAY_ERR,
             )
         except requests.exceptions.RequestException as exc:
-            if deadline_hit.is_set() and not self._aborted():
+            if self._aborted():
+                # A severed read surfaces as ChunkedEncodingError or another
+                # RequestException subclass rather than ConnectionError,
+                # depending on where the abort landed — without this branch
+                # the cancellation was misclassified as an ordinary error,
+                # parking the connection for 60s and logging a spurious line.
+                raise ProviderError(
+                    "Request aborted (force cancel)",
+                    status_code=0,
+                    retry_delay=0,
+                    kind=ProviderError.KIND_UNKNOWN,
+                )
+            if deadline_hit.is_set():
                 # The deadline severs mid-read as a chunked-encoding/connection
                 # error rather than a Timeout, depending on where the read was.
                 raise ProviderError(
