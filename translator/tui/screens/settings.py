@@ -20,7 +20,7 @@ from textual.widgets import Input, Label, Static
 from ... import config
 from ...data import app_prefs
 from ..app import BaseScreen, MenuScreen
-from ..theme import ERROR, MUTED, OK, WARN
+from ..theme import ACCENT, ERROR, MUTED, OK, WARN
 from ..widgets.common import KeyHints, LabeledInput, Option, Picker
 
 # What each mode means, in one line, because picking one is a rate-limit
@@ -89,37 +89,49 @@ class SettingsScreen(MenuScreen):
         prefs = app_prefs.load_prefs()
         mode = prefs["processing_mode_default"]
         grading = prefs["judge_grading_mode"]
+
         return [
-            Option("Default processing mode", "mode",
+            # ── 1. Translation ────────────────────────────────────────────────
+            Option("TRANSLATION", "_grp_translate", enabled=False, style=ACCENT),
+            Option("  Default processing mode", "mode",
                    hint=f"{mode} — {MODE_HINTS.get(mode, '')}"),
-            Option("Judge grading mode", "grading",
-                    hint=f"{grading} — {GRADING_HINTS.get(grading, '')}"),
-            Option("Judge comment style", "comment_style",
-                    hint=_comment_style_hint(prefs)),
-            Option("Judge dialogue-chain context", "judge_chain",
-                    hint=_chain_hint(prefs)),
-            Option("Max rows per request (Judge)", "rows",
-                    hint=f"{prefs['max_rows_per_request']} rows — Judge batching limit"),
-            Option("Preferred rows/request (Processing)", "preferred_rows",
-                   hint=f"{prefs['preferred_rows_per_request']} rows — what the shared "
-                        f"Processing form aims for"),
-            Option("Maximum rows/request (Processing)", "max_rows_cap",
-                   hint=f"{prefs['max_rows_per_request_cap']} rows — ceiling the form "
-                        f"never auto-suggests above"),
-            Option("Max tokens per request (Safety)", "tokens",
+            Option("  Translate batch continuity", "translate_chain",
+                   hint=_translate_chain_hint(prefs)),
+            Option("  Preferred rows/request", "preferred_rows",
+                   hint=f"{prefs['preferred_rows_per_request']} rows — what Processing aims for"),
+            Option("  Maximum rows/request", "max_rows_cap",
+                   hint=f"{prefs['max_rows_per_request_cap']} rows — ceiling never auto-suggested above"),
+            Option("", "_gap1", enabled=False),
+
+            # ── 2. Judge & Repair ─────────────────────────────────────────────
+            Option("JUDGE & REPAIR", "_grp_judge", enabled=False, style=ACCENT),
+            Option("  Judge grading mode", "grading",
+                   hint=f"{grading} — {GRADING_HINTS.get(grading, '')}"),
+            Option("  Judge comment style", "comment_style",
+                   hint=_comment_style_hint(prefs)),
+            Option("  Judge dialogue-chain context", "judge_chain",
+                   hint=_chain_hint(prefs)),
+            Option("  Max rows per request", "rows",
+                   hint=f"{prefs['max_rows_per_request']} rows — Judge batching limit"),
+            Option("  Default rows per Fix All", "fix_rows",
+                   hint=f"{prefs['fix_batch_rows']} rows — what Fix All opens with"),
+            Option("", "_gap2", enabled=False),
+
+            # ── 3. Network & System ───────────────────────────────────────────
+            Option("NETWORK & SYSTEM", "_grp_system", enabled=False, style=ACCENT),
+            Option("  Request timeout before retry", "request_timeout",
+                   hint=f"{prefs['request_timeout']}s — cancelled and retried after this"),
+            Option("  Max tokens per request", "tokens",
                    hint=f"{prefs['max_tokens_per_request']:,} — Context Exceeded safety net"),
-            Option("Default rows per Fix All request", "fix_rows",
-                    hint=f"{prefs['fix_batch_rows']} rows — what the Fix All wizard opens with"),
-            Option("Request timeout before retry", "request_timeout",
-                    hint=f"{prefs['request_timeout']}s — a request that runs longer is "
-                         f"cancelled and retried"),
-            Option("Translate batch continuity", "translate_chain",
-                    hint=_translate_chain_hint(prefs)),
-            Option("Locked-output fallback range", "fallback_range",
-                    hint=_fallback_hint(prefs["fallback_save_range"])),
-            Option("Change vault password", "password"),
-            Option("Lock vault and quit", "lock"),
-            Option("About", "about"),
+            Option("  Locked-output fallback range", "fallback_range",
+                   hint=_fallback_hint(prefs["fallback_save_range"])),
+            Option("", "_gap3", enabled=False),
+
+            # ── 4. Security & App ─────────────────────────────────────────────
+            Option("SECURITY & APP", "_grp_app", enabled=False, style=ACCENT),
+            Option("  Change vault password", "password"),
+            Option("  Lock vault and quit", "lock"),
+            Option("  About", "about"),
         ]
 
     def compose_extra(self) -> ComposeResult:
