@@ -212,22 +212,35 @@ def worker_line(status, tick: int = 0, connection_width: int = 11) -> Text:
     """
     One worker as a single line:
 
-        3  Main Key    b12  ⠹ think   4.2s
+        3  gemma4:31b  b12  ⠹ think   4.2s
+        2  ollama [P1] b12  ⠹ think   4.2s
 
-    Compact on purpose — with eight workers this has to fit a 36-cell sidebar
-    without wrapping, and `pad_cells` keeps a CJK connection name from shifting
-    the columns.
+    Displays the concise model name rather than the generic connection name,
+    with an accent indicator [P1]/[P2] if operating under priority failover.
     """
     style = phase_style(status)
     icon = phase_icon(status, tick)
-    connection = pad_cells(str(getattr(status, "connection", "") or "—"),
-                           connection_width)
+    
+    # Model display
+    model = getattr(status, "model_name", "") or getattr(status, "connection", "") or "—"
+    failover_rank = getattr(status, "failover_rank", 0) or 0
+    if failover_rank > 0:
+        # Show shortened model with [P1] / [P2] badge
+        badge = f" [P{failover_rank}]"
+        avail = max(3, connection_width - len(badge))
+        model_str = truncate(model, avail) + badge
+    else:
+        model_str = pad_cells(truncate(model, connection_width), connection_width)
+
     batch = getattr(status, "batch_num", 0) or 0
     seconds = running_seconds(status)
 
     line = Text()
     line.append(f"{getattr(status, 'worker_id', 0)} ", style=MUTED)
-    line.append(connection + " ")
+    if failover_rank > 0:
+        line.append(model_str + " ", style=WARN)
+    else:
+        line.append(model_str + " ")
     line.append(f"b{batch:<4}", style=MUTED)
     line.append(f"{icon} ", style=style)
     line.append(pad_cells(phase_text(status), 8), style=style)
@@ -237,21 +250,20 @@ def worker_line(status, tick: int = 0, connection_width: int = 11) -> Text:
 
 def detail_lines(status, width: int = 34) -> list[Text]:
     """
-    The expanded facts for one worker (FR-206): batch, connection, row count.
-
-    A message is included when there is one — a retry reason, or the row tally
-    a finished batch reported. Provider text arrives here verbatim and is
-    truncated rather than parsed.
+    The expanded facts for one worker (FR-206): batch, model, connection, row count.
     """
     batch = getattr(status, "batch_num", 0) or 0
     total = getattr(status, "total_batches", 0) or 0
     rows = getattr(status, "rows", 0) or 0
     connection = str(getattr(status, "connection", "") or "—")
+    model = str(getattr(status, "model_name", "") or "—")
+    failover_rank = getattr(status, "failover_rank", 0) or 0
     wave = getattr(status, "wave_index", 0) or 0
 
     facts = [
         ("batch", f"{batch}/{total}" if total else str(batch)),
         ("rows", str(rows) if rows else "—"),
+        ("model", f"{model} (Failover #{failover_rank})" if failover_rank > 0 else model),
         ("connection", connection),
     ]
     if wave:

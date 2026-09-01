@@ -99,6 +99,8 @@ class WorkerStatus:
     worker_id:    int
     phase:        WorkerPhase = "idle"
     connection:   str = ""
+    model_name:   str = ""
+    failover_rank: int = 0       # 0 = normal, 1, 2, 3... = failover
     batch_num:    int = 0
     total_batches: int = 0
     rows:         int = 0        # rows in the batch being processed
@@ -509,6 +511,8 @@ class Scheduler:
         self._set_status(
             worker_id,
             phase="generating",
+            model_name=self._job.model_id,
+            failover_rank=0,
             batch_num=task.batch_num,
             total_batches=task.total_batches,
             rows=task.size,
