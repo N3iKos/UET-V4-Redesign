@@ -2286,6 +2286,9 @@ class JudgeRunScreen(BaseScreen):
         # Rows whose fix budget is exhausted — flagged "needs manual review"
         # and excluded from Fix All / G by default.
         self._settled_rows: set[int] = set()
+        # Cached (rows, tokens) of the largest section — see _section_shape.
+        # None until measured once; invalidated whenever the file is written.
+        self._section_shape_cache: tuple[int, int] | None = None
         # Requests finished and requests planned, for the second progress line.
         # A row count alone cannot show a run sitting on one slow request.
         self._sections_done = 0
@@ -3031,7 +3034,15 @@ class JudgeRunScreen(BaseScreen):
         *largest* section is the one that has to fit inside the rate limit; pacing
         for the average would under-count exactly the requests most likely to
         trip it.
+
+        Cached per session: the measurement reads and plans the WHOLE file
+        (~0.5-1s), and every operation builds a JobConfig — a single-row
+        re-judge paying that per keystroke was pure hidden latency. The shape
+        only changes when the file is written (a Fix All / hand edit), which
+        invalidates the cache explicitly.
         """
+        if self._section_shape_cache is not None:
+            return self._section_shape_cache
         fallback = (
             config.DEFAULT_BATCH_SIZE,
             config.DEFAULT_BATCH_SIZE * config.DEFAULT_TOK_PER_ROW * 2,
@@ -3050,7 +3061,9 @@ class JudgeRunScreen(BaseScreen):
 
         biggest = max(plan.sections, key=estimator.estimate_total)
         rows = max(len(section) for section in plan.sections)
-        return max(1, rows), max(1, estimator.estimate_total(biggest))
+        shape = (max(1, rows), max(1, estimator.estimate_total(biggest)))
+        self._section_shape_cache = shape
+        return shape
 
     def _choice(self, model_slot: tuple[str, str, str] | None = None):
         """
@@ -4316,6 +4329,9 @@ class JudgeRunScreen(BaseScreen):
             self._verdict_stable.discard(row)
             self._settled_rows.discard(row)
             self._fix_cycles.pop(row, None)
+            # The file changed: the cached section shape no longer describes
+            # it, so the next operation re-measures it.
+            self._section_shape_cache = None
         # Stay on the current filter: a fixed row keeps its place there, now
         # green, so there is nothing to switch away to.
         if changed:
@@ -4773,6 +4789,8 @@ class JudgeRunScreen(BaseScreen):
         self._verdict_stable.discard(row)
         self._settled_rows.discard(row)
         self._fix_cycles.pop(row, None)
+        # The file changed: the cached section shape must be re-measured.
+        self._section_shape_cache = None
         self._cursor_row = row
         self._fill_grid()
         # The row stays put in its filter, now green. Keep the cursor on it so

@@ -156,16 +156,16 @@ class TestDynamicLanguage:
 
     def test_fix_prompt_enforces_explicit_fixes(self):
         """
-        The repair contract: a FIX directive naming specific words is an
-        ORDER, not a suggestion — a repair that returns the flagged wording
-        unchanged is a failed repair. Direction-only directives leave the
-        wording to the fix model.
+        The repair contract: a FIX suggestion naming specific words is the
+        preferred answer — flagged wording may not survive a repair, even
+        though the suggestion is phrased as a recommendation. Direction-only
+        suggestions leave the wording to the fix model.
         """
         prompt = build_fix_prompt(
             ROWS, {2: "WHAT/WHY/FIX note"}, tgt_lang="Italian"
         )
         assert "native speaker of Italian" in prompt
-        assert "you MUST make that exact change" in prompt
+        assert "apply that wording" in prompt
         assert "may NOT survive into your output" in prompt
 
     def test_rechain_prompt_carries_the_target(self):

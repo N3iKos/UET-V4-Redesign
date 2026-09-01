@@ -537,6 +537,13 @@ class EventsPanel(Widget):
         self._title = title
         self._lines: list[str] = []
         self.header_widget: EventsHeader | None = None
+        # The wrapped form of the current lines at the current width. Wrapping
+        # is expensive (rich measures and re-segments styled text) and this
+        # panel is asked to render on every 120ms tick — recomputing the wrap
+        # per rendered line was a measured ~70x repaint regression. Built once
+        # per content/width change, then only read.
+        self._wrapped: list[Text] = []
+        self._wrapped_key: tuple[int, tuple[str, ...]] | None = None
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -566,11 +573,20 @@ class EventsPanel(Widget):
         if self.collapsed:
             return lines
         if not self._lines:
-            lines.append(Text("  —", style=MUTED))
+            return [Text("  —", style=MUTED)]
         width = max(8, self.size.width or 34)
-        for line in self._lines[-40:]:
-            lines.extend(wrap_event_line(line, width))
-        return lines
+        # Cache keyed on (width, lines): a repaint at the same width with the
+        # same content — the overwhelmingly common case on the timer tick —
+        # reuses the previous wrap. Only a real change (a new event, the ×N
+        # counter bump, or a resize) pays for the re-wrap, once.
+        key = (width, tuple(self._lines[-40:]))
+        if key != self._wrapped_key:
+            wrapped: list[Text] = []
+            for line in self._lines[-40:]:
+                wrapped.extend(wrap_event_line(line, width))
+            self._wrapped = wrapped
+            self._wrapped_key = key
+        return self._wrapped
 
     def get_content_height(self, container, viewport, width: int) -> int:
         return max(1, len(self._build()))
@@ -589,6 +605,8 @@ def wrap_event_line(line: str, width: int) -> list[Text]:
     """
     One event, wrapped to the panel width so the full error text is readable
     (and reachable by scrolling) instead of clipped at one line.
+
+    Expensive — callers should cache the result (see EventsPanel._build).
     """
     body = str(line or "")
     try:

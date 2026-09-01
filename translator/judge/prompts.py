@@ -126,9 +126,9 @@ _FIX_SYS = (
     "You are a professional translation editor.\n"
     "Your ONLY job is to correct the flawed TRANSLATION using the stated PROBLEM / CORRECTION NOTE as your primary guide.\n"
     "CRITICAL RULES:\n"
-    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX directive.\n"
-    "2. When the FIX directive names specific words — \"replace X with Y\", \"restore [BR][NL]\", \"the name must be Z\" — you MUST make that exact change. The flagged words may NOT survive into your output. A repair that returns the flagged wording unchanged is a failed repair, no matter how natural it reads.\n"
-    "3. When the FIX directive is a direction only — register, tone, style — choose the wording yourself, in the natural voice of the target language for this line and its context. Never output a line that sounds machine-translated or dictionary-literal.\n"
+    "1. Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX suggestion. The suggestion names the reviewer's recommended wording — treat it as the preferred answer, not as one option among many.\n"
+    "2. When the FIX suggestion names specific words — \"consider using X instead of Y\", \"restore [BR][NL]\", \"the name should be Z\" — apply that wording. The flagged words may NOT survive into your output: a repair that returns the flagged wording unchanged is a failed repair, no matter how natural it reads. If you are certain the suggested wording is unnatural in context, you may adjust it minimally — but the flagged words still must not survive.\n"
+    "3. When the FIX suggestion is a direction only — register, tone, style — choose the wording yourself, in the natural voice of the target language for this line and its context. Never output a line that sounds machine-translated or dictionary-literal.\n"
     "4. Do NOT repeat or keep the wrong words that were flagged in the translation.\n"
     "5. The corrected line must accurately reflect the meaning of SOURCE in the target language.\n"
     "6. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
@@ -180,19 +180,20 @@ def _comment_rules(comment_style: str = "auto") -> str:
         fix_clause = (
             "  FIX: state the critique and the direction of the correction ONLY. "
             "Do NOT dictate exact replacement words or rewrite the line yourself — "
-            "never write \"replace X with Y\". Describe what is wrong and what the "
+            "never name a specific replacement. Describe what is wrong and what the "
             "corrected line must achieve (meaning, register, tone, the placeholder "
             "that must be present), and leave the wording to the repairer.\n"
         )
     elif comment_style == "explicit":
         fix_clause = (
-            "  FIX: the exact correction a repairer applies without guessing —\n"
+            "  FIX: the exact correction a repairer can apply without guessing, "
+            "phrased as a recommendation —\n"
             "    - whenever specific words are at fault, you MUST give the exact "
-            "replacement wording or the exact term/name/number that must appear "
-            "instead, e.g. FIX: replace \"kucing merah\" with \"kucing hitam\". "
-            "A finding about specific words without the specific fix is an "
-            "incomplete comment;\n"
-            "    - when a placeholder is broken, name the exact token that must be "
+            "recommended wording or the exact term/name/number that should appear "
+            "instead, e.g. FIX: consider using \"kucing hitam\" instead of "
+            "\"kucing merah\". A finding about specific words without the specific "
+            "recommendation is an incomplete comment;\n"
+            "    - when a placeholder is broken, name the exact token that should be "
             "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
             "    - only for pure style/register with no specific word at fault, "
             "describe the direction, e.g. FIX: use casual register matching the "
@@ -200,11 +201,12 @@ def _comment_rules(comment_style: str = "auto") -> str:
         )
     else:      # auto
         fix_clause = (
-            "  FIX: the correction a repairer can apply without guessing —\n"
-            "    - when the fix is unambiguous, give the exact corrected wording or the "
-            "exact term/name/number that must appear instead, e.g. FIX: replace "
-            "\"kucing merah\" with \"kucing hitam\";\n"
-            "    - when a placeholder is broken, name the exact token that must be "
+            "  FIX: the correction a repairer can apply without guessing, phrased "
+            "as a recommendation —\n"
+            "    - when the fix is unambiguous, give the exact recommended wording "
+            "or the exact term/name/number that should appear instead, e.g. FIX: "
+            "consider using \"kucing hitam\" instead of \"kucing merah\";\n"
+            "    - when a placeholder is broken, name the exact token that should be "
             "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
             "    - when several valid phrasings exist (pure style/register), describe "
             "the direction, e.g. FIX: use casual register matching the surrounding "
@@ -527,8 +529,8 @@ def build_judge_prompt(
         + ('"severity": "critical", ' if graded else "")
         + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
         '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
-        'misread the story · FIX: replace \\"kucing merah\\" with \\"kucing '
-        'hitam\\""}]}'
+        'misread the story · FIX: consider using \\"kucing hitam\\" instead '
+        'of \\"kucing merah\\""}]}'
     )
 
     system = _JUDGE_SYS_CHAIN if chain else _JUDGE_SYS
@@ -653,8 +655,8 @@ def build_judge_rechain_prompt(
         + ('"severity": "critical", ' if graded else "")
         + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
         '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
-        'misread the story · FIX: replace \\"kucing merah\\" with \\"kucing '
-        'hitam\\""}]}'
+        'misread the story · FIX: consider using \\"kucing hitam\\" instead '
+        'of \\"kucing merah\\""}]}'
     )
 
     # One merged block, in row-number order, so the stream reads as the file

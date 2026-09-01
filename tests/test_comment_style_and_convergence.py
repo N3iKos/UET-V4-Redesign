@@ -43,7 +43,8 @@ class TestCommentStyle:
             ROWS, ["mistranslation"], tgt_lang="Indonesian",
             comment_style="explicit",
         )
-        assert "you MUST give the exact replacement wording" in prompt
+        assert "you MUST give the exact" in prompt
+        assert "consider using" in prompt          # recommendation phrasing
         assert "Do NOT dictate exact replacement words" not in prompt
 
     def test_critical_forbids_word_suggestions(self):
@@ -52,9 +53,9 @@ class TestCommentStyle:
             comment_style="critical",
         )
         assert "Do NOT dictate exact replacement words" in prompt
-        assert "never write \"replace X with Y\"" in prompt
+        assert "never name a specific replacement" in prompt
         # And the exact-words clause is gone.
-        assert "you MUST give the exact replacement wording" not in prompt
+        assert "you MUST give the exact" not in prompt
 
     def test_rechain_prompt_honours_the_style(self):
         prompt = build_judge_rechain_prompt(
@@ -76,7 +77,12 @@ class TestCommentStyle:
 class TestFixObeysExplicitDirectives:
     def test_fix_prompt_orders_exact_changes(self):
         prompt = build_fix_prompt(ROWS, {2: "note"}, tgt_lang="Italian")
-        assert "you MUST make that exact change" in prompt
+        assert "apply that wording" in prompt
+        assert "may NOT survive into your output" in prompt
+        # The suggestion is phrased as a recommendation, but the flagged
+        # words are still not allowed to survive.
+        assert "consider using X instead of Y" in prompt
+        assert "may adjust it minimally" in prompt
         assert "may NOT survive into your output" in prompt
 
     def test_fix_prompt_keeps_freedom_for_directions(self):
