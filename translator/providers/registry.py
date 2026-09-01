@@ -498,6 +498,20 @@ class ProviderRegistry:
         self.save()
         return model
 
+    def get_priority_models(self) -> list[tuple[Provider, Connection, ModelEntry]]:
+        """
+        Return all models configured with a priority rank > 0 across all providers,
+        sorted in ascending order of priority rank (Priority #1, #2, #3...).
+        """
+        ranked: list[tuple[Provider, Connection, ModelEntry]] = []
+        for p in self.providers:
+            for c in p.connections:
+                for m in c.models:
+                    if getattr(m, "priority_rank", 0) > 0:
+                        ranked.append((p, c, m))
+        ranked.sort(key=lambda item: item[2].priority_rank)
+        return ranked
+
     def test_models(
         self,
         provider_id: str,

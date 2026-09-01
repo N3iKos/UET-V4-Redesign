@@ -222,6 +222,8 @@ class Scheduler:
         raw_log: RawLogSink | None = None,
         response_format_builder: ResponseFormatBuilder | None = None,
         on_batch_start: Callable[[BatchTask, int], None] | None = None,
+        registry=None,
+        failover_targets: list | None = None,
     ) -> None:
         self._job = job
         self._pool = connection_pool
@@ -238,6 +240,18 @@ class Scheduler:
         self._raw_log = raw_log
         self._response_format_for = response_format_builder
         self._on_batch_start = on_batch_start
+
+        # Priority failover setup
+        from ..data import app_prefs
+        from .retry import build_failover_targets
+
+        if failover_targets is not None:
+            self._failover_targets = list(failover_targets)
+        elif registry is not None and app_prefs.priority_failover_enabled():
+            self._failover_targets = build_failover_targets(registry, current_model_id=job.model_id)
+        else:
+            self._failover_targets = []
+        self._failover_threshold = app_prefs.failover_retry_threshold() if app_prefs.priority_failover_enabled() else None
 
         self._workers: dict[int, WorkerStatus] = {}
         self._workers_lock = threading.Lock()
@@ -869,6 +883,9 @@ class Scheduler:
                 started_at=time.time(),
             )
 
+        def on_model_switch(model_name: str, rank: int) -> None:
+            self._set_status(worker_id, model_name=model_name, failover_rank=rank)
+
         return RetryExecutor(
             connection_pool=self._pool,
             job=self._job,
@@ -876,6 +893,9 @@ class Scheduler:
             on_event=on_event,
             stop_event=self._stop,
             on_phase=on_phase,
+            failover_targets=self._failover_targets,
+            failover_threshold=self._failover_threshold,
+            on_model_switch=on_model_switch,
         )
 
     def _pace(self, seconds: float) -> None:

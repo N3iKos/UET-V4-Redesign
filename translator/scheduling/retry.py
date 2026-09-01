@@ -46,6 +46,43 @@ EventKind = Literal[
 
 
 @dataclass
+class FailoverTarget:
+    """A configured fallback model in the priority ladder."""
+    rank: int
+    model_id: str
+    model_name: str
+    base_url: str
+    key: str
+    connection_name: str
+    reasoning: ResolvedReasoning | None = None
+
+
+def build_failover_targets(registry, current_model_id: str = "") -> list[FailoverTarget]:
+    """
+    Construct the list of active Priority Failover targets from registry,
+    ordered ascending by rank (1, 2, 3...), excluding the current primary model.
+    """
+    if not registry:
+        return []
+    targets: list[FailoverTarget] = []
+    for provider, conn, model in registry.get_priority_models():
+        if model.id == current_model_id:
+            continue
+        targets.append(
+            FailoverTarget(
+                rank=model.priority_rank,
+                model_id=model.id,
+                model_name=model.label,
+                base_url=provider.base_url,
+                key=conn.api_key or "",
+                connection_name=conn.name or provider.name,
+                reasoning=resolve_for(model, override=None, level=""),
+            )
+        )
+    return targets
+
+
+@dataclass
 class RetryEvent:
     kind:        EventKind
     label:       str = ""
@@ -81,6 +118,9 @@ class RetryExecutor:
         on_event: Callable[[RetryEvent], None] | None = None,
         stop_event: threading.Event | None = None,
         on_phase: Callable[[str, bool], None] | None = None,
+        failover_targets: list[FailoverTarget] | None = None,
+        failover_threshold: int | None = None,
+        on_model_switch: Callable[[str, int], None] | None = None,
     ) -> None:
         self._pool = connection_pool
         self._job = job
@@ -90,6 +130,9 @@ class RetryExecutor:
         # (phase, reasoning_active) — the Activity Panel's only reasoning
         # signal. Content never travels this channel (FR-205 / NFR-104).
         self._on_phase = on_phase
+        self._failover_targets = list(failover_targets or [])
+        self._failover_threshold = failover_threshold
+        self._on_model_switch = on_model_switch
         self._clients: dict[str, ProviderClient] = {}
         self._clients_lock = threading.Lock()
 
@@ -117,10 +160,35 @@ class RetryExecutor:
         # or a retry-heavy batch would rotate the round-robin wave early.
         rows_to_charge = rows
 
+        # Priority failover ladder: when attempts reach the threshold, cascade
+        # to the highest-priority failover target (Rank 1, 2, 3...)
+        failover_index = -1
+        failover_targets = self._failover_targets
+        threshold = self._failover_threshold or job.max_attempts
+
         while not self._stop.is_set():
             attempt += 1
-            if not infinite and attempt > job.max_attempts:
-                break
+
+            # Check if we should cascade to the next priority failover model
+            if not infinite and attempt > threshold:
+                if failover_targets and failover_index + 1 < len(failover_targets):
+                    failover_index += 1
+                    target = failover_targets[failover_index]
+                    attempt = 1
+                    self._emit(
+                        "switched", label, attempt,
+                        message=f"{label} · {model} failed → Failover to #{target.rank} ({target.model_name})",
+                    )
+                    if self._on_model_switch is not None:
+                        self._on_model_switch(target.model_name, target.rank)
+                else:
+                    break
+
+            active_failover = (
+                failover_targets[failover_index]
+                if failover_index >= 0 and failover_index < len(failover_targets)
+                else None
+            )
 
             # A force-cancel must be able to wake a worker parked in the pool's
             # acquire wait (a connection cooling down after an error), not just
@@ -132,20 +200,14 @@ class RetryExecutor:
                 lease = self._pool.acquire(rows=rows_to_charge)
             except AllConnectionsUnavailable as exc:
                 if self._stop.is_set():
-                    # The pool's stop check fired: a cancelled run, not a dead
-                    # provider. Say so and exit quietly — no cascade of
-                    # "exhausted" events for something the user asked for.
                     self._emit("exhausted", label, attempt, message="Cancelled.")
                     break
-                # Every connection is genuinely gone (confirmed quota, or nothing
-                # freed within the acquire timeout). Propagate rather than
-                # swallowing into a per-batch error: the scheduler stops the run
-                # once and says why, instead of every remaining batch re-acquiring
-                # and reproducing the same message (the 224/225/226 cascade).
                 self._emit("exhausted", label, attempt, message=str(exc))
                 raise
             rows_to_charge = 0
-            connection_name = lease.name
+            connection_name = (
+                active_failover.connection_name if active_failover else lease.name
+            )
 
             try:
                 lease.key_pool.stop_event = self._stop
@@ -158,9 +220,6 @@ class RetryExecutor:
                 continue
             except TimeoutError as exc:
                 if self._stop.is_set():
-                    # The key-pool stop check fired mid-wait: a cancelled run,
-                    # not a slow cooldown. Exit quietly rather than parking the
-                    # connection again.
                     last_error = "Cancelled."
                     break
                 last_error = str(exc)
@@ -171,26 +230,20 @@ class RetryExecutor:
                            connection=connection_name, message=last_error)
                 continue
 
-            # The one-shot abort may have fired while this worker was parked in
-            # the acquires above; without this check it would happily POST a
-            # brand-new request nobody will sever again.
             if self._stop.is_set():
                 break
 
-            key = key_state.key
-            # The lease decides where this goes and, for a combo, which model to
-            # ask for: a combo's members live on different providers, so the
-            # endpoint is a property of the slot rather than of the job. An empty
-            # (or absent) `base_url`/`model_id` means "as the job says", which is
-            # what every provider lease sends — read with getattr so any
-            # lease-shaped object still works.
-            base_url = getattr(lease, "base_url", "") or self._base_url
-            model = getattr(lease, "model_id", "") or requested_model
+            if active_failover:
+                key = active_failover.key or key_state.key
+                base_url = active_failover.base_url or self._base_url
+                model = active_failover.model_id
+                reasoning = active_failover.reasoning or self._reasoning_for(lease.connection, model)
+            else:
+                key = key_state.key
+                base_url = getattr(lease, "base_url", "") or self._base_url
+                model = getattr(lease, "model_id", "") or requested_model
+                reasoning = self._reasoning_for(lease.connection, model)
             client = self._client_for(key, base_url)
-            # The lease names the connection, so the ModelEntry (and its
-            # reasoning metadata) is only knowable here — not when the job was
-            # built, and not inside the client.
-            reasoning = self._reasoning_for(lease.connection, model)
             started = time.time()
 
             try:

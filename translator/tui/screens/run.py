@@ -292,6 +292,7 @@ class RunScreen(BaseScreen):
             on_batch_start=lambda task, worker: post(self._on_batch_start, task),
             on_result=lambda task, result: post(self._on_result, task, result),
             stop_event=self._stop,
+            registry=registry,
         )
         self._engine = engine
 

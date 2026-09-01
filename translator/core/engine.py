@@ -77,9 +77,11 @@ class ProcessingEngine:
         on_batch_start: Callable[[BatchTask, int], None] | None = None,
         on_result: Callable[[BatchTask, BatchResult], None] | None = None,
         stop_event: threading.Event | None = None,
+        registry=None,
     ) -> None:
         self._job = job
         self._provider = provider
+        self._registry = registry
         self._on_status = on_status
         self._on_event = on_event
         self._on_notice = on_notice
@@ -629,6 +631,7 @@ class ProcessingEngine:
             raw_log=self._log_raw if self._raw_logger else None,
             response_format_builder=self._response_format_for,
             on_batch_start=self._on_batch_start,
+            registry=self._registry,
         )
 
     def _forward_event(self, event: ScheduleEvent) -> None:

@@ -188,6 +188,7 @@ class JudgeRunner:
         self._target = target
         self._job = job
         self._provider = provider
+        self._registry = registry
         self._pool = connection_pool
         self._client_factory = client_factory
         self._criteria = list(criteria or CRITERIA)
@@ -1208,6 +1209,7 @@ class JudgeRunner:
             solo_prompt_builder=solo_prompt_builder,
             solo_parser=solo_parser,
             raw_log=self._log_raw if self._raw_logger else None,
+            registry=self._registry,
         )
         try:
             stats = scheduler.run(tasks, total_rows=sum(task.size for task in tasks))
