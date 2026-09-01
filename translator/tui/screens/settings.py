@@ -81,6 +81,14 @@ def _comment_style_hint(prefs: dict) -> str:
     return f"{style} — {COMMENT_STYLE_HINTS.get(style, '')}"
 
 
+def _failover_hint(prefs: dict) -> str:
+    """One line describing the priority failover setting's current mode."""
+    if not prefs.get("priority_failover_enabled", True):
+        return "off — failed batches do not switch models"
+    retries = prefs.get("failover_retry_threshold", 3)
+    return f"on — switch to Priority #1, #2... after {retries} failed retries"
+
+
 class SettingsScreen(MenuScreen):
     breadcrumb = "Settings"
     title_text = "Settings"
@@ -119,6 +127,8 @@ class SettingsScreen(MenuScreen):
 
             # ── 3. Network & System ───────────────────────────────────────────
             Option("NETWORK & SYSTEM", "_grp_system", enabled=False, style=ACCENT),
+            Option("  Priority failover", "priority_failover",
+                   hint=_failover_hint(prefs)),
             Option("  Request timeout before retry", "request_timeout",
                    hint=f"{prefs['request_timeout']}s — cancelled and retried after this"),
             Option("  Max tokens per request", "tokens",
@@ -171,6 +181,8 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(MaxTokensModal(), self._tokens_done)
         elif option.value == "fix_rows":
             self.app.push_screen(FixBatchRowsModal(), self._fix_rows_done)
+        elif option.value == "priority_failover":
+            self.app.push_screen(PriorityFailoverModal(), self._failover_done)
         elif option.value == "request_timeout":
             self.app.push_screen(RequestTimeoutModal(), self._request_timeout_done)
         elif option.value == "fallback_range":
@@ -280,6 +292,25 @@ class SettingsScreen(MenuScreen):
                 f"{config.MIN_FIX_BATCH_ROWS}-{config.MAX_FIX_BATCH_ROWS}.)"
             )
         self.notify_status(note, OK if stored == value else WARN)
+
+    def _failover_done(self, result: "tuple[str, int | None] | None") -> None:
+        if not result:
+            return
+        mode, retries = result
+        enabled = app_prefs.set_priority_failover_enabled(mode == "on")
+        if retries is not None and enabled:
+            app_prefs.set_failover_retry_threshold(retries)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        if enabled:
+            r = app_prefs.failover_retry_threshold()
+            self.notify_status(
+                f"Priority failover enabled — batches cascade to Priority #1, #2... "
+                f"after {r} failed retries.", OK,
+            )
+        else:
+            self.notify_status(
+                "Priority failover disabled — workers stick to primary model.", MUTED,
+            )
 
     def _fallback_range_done(self, value: int | None) -> None:
         # 0 is a real answer — it turns the fallback off — so guard on `is None`,
@@ -522,6 +553,68 @@ class CommentStyleModal(ModalScreen[str]):
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
         self.dismiss(event.option.value)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class PriorityFailoverModal(ModalScreen["tuple[str, int | None] | None"]):
+    """
+    Priority Failover settings: On/Off and retry threshold.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        current = "on" if app_prefs.priority_failover_enabled() else "off"
+        with Vertical(classes="modal"):
+            yield Label("Priority failover", classes="title")
+            yield Label(
+                "When a batch fails after reaching the retry threshold, automatically "
+                "cascade that worker to Priority #1 model (then #2, etc.)\n"
+                "Models with Priority Rank > 0 are configured under Providers & Models.",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option("On" + ("   (current)" if current == "on" else ""),
+                       "on",
+                       hint="cascade failed batches to priority fallback models (default)"),
+                Option("Off" + ("   (current)" if current == "off" else ""),
+                       "off",
+                       hint="workers stay pinned to the selected primary model"),
+            ])
+            yield self.picker
+            yield Label("")
+            self._retries = LabeledInput(
+                "Failover after retries (1–5)",
+                value=str(app_prefs.failover_retry_threshold()),
+                default=str(app_prefs.failover_retry_threshold()),
+                hint="How many failed attempts on a model before switching to the next priority model.",
+            )
+            yield self._retries
+            yield KeyHints([("↑↓", "move"), ("tab", "field"),
+                            ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        current = "on" if app_prefs.priority_failover_enabled() else "off"
+        self.picker.index = 0 if current == "on" else 1
+        self.picker.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        mode = self.picker.current.value if self.picker.current else "on"
+        retries = None
+        if mode == "on":
+            try:
+                retries = int(self._retries.value)
+            except ValueError:
+                retries = 3
+        self.dismiss((mode, retries))
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)

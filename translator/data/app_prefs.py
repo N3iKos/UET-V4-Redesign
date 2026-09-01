@@ -57,6 +57,9 @@ DEFAULTS: dict = {
     # Translate: ask the model to keep terminology/tone continuity across the
     # rows of one batch (they are consecutive lines of the file).
     "translate_batch_context": False,
+    # Priority failover: automatically cascade failed batches to models ranked 1, 2, 3...
+    "priority_failover_enabled": True,
+    "failover_retry_threshold": 3,
     # Per-model remembered Judge operation settings (re-judge / fix). Keyed by
     # "<provider_id>\n<connection_id>\n<model_id>" so two models with the same
     # name on different connections stay separate. Values:
@@ -121,6 +124,12 @@ def load_prefs() -> dict:
     prefs["judge_comment_style"] = _clean_comment_style(
         payload.get("judge_comment_style")
     )
+    prefs["priority_failover_enabled"] = bool(
+        payload.get("priority_failover_enabled", True)
+    )
+    prefs["failover_retry_threshold"] = _clamp_failover_retries(
+        payload.get("failover_retry_threshold")
+    )
     return prefs
 
 
@@ -170,6 +179,12 @@ def save_prefs(prefs: dict) -> None:
     )
     current["judge_comment_style"] = _clean_comment_style(
         current.get("judge_comment_style")
+    )
+    current["priority_failover_enabled"] = bool(
+        current.get("priority_failover_enabled", True)
+    )
+    current["failover_retry_threshold"] = _clamp_failover_retries(
+        current.get("failover_retry_threshold")
     )
     try:
         _write(current)
@@ -400,6 +415,46 @@ def _clamp_workers(value) -> int:
 
 
 def _clamp_chain_window(value) -> int:
+    """
+    Neighbour rows per side for the Judge dialogue-chain context, 1–5.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(5, number))
+
+
+def _clamp_failover_retries(value) -> int:
+    """Retries before failover, clamped to 1–5."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, min(5, number))
+
+
+# ── Priority Failover settings ────────────────────────────────────────────────
+
+def priority_failover_enabled() -> bool:
+    """Whether failed batches cascade to models with priority ranks (1, 2, 3...)."""
+    return bool(load_prefs()["priority_failover_enabled"])
+
+
+def failover_retry_threshold() -> int:
+    """Number of failed retries on a model before cascading to the next priority model."""
+    return int(load_prefs()["failover_retry_threshold"])
+
+
+def set_priority_failover_enabled(enabled: bool) -> bool:
+    save_prefs({"priority_failover_enabled": bool(enabled)})
+    return bool(enabled)
+
+
+def set_failover_retry_threshold(value: int) -> int:
+    clamped = _clamp_failover_retries(value)
+    save_prefs({"failover_retry_threshold": clamped})
+    return clamped
     """
     Neighbour rows per side for the Judge dialogue-chain context, 1–5.
 
