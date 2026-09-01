@@ -473,6 +473,31 @@ class ProviderRegistry:
         self.save()
         return model
 
+    def set_model_priority_rank(
+        self,
+        provider_id: str,
+        connection_id: str,
+        model_id: str,
+        priority_rank: int,
+    ) -> ModelEntry:
+        """
+        Set the priority failover rank (0 = None/normal, 1, 2, 3... = failover order).
+        Ensures uniqueness across all active models when rank > 0.
+        """
+        rank = max(0, int(priority_rank))
+        if rank > 0:
+            for p in self.providers:
+                for c in p.connections:
+                    for m in c.models:
+                        if m.id != model_id and m.priority_rank == rank:
+                            raise RegistryError(
+                                f"Priority Rank #{rank} is already assigned to {m.label}"
+                            )
+        model = self.get_model(provider_id, connection_id, model_id)
+        model.priority_rank = rank
+        self.save()
+        return model
+
     def test_models(
         self,
         provider_id: str,

@@ -59,6 +59,7 @@ class ModelEntry:
     display_name:         str = ""               # optional label; falls back to id
     preset:               RateLimitPreset = field(default_factory=RateLimitPreset.default)
     prompt_format:        Literal["plain", "json"] = "plain"   # per-model opt-in
+    priority_rank:        int = 0                              # 0 = none, 1, 2, 3... = failover order
     # ── Reasoning metadata (FEATURE-004) ──────────────────────────────────────
     # Capability and controllability are separate questions: a model can reason
     # without letting you turn it off. Everything below is *user data* stored in
@@ -119,6 +120,7 @@ class ModelEntry:
             "reasoning_options": list(self.reasoning_options),
             "reasoning": self.reasoning_dict(),
             "prompt_format": self.prompt_format,
+            "priority_rank": self.priority_rank,
             "last_test_latency_ms": self.last_test_latency_ms,
             "last_test_status": self.last_test_status,
             "last_test_error": self.last_test_error,
@@ -157,6 +159,7 @@ class ModelEntry:
                 display_name=data.get("display_name", ""),
                 preset=RateLimitPreset.from_dict(data.get("preset")),
                 prompt_format=data.get("prompt_format", "plain"),
+                priority_rank=int(data.get("priority_rank", 0) or 0),
                 reasoning_supported=supported,
                 reasoning_control=control,          # type: ignore[arg-type]
                 reasoning_default=bool(_pick(block, "default_enabled", False)),
@@ -174,6 +177,7 @@ class ModelEntry:
             display_name=data.get("display_name", ""),
             preset=RateLimitPreset.from_dict(data.get("preset")),
             prompt_format=data.get("prompt_format", "plain"),
+            priority_rank=int(data.get("priority_rank", 0) or 0),
             reasoning_supported=legacy_supported,
             reasoning_control="effort" if legacy_supported else "none",
             reasoning_default=False,

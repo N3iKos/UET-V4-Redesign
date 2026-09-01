@@ -458,6 +458,7 @@ class ConnectionDetailScreen(BaseScreen):
         Binding("c", "conn_limit", "connection limit", show=False),
         Binding("x", "remove", "remove", show=False),
         Binding("r", "reasoning", "reasoning", show=False),
+        Binding("o", "priority", "priority", show=False),
         Binding("j", "json_toggle", "json", show=False),
     ]
 
@@ -503,7 +504,7 @@ class ConnectionDetailScreen(BaseScreen):
     @staticmethod
     def _table_header() -> str:
         return (
-            f"{'MODEL':<30}{'PRESET':<11}{'RPM/TPM':<12}{'FMT':<7}{'THINK':<11}LAST TEST"
+            f"{'MODEL':<27}{'PRESET':<11}{'RPM/TPM':<11}{'PRI':<5}{'FMT':<6}{'THINK':<10}LAST TEST"
         )
 
     def _conn_limit_text(self) -> str:
@@ -518,7 +519,7 @@ class ConnectionDetailScreen(BaseScreen):
         return [
             ("space", "select"), ("f", "fetch"), ("m", "add"), ("t", "test"),
             ("p", "preset"), ("P", "all"), ("c", "conn limit"), ("r", "think"),
-            ("j", "json"), ("x", "remove"), ("←", "back"),
+            ("o", "priority"), ("j", "json"), ("x", "remove"), ("←", "back"),
         ]
 
     def on_screen_ready(self) -> None:
@@ -559,10 +560,12 @@ class ConnectionDetailScreen(BaseScreen):
             # rather than as "no limit" (CR-001 FR-605 / AC-615).
             limits = "no limit" if preset.unlimited \
                 else f"{preset.rpm}/{preset.tpm // 1000}k"
+            p_rank = f"P{model.priority_rank}" if getattr(model, "priority_rank", 0) > 0 else "—"
             label = (
-                f"{model.label[:28]:<30}{preset.label():<11}{limits:<12}"
-                f"{'json' if model.prompt_format == 'json' else 'plain':<7}"
-                f"{_reasoning_tag(model):<11}{status}"
+                f"{model.label[:25]:<27}{preset.label():<11}{limits:<11}"
+                f"{p_rank:<5}"
+                f"{'json' if model.prompt_format == 'json' else 'plain':<6}"
+                f"{_reasoning_tag(model):<10}{status}"
             )
             options.append(Option(label, model.id, style=style))
             if model.last_test_status == "error" and model.last_test_error:
@@ -786,6 +789,33 @@ class ConnectionDetailScreen(BaseScreen):
         control = saved.get("control", "none")
         self.notify_status(f"{model_id}: reasoning {control}.", OK)
 
+    def action_priority(self) -> None:
+        """Edit the priority failover rank for the highlighted model."""
+        model_ids = self._selected_model_ids()
+        if not model_ids:
+            return
+        model = self.app.registry.get_model(
+            self.provider_id, self.connection_id, model_ids[0]
+        )
+        self.app.push_screen(
+            PriorityModal(model, self.app.registry),
+            lambda rank: self._priority_saved(model.id, rank),
+        )
+
+    def _priority_saved(self, model_id: str, rank: int | None) -> None:
+        if rank is None:
+            return
+        try:
+            self.app.registry.set_model_priority_rank(
+                self.provider_id, self.connection_id, model_id, rank
+            )
+        except RegistryError as exc:
+            self.notify_status(str(exc), ERROR)
+            return
+        self._refresh_models()
+        label = f"Priority #{rank}" if rank > 0 else "Priority cleared (normal model)"
+        self.notify_status(f"{model_id}: {label}.", OK)
+
     def action_json_toggle(self) -> None:
         """
         Structured-output opt-in. Off by default because plenty of
@@ -803,6 +833,84 @@ class ConnectionDetailScreen(BaseScreen):
         self.notify_status(
             "Structured JSON output toggled — your provider may not support it.", WARN
         )
+
+
+def validate_priority_rank(
+    registry, candidate_rank: int, current_model_id: str = ""
+) -> str | None:
+    """
+    Ensure priority rank is either 0 (no priority/normal model) or unique
+    across all configured models across all providers/connections.
+    Returns error message if duplicated, otherwise None.
+    """
+    try:
+        rank = int(candidate_rank)
+    except (ValueError, TypeError):
+        return "Priority rank must be a positive number or 0."
+    if rank <= 0:
+        return None
+    for p in getattr(registry, "providers", []):
+        for c in p.connections:
+            for m in c.models:
+                if m.id != current_model_id and m.priority_rank == rank:
+                    return f"Priority Rank #{rank} is already assigned to {m.label}"
+    return None
+
+
+class PriorityModal(ModalScreen[int | None]):
+    """Edit priority failover rank for a model (0 = None, 1, 2, 3...)."""
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(self, model, registry, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._model = model
+        self._registry = registry
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label(f"Priority Failover · {self._model.label}", classes="title")
+            yield Label(
+                "Set failover rank (0 = None/normal, 1 = First fallback, 2 = Second fallback...)\n"
+                "Numbers greater than 0 must be unique across all models.",
+                classes="muted",
+            )
+            self._input = LabeledInput(
+                "Priority Rank",
+                value=str(getattr(self._model, "priority_rank", 0) or 0),
+                default="0",
+                placeholder="0",
+                hint="0 = normal model; 1, 2, 3... = failover order",
+            )
+            yield self._input
+            self._error = Label("", id="priority-error", classes="error")
+            yield self._error
+            yield KeyHints([("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        self._input.focus_input()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        val = self._input.value.strip()
+        try:
+            rank = int(val)
+        except ValueError:
+            self._error.update("Priority rank must be a whole number (0, 1, 2...).")
+            return
+        if rank < 0:
+            self._error.update("Priority rank cannot be negative.")
+            return
+        err = validate_priority_rank(self._registry, rank, current_model_id=self._model.id)
+        if err:
+            self._error.update(err)
+            return
+        self.dismiss(rank)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
 
 
 # ── Modals ────────────────────────────────────────────────────────────────────
