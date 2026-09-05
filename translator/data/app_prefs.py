@@ -445,17 +445,6 @@ def _clamp_workers(value) -> int:
     return max(1, min(50, number))
 
 
-def _clamp_chain_window(value) -> int:
-    """
-    Neighbour rows per side for the Judge dialogue-chain context, 1–5.
-    """
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(5, number))
-
-
 def _clamp_failover_retries(value) -> int:
     """Retries before failover, clamped to 1–5."""
     try:
@@ -506,7 +495,11 @@ def remember_engine(path: str, engine: str) -> None:
     if engine not in ENGINE_ORDER:
         return
     key = os.path.abspath(path)
-    store = load_prefs()["engine_per_file"]
+    # A COPY, not the loaded dict itself: load_prefs falls back to DEFAULTS on
+    # a read error, and mutating that fallback in place would pollute the
+    # module-level defaults for the rest of the process (stale entries
+    # resurrecting in later saves).
+    store = dict(load_prefs()["engine_per_file"])
     store.pop(key, None)
     store[key] = engine
     while len(store) > 50:
