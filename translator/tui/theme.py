@@ -104,6 +104,14 @@ Picker {{
     max-height: 100%;
 }}
 
+/* Inside a scrollable file box the picker must grow to its FULL content
+   height — the max-height clamp above gives the container nothing to scroll
+   (virtual_size == size), so files past the fold were invisible and the
+   cursor-follow scroll was a no-op. */
+#file-scroll Picker {{
+    max-height: none;
+}}
+
 /* Must grow to its full content height, otherwise the scroll container
    has nothing to scroll and the feed silently clips at one screenful. */
 TranslationFeed {{
