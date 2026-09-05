@@ -1,8 +1,8 @@
 """
-tui/screens/judge.py — The Judge screens.
+tui/screens/judge.py â€” The Judge screens.
 
-The setup is a wizard, and it walks the same road the translate wizard does —
-model, file & columns, criteria, language & style, processing, review — because
+The setup is a wizard, and it walks the same road the translate wizard does â€”
+model, file & columns, criteria, language & style, processing, review â€” because
 someone who has just configured a translation already knows this shape and
 should not have to learn a second one:
 
@@ -23,11 +23,11 @@ should not have to learn a second one:
   RowEditModal          one row, edited by hand
   ConfirmRevertModal    both versions of a repaired row, before undoing it
 
-Quick/Full is gone (UET_UX §6): every evaluation walks the same steps, and the
+Quick/Full is gone (UET_UX Â§6): every evaluation walks the same steps, and the
 processing figures are recommended from the rate limit rather than asked cold.
 
-State lives in `app.judge_draft`, so `←` returns to the previous step with
-everything still filled in — the same contract `app.draft` gives the translate
+State lives in `app.judge_draft`, so `â†` returns to the previous step with
+everything still filled in â€” the same contract `app.draft` gives the translate
 wizard.
 
 Three constraints run through all of it.
@@ -39,7 +39,7 @@ inheriting last session's choice would quietly change what a score means.
 
 **Nothing is saved on its own.** The grid is a report and the staged fixes are a
 proposal. The only write happens when someone approves a row, and it goes
-through `JudgeRunner.apply_fix` — the only writer in the feature (FR-111). A
+through `JudgeRunner.apply_fix` â€” the only writer in the feature (FR-111). A
 hand edit and a revert are the two writes that skip the staging screen, because a
 human typed the text in one and chose between two visible versions in the other;
 there is nothing left to review and nobody else to review it.
@@ -53,13 +53,13 @@ AC-206).
 **A re-check has to be as hard as the first check.** `g` re-judges one row on
 its own, which is cheap but weaker: alone, a row cannot be compared with
 anything, so every consistency question passes by default. `G` re-judges every
-applied fix through the evaluation path — `plan()` then `evaluate()`, the same
-prompt and the same request shape — so a fix that is still wrong is flagged
+applied fix through the evaluation path â€” `plan()` then `evaluate()`, the same
+prompt and the same request shape â€” so a fix that is still wrong is flagged
 again instead of quietly clearing. It reads the file, so it covers applied fixes
 only; a staged fix is not yet what the file says.
 
-The results screen holds the entire loop — review, fix one, fix a filtered
-batch, re-judge, edit, revert — because that loop is iterative by nature. Making
+The results screen holds the entire loop â€” review, fix one, fix a filtered
+batch, re-judge, edit, revert â€” because that loop is iterative by nature. Making
 any step of it a trip to another screen and back is what turns a review into a
 chore, and a chore does not get finished.
 
@@ -151,9 +151,9 @@ from ..widgets.model_picker import ModelPicker
 from ..widgets.processing import ProcessingForm
 from ...parsing.columns import detect_columns
 
-# The setup is one length now — Quick/Full is gone (UET_UX §6). Every evaluation
+# The setup is one length now â€” Quick/Full is gone (UET_UX Â§6). Every evaluation
 # walks the same steps and the header counts them:
-#   model → file & columns → criteria → language & style → processing → review
+#   model â†’ file & columns â†’ criteria â†’ language & style â†’ processing â†’ review
 FULL_STEPS = 6
 QUICK_STEPS = 6
 
@@ -166,7 +166,7 @@ ROLES = {
 }
 ROLE_ORDER = ("src", "dst", "ctx")
 
-# Grid column letters. Judge has one "model" column — the comment — so the
+# Grid column letters. Judge has one "model" column â€” the comment â€” so the
 # letter is cosmetic, but CompareGrid keys its columns by it.
 COMMENT_LETTER = "J"
 
@@ -180,7 +180,7 @@ _SEVERITY_STYLES = {
 
 
 def _as_column(value: str) -> int:
-    """`"C"`, `"3"`, `"D15"` → 3/4. 0 when it is not a column at all."""
+    """`"C"`, `"3"`, `"D15"` â†’ 3/4. 0 when it is not a column at all."""
     text = (value or "").strip()
     if not text:
         return 0
@@ -233,7 +233,7 @@ class JudgeWizardScreen(BaseScreen):
         return FULL_STEPS
 
     def _header_text(self) -> str:
-        left = "UET v4 › Judge"
+        left = "UET v4 â€º Judge"
         right = f"Step {self.step} of {self.total_steps()}" if self.step else ""
         width = max(20, self.size.width or 80)
         pad = max(1, width - len(left) - len(right) - 2)
@@ -244,8 +244,8 @@ class JudgeSetupScreen(JudgeWizardScreen):
     """
     The entry point, from either door (FR-101).
 
-    It holds no fields of its own: it seeds the draft — empty from the main
-    menu, pre-filled from a job that has just finished — and hands over to step
+    It holds no fields of its own: it seeds the draft â€” empty from the main
+    menu, pre-filled from a job that has just finished â€” and hands over to step
     one. Keeping the class name means both call sites stay as they were.
     """
 
@@ -259,7 +259,7 @@ class JudgeSetupScreen(JudgeWizardScreen):
         job = self._job
         self.app.judge_draft = {}
         # A fresh evaluation resets the per-session Fix and Rejudge model
-        # choices (UET_UX §6 / bug #10): a new file/job must ask again.
+        # choices (UET_UX Â§6 / bug #10): a new file/job must ask again.
         self.app.judge_fix_slot = None
         self.app.judge_rejudge_slot = None
         draft = self.app.judge_draft
@@ -285,7 +285,7 @@ class JudgeSetupScreen(JudgeWizardScreen):
 
 class FixModelPopup(ModalScreen[tuple]):
     """
-    Pick the model for a single-row Fix or a Rejudge (UET_UX §6 / bug #10).
+    Pick the model for a single-row Fix or a Rejudge (UET_UX Â§6 / bug #10).
 
     A flat model+group list plus one checkbox: `Don't ask again this session`.
     Ticking it stores the choice on the app so the rest of this Judge session's
@@ -325,8 +325,8 @@ class FixModelPopup(ModalScreen[tuple]):
                 ], multi_select=True)
                 yield self._remember
             with Vertical(id="fix-model-foot"):
-                yield KeyHints([("↑↓", "move"), ("space", "toggle"),
-                                ("⏎", "select"), ("esc", "cancel")])
+                yield KeyHints([("â†‘â†“", "move"), ("space", "toggle"),
+                                ("âŽ", "select"), ("esc", "cancel")])
 
     def on_mount(self) -> None:
         self._model.set_options(_fix_model_options(self.app.registry, self._judge_slot))
@@ -356,7 +356,7 @@ def _fix_model_options(registry, current) -> list[Option]:
                 options.append(Option(
                     model.label + ("   (judge model)" if is_judge else ""),
                     slot,
-                    hint=f"{provider.name} · {connection.name} · {model.preset.label()}",
+                    hint=f"{provider.name} Â· {connection.name} Â· {model.preset.label()}",
                     style=OK if is_judge else "",
                 ))
     for combo in load_combos():
@@ -365,14 +365,14 @@ def _fix_model_options(registry, current) -> list[Option]:
         slot = (COMBO_PROVIDER_ID, "", combo.id)
         is_judge = slot == current
         options.append(Option(
-            f"Group · {combo.label}" + ("   (judge model)" if is_judge else ""),
+            f"Group Â· {combo.label}" + ("   (judge model)" if is_judge else ""),
             slot,
-            hint=f"{combo.size} model(s) · {combo.strategy.replace('_', '-')}",
+            hint=f"{combo.size} model(s) Â· {combo.strategy.replace('_', '-')}",
             style=OK if is_judge else ACCENT,
         ))
     options.sort(key=lambda option: option.value != current)
     return options or [
-        Option("No models available — add one under Providers & Models", None,
+        Option("No models available â€” add one under Providers & Models", None,
                enabled=False, style=MUTED)
     ]
 
@@ -382,14 +382,14 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
     The setup step for a re-judge: which model, at what pacing (UET_UX bug #10).
 
     A re-judge is a grading job in its own right, so it asks which model to
-    grade with rather than silently reusing the Judge or Fix model — and
+    grade with rather than silently reusing the Judge or Fix model â€” and
     unlike a single-row Fix, it runs as a batch, so the rows/request and
     worker count are its pacing and worth their own fields.
 
     The `Don't ask again for this model` checkbox is per-model and persisted:
     ticking it for Model A stores A's settings (model, rows, workers) in the
     app preferences, and the next re-judge that lands on A runs immediately
-    with them — while Model B still asks, because B has no stored settings.
+    with them â€” while Model B still asks, because B has no stored settings.
     Unticking removes the entry, so "stop remembering" is one checkbox, not
     a hunt through Settings.
 
@@ -414,7 +414,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         self._judge_slot = model_slot
         self._scope = scope_label
 
-    # ── Layout ────────────────────────────────────────────────────────────────
+    # â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal"):
@@ -446,7 +446,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
                 ])
                 yield self._confirm
                 yield KeyHints([
-                    ("↑↓", "move"), ("tab", "field"), ("⏎", "start"),
+                    ("â†‘â†“", "move"), ("tab", "field"), ("âŽ", "start"),
                     ("esc", "cancel"),
                 ])
 
@@ -456,7 +456,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         self._apply_remembered()
         self._paint_scope()
 
-    # ── Options ───────────────────────────────────────────────────────────────
+    # â”€â”€ Options â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _chosen_slot(self) -> tuple[str, str, str] | None:
         option = self._model.current
@@ -483,7 +483,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         Prefill from this model's stored settings, when there are any.
 
         A remembered model keeps its rows and workers figures rather than the
-        rate-limit derivation — the derivation is a guess, and the stored
+        rate-limit derivation â€” the derivation is a guess, and the stored
         numbers are what the user last chose to run with.
         """
         slot = self._chosen_slot()
@@ -510,7 +510,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
             )
         panel.update("\n".join(lines))
 
-    # ── Events ────────────────────────────────────────────────────────────────
+    # â”€â”€ Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
         if event.picker is self._model:
@@ -538,7 +538,7 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         if event.picker is self._model:
             self._batch.focus_input()
 
-    # ── Confirming ────────────────────────────────────────────────────────────
+    # â”€â”€ Confirming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _start(self) -> None:
         self._error.clear()
@@ -574,7 +574,7 @@ def _rejudge_rows_default() -> int:
     The rows/request a re-judge form opens with: 20, not the Judge ceiling.
 
     A re-judge re-asks rows the file already reviewed once, with neighbours
-    attached in chain mode — a smaller request keeps the second verdict
+    attached in chain mode â€” a smaller request keeps the second verdict
     comparable to the first evaluation's sections and leaves room for the
     injected context, while 100 (the Judge batching ceiling) made the form's
     opening number a trap for exactly the runs that most need the smaller
@@ -585,12 +585,12 @@ def _rejudge_rows_default() -> int:
 
 class RowFixModal(ModalScreen["tuple | None"]):
     """
-    One flagged row, in a single popup (UET_UX §6 Fix one row).
+    One flagged row, in a single popup (UET_UX Â§6 Fix one row).
 
     Clicking a row opens this instead of a read-only detail: the translation is
-    editable in place, `Apply` writes it by hand (→ Fixed automatically), and
+    editable in place, `Apply` writes it by hand (â†’ Fixed automatically), and
     `Fix it` hands off to the model popup. Both close this and act on the same
-    row — no screen change, one panel.
+    row â€” no screen change, one panel.
 
     Returns `("edit", text)`, `("fix", None)`, or `None`.
     """
@@ -631,7 +631,7 @@ class RowFixModal(ModalScreen["tuple | None"]):
         with Vertical(classes="modal"):
             title = f"Row {self._row}"
             if self._issue is not None:
-                title += f"  ·  {self._issue.label}"
+                title += f"  Â·  {self._issue.label}"
             yield Label(title, classes="title")
             # The body fills the space between the title and the docked action
             # bar, and scrolls only when the window is too short. The actions and
@@ -656,12 +656,12 @@ class RowFixModal(ModalScreen["tuple | None"]):
             with Vertical(id="row-foot"):
                 self._actions = Picker([
                     Option("Apply edit (mark Fixed)", "apply", style=OK),
-                    Option("Fix it with a model…", "fix", style=ACCENT),
+                    Option("Fix it with a modelâ€¦", "fix", style=ACCENT),
                     Option("Cancel", "cancel"),
                 ], id="row-actions")
                 yield self._actions
                 yield KeyHints([
-                    ("↑↓", "move"), ("⏎", "choose"), ("ctrl+j", "new line"),
+                    ("â†‘â†“", "move"), ("âŽ", "choose"), ("ctrl+j", "new line"),
                     ("esc", "cancel"),
                 ])
 
@@ -674,7 +674,7 @@ class RowFixModal(ModalScreen["tuple | None"]):
             pass
 
     def on_paste_area_submitted(self, _event: PasteArea.Submitted) -> None:
-        # Enter in the text box applies the hand edit — the common case.
+        # Enter in the text box applies the hand edit â€” the common case.
         self._apply()
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
@@ -695,13 +695,13 @@ class RowFixModal(ModalScreen["tuple | None"]):
         self.dismiss(None)
 
 
-# ── Step 1: model (shared Model Picker) ───────────────────────────────────────
+# â”€â”€ Step 1: model (shared Model Picker) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeModelScreen(JudgeWizardScreen):
     """
-    Step 1 — the judge model, via the shared Model Picker.
+    Step 1 â€” the judge model, via the shared Model Picker.
 
-    Quick/Full is gone (UET_UX §6). The model is still deliberately first and
+    Quick/Full is gone (UET_UX Â§6). The model is still deliberately first and
     never pre-filled: the score a Judge produces only means something alongside
     the name of the model that produced it, so choosing one is the act that
     starts an evaluation (FR-102 / AC-107). A Model Group may be chosen here too.
@@ -709,14 +709,14 @@ class JudgeModelScreen(JudgeWizardScreen):
 
     step_full = 1
     step_quick = 1
-    breadcrumb = "Judge › Model"
+    breadcrumb = "Judge â€º Model"
 
     BINDINGS = [Binding("right", "focus_next_col", "next column", show=False)]
 
     def compose_body(self) -> ComposeResult:
         yield Label("Judge model", classes="title")
         yield Label(
-            "Picked fresh every session — a remembered judge would quietly "
+            "Picked fresh every session â€” a remembered judge would quietly "
             "change what a score means.",
             classes="hint",
         )
@@ -725,7 +725,7 @@ class JudgeModelScreen(JudgeWizardScreen):
         yield self._picker
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("←→", "column"), ("⏎", "confirm"), ("esc", "cancel")]
+        return [("â†‘â†“", "move"), ("â†â†’", "column"), ("âŽ", "confirm"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         # Judging on everything is the default; the Criteria step narrows it.
@@ -749,34 +749,49 @@ class JudgeModelScreen(JudgeWizardScreen):
             model_id=choice.model_id,
             combo_id=choice.combo.id if choice.is_combo else "",
         )
-        self.app.push_screen(JudgeFileScreen())
+        from .file_engine import FileEngineScreen
+        self.app.push_screen(FileEngineScreen(
+            title="Select a spreadsheet to review",
+            on_accept=self._file_engine_accepted,
+            next_screen=lambda: JudgeColumnsScreen(),
+            existing_path=self.draft.get("path", ""),
+            sort_translated_first=True,
+        ))
+
+    def _file_engine_accepted(self, path: str, engine: str) -> None:
+        if path != self.draft.get("path"):
+            # A different file invalidates the columns picked for the old one.
+            for key in ("src_col", "dst_col", "ctx_col"):
+                self.draft.pop(key, None)
+        self.draft["path"] = path
+        self.draft["fitting_engine"] = engine
 
 
 def _reasoning_note(model) -> str:
     """
     What this model will do about reasoning, stated once here.
 
-    A Judge session does not offer an override — it follows the model's own
-    default — so the only honest place to say what that means is where the model
+    A Judge session does not offer an override â€” it follows the model's own
+    default â€” so the only honest place to say what that means is where the model
     is chosen.
     """
     if model is None or not model.supports_reasoning:
         return ""
     control = model.reasoning_control
     if control == "always_on":
-        return " · reasoning always on"
+        return " Â· reasoning always on"
     if control == "toggle":
-        return f" · reasoning {'on' if model.reasoning_default else 'off'} by default"
+        return f" Â· reasoning {'on' if model.reasoning_default else 'off'} by default"
     if control == "effort":
-        return " · reasoning effort from the model's own default"
+        return " Â· reasoning effort from the model's own default"
     return ""
 
 
-# ── Step 3: criteria ──────────────────────────────────────────────────────────
+# â”€â”€ Step 3: criteria â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeCriteriaScreen(JudgeWizardScreen):
     """
-    What to judge on — an evaluation's equivalent of the operation mode.
+    What to judge on â€” an evaluation's equivalent of the operation mode.
 
     All four are ticked to begin with, because "review everything" is the
     default question. Untick to narrow: a prompt that asks about style will
@@ -791,7 +806,7 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
 
     step_full = 3
     step_quick = 3            # Criteria comes after File & Columns now
-    breadcrumb = "Judge › Criteria"
+    breadcrumb = "Judge â€º Criteria"
     title_text = "What should the model judge?"
 
     def compose_body(self) -> ComposeResult:
@@ -811,15 +826,15 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
     def compose_above_footer(self) -> ComposeResult:
         # A one-row button bar, so a click commits it. `click_activates=False`
         # here meant the first click only moved the cursor and a second was
-        # needed to do anything — right for a radio group, wrong for a button.
+        # needed to do anything â€” right for a radio group, wrong for a button.
         self._confirm = Picker(
             [Option("Confirm and next", "next", style=OK)], id="confirm-bar"
         )
         yield self._confirm
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("space", "toggle"), ("⏎", "confirm"),
-                ("←", "back"), ("esc", "cancel")]
+        return [("â†‘â†“", "move"), ("space", "toggle"), ("âŽ", "confirm"),
+                ("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         chosen = set(self.draft.get("criteria") or CRITERIA)
@@ -838,7 +853,7 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
             "Style is judged objectively: with no style prompt for this file, the "
             "model infers the register from the text and reports only "
             "inconsistency, wrong register for the kind of line, or wording that "
-            "reads as translated — never its own preference."
+            "reads as translated â€” never its own preference."
         )
 
     def on_picker_toggled(self, event: Picker.Toggled) -> None:
@@ -848,7 +863,7 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
         chosen = self.picker.selected_values()
         if not chosen:
             self._error.show(
-                "Tick at least one criterion — there is nothing to judge otherwise.",
+                "Tick at least one criterion â€” there is nothing to judge otherwise.",
                 "cannot continue",
             )
             return
@@ -856,7 +871,7 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
         self.app.push_screen(JudgeStyleScreen())
 
 
-# ── Step 4: languages and style ───────────────────────────────────────────────
+# â”€â”€ Step 4: languages and style â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeStyleScreen(JudgeWizardScreen):
     """
@@ -867,8 +882,8 @@ class JudgeStyleScreen(JudgeWizardScreen):
     "mistranslated from what into what" is easier to judge when both languages
     are named rather than inferred from the characters.
 
-    Same preset list as the translate wizard — the built-ins, whatever the user
-    has saved, `+ New custom prompt` — because a file translated with
+    Same preset list as the translate wizard â€” the built-ins, whatever the user
+    has saved, `+ New custom prompt` â€” because a file translated with
     `game-H-ID` should be reviewed against `game-H-ID`, and making that a
     retyped paragraph rather than one keystroke is how the two drift apart.
 
@@ -879,7 +894,7 @@ class JudgeStyleScreen(JudgeWizardScreen):
 
     step_full = 4
     step_quick = 4            # Language & style step
-    breadcrumb = "Judge › Style"
+    breadcrumb = "Judge â€º Style"
 
     NEW = "__new__"
     NONE = "__none__"
@@ -889,7 +904,7 @@ class JudgeStyleScreen(JudgeWizardScreen):
     def compose_body(self) -> ComposeResult:
         yield Label("Languages and style", classes="title")
         yield Label(
-            "What the translation was asked to be — the yardstick the review "
+            "What the translation was asked to be â€” the yardstick the review "
             "measures against.",
             classes="hint",
         )
@@ -936,11 +951,11 @@ class JudgeStyleScreen(JudgeWizardScreen):
 
     def screen_keys(self) -> list[tuple[str, str]]:
         if getattr(self, "_custom", None) is not None and self._custom.display:
-            return [("⏎", "next / save"), ("esc", "back to list")]
-        keys = [("↑↓", "move"), ("tab", "next field"), ("⏎", "confirm")]
+            return [("âŽ", "next / save"), ("esc", "back to list")]
+        keys = [("â†‘â†“", "move"), ("tab", "next field"), ("âŽ", "confirm")]
         if getattr(self, "_saved", None):
             keys.append(("d", "delete saved"))
-        return keys + [("←", "back"), ("esc", "cancel")]
+        return keys + [("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         self._reload()
@@ -1019,7 +1034,7 @@ class JudgeStyleScreen(JudgeWizardScreen):
         option = self.picker.current
         if not option or option.value == self.NONE:
             self.query_one("#judge-style-preview", Static).update(
-                "[dim]No style prompt — model infers register from text and judges "
+                "[dim]No style prompt â€” model infers register from text and judges "
                 "consistency, fitness and naturalness objectively.[/]"
             )
             return
@@ -1135,129 +1150,7 @@ class JudgeStyleScreen(JudgeWizardScreen):
         super().action_cancel()
 
 
-# ── Step 2: file ──────────────────────────────────────────────────────────────
-
-class JudgeFileScreen(JudgeWizardScreen):
-    """
-    Pick the translated file by clicking it, exactly as the translate wizard's
-    file step works — and with the same escape hatch of typing a path.
-
-    The list leads with `*_Translated` files, because that is what an evaluation
-    is for: the source file has no translation column to review.
-    """
-
-    step_full = 2
-    step_quick = 2
-    breadcrumb = "Judge › File"
-
-    def compose_body(self) -> ComposeResult:
-        yield Label("Select the translated spreadsheet", classes="title")
-        yield Label(f".xlsx / .csv files in {os.getcwd()}", classes="muted")
-        self.picker = Picker()
-        yield self.picker
-        yield Label("")
-        self._path = LabeledInput(
-            "Or type a path",
-            value=self.draft.get("path", "") if self.draft.get("from_job") else "",
-            placeholder="/path/to/book_Translated.xlsx",
-        )
-        yield self._path
-        yield Static("", id="judge-file-note", classes="hint")
-        yield Label("", id="judge-file-error", classes="error")
-
-    def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("⏎", "select"), ("←", "back"), ("esc", "cancel")]
-
-    def on_screen_ready(self) -> None:
-        options: list[Option] = []
-        for name in ExcelReader.scan_directory(os.getcwd()):
-            full = os.path.join(os.getcwd(), name)
-            try:
-                size = os.path.getsize(full) / 1024
-                size_text = f"{size / 1024:.1f} MB" if size > 1024 else f"{size:.0f} KB"
-            except OSError:
-                size_text = "?"
-            translated = config.TRANSLATED_SUFFIX in name
-            options.append(Option(
-                name, full,
-                hint=f"{size_text} · translated" if translated else size_text,
-                style=OK if translated else "",
-            ))
-        # Translated files first — they are the ones with something to judge.
-        options.sort(key=lambda option: (
-            config.TRANSLATED_SUFFIX not in os.path.basename(str(option.value)),
-            os.path.basename(str(option.value)).lower(),
-        ))
-        if not options:
-            options.append(Option(
-                "No spreadsheet found here — type a path below", "",
-                enabled=False, style=MUTED,
-            ))
-        self.picker.set_options(options)
-
-        current = self.draft.get("path", "")
-        for index, option in enumerate(options):
-            if option.value == current:
-                self.picker.index = index
-                break
-        self.picker.focus()
-        self._note()
-
-    def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
-        self._note()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        self._note()
-
-    def _current_path(self) -> str:
-        typed = (self._path.input.value or "").strip().strip('"')
-        if typed:
-            return os.path.expanduser(typed)
-        option = self.picker.current
-        return str(option.value) if option and option.value else ""
-
-    def _note(self) -> None:
-        note = self.query_one("#judge-file-note", Static)
-        path = self._current_path()
-        if not path:
-            note.update("")
-            return
-        name = os.path.basename(path)
-        if config.TRANSLATED_SUFFIX in name:
-            note.update(Text.assemble(
-                ("Reads ", MUTED), (name, OK),
-                ("  ·  approved fixes are written back to its target column.", MUTED),
-            ))
-        else:
-            note.update(Text.assemble(
-                ("Reads ", MUTED), (name, WARN),
-                ("  ·  this is not a *_Translated file — make sure it really "
-                 "holds a translation column.", MUTED),
-            ))
-
-    def on_picker_selected(self, event: Picker.Selected) -> None:
-        if event.option.value:
-            self._accept(str(event.option.value))
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self._accept(self._path.value)
-
-    def _accept(self, path: str) -> None:
-        path = os.path.expanduser((path or "").strip().strip('"'))
-        error = self.query_one("#judge-file-error", Label)
-        if not path or not os.path.isfile(path):
-            error.update(f"File not found: {path}")
-            return
-        if path != self.draft.get("path"):
-            # A different file invalidates the columns picked for the old one.
-            self.draft.pop("src_col", None)
-            self.draft.pop("dst_col", None)
-            self.draft.pop("ctx_col", None)
-        self.draft["path"] = path
-        self.app.push_screen(JudgeColumnsScreen())
-
-
-# ── Step 2: columns ───────────────────────────────────────────────────────────
+# â”€â”€ Step 2: columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeColumnsScreen(JudgeWizardScreen):
     """
@@ -1271,7 +1164,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
 
     step_full = 2
     step_quick = 2
-    breadcrumb = "Judge › Columns"
+    breadcrumb = "Judge â€º Columns"
 
     _active = "src"
 
@@ -1320,7 +1213,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
         yield self._confirm
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("tab", "next field"), ("⏎", "confirm"), ("←", "back"), ("esc", "cancel")]
+        return [("tab", "next field"), ("âŽ", "confirm"), ("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         self._debounce = None
@@ -1349,16 +1242,16 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             self._dst.value = ExcelReader.col_letter(dst_col)
         if src_col or dst_col:
             self.queue_note(
-                "Source/Translation detected from the header — change them if "
+                "Source/Translation detected from the header â€” change them if "
                 "the guess is wrong.", MUTED
             )
         else:
             self.queue_note(
-                "Could not detect the columns — click the grid or type a letter.",
+                "Could not detect the columns â€” click the grid or type a letter.",
                 WARN
             )
 
-    # ── Which field a click fills ─────────────────────────────────────────────
+    # â”€â”€ Which field a click fills â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _fields(self) -> dict[str, LabeledInput]:
         return {"src": self._src, "dst": self._dst, "ctx": self._ctx}
@@ -1396,7 +1289,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
         letter = ExcelReader.col_letter(column)
         return f"{letter}{row}" if row else letter
 
-    # ── Form ──────────────────────────────────────────────────────────────────
+    # â”€â”€ Form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._debounce is not None:
@@ -1475,7 +1368,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
         src_col, dst_col, ctx_col, start, num_rows = parsed
         if src_col == dst_col:
             error.update(
-                "Source and translation cannot be the same column — there would "
+                "Source and translation cannot be the same column â€” there would "
                 "be nothing to compare."
             )
             return
@@ -1497,28 +1390,28 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             src_col=src_col, dst_col=dst_col, ctx_col=ctx_col,
             start_row=start, num_rows=num_rows,
         )
-        # New order (UET_UX §6): file & columns → criteria → language & style →
-        # processing → review.
+        # New order (UET_UX Â§6): file & columns â†’ criteria â†’ language & style â†’
+        # processing â†’ review.
         self.app.push_screen(JudgeCriteriaScreen())
 
 
-# ── Step 5: processing (shared form) ──────────────────────────────────────────
+# â”€â”€ Step 5: processing (shared form) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgePacingScreen(JudgeWizardScreen):
     """
-    The shared Processing form (UET_UX §6/§7), same as Translate.
+    The shared Processing form (UET_UX Â§6/Â§7), same as Translate.
 
     Rows/request and workers are recommended from the model's (or group's) rate
     limit; Enter accepts, typing overrides with a warning but never a block. A
     review carries the source *and* the translation for every row, so the token
     cap can still split a request smaller than the rows/request figure at run
-    time — the form's recommendation is a target, and the estimator has the
+    time â€” the form's recommendation is a target, and the estimator has the
     final say on the actual section size.
     """
 
     step_full = 5
     step_quick = 5
-    breadcrumb = "Judge › Processing"
+    breadcrumb = "Judge â€º Processing"
 
     def _choice(self):
         draft = self.draft
@@ -1532,7 +1425,7 @@ class JudgePacingScreen(JudgeWizardScreen):
     def compose_body(self) -> ComposeResult:
         choice = self._choice()
         self._preset = choice.preset
-        yield Label(f"{choice.describe()} · preset {self._preset.label()}",
+        yield Label(f"{choice.describe()} Â· preset {self._preset.label()}",
                     classes="hint")
         self._form = ProcessingForm(
             self._preset,
@@ -1552,8 +1445,8 @@ class JudgePacingScreen(JudgeWizardScreen):
         yield self._confirm
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("space", "toggle"), ("tab", "next field"),
-                ("⏎", "confirm"), ("←", "back"), ("esc", "cancel")]
+        return [("â†‘â†“", "move"), ("space", "toggle"), ("tab", "next field"),
+                ("âŽ", "confirm"), ("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         self._form.focus_first()
@@ -1637,7 +1530,7 @@ def _int_or_none(text: str) -> int | None:
         return None
 
 
-# ── Final step: review and start ──────────────────────────────────────────────
+# â”€â”€ Final step: review and start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
     """
@@ -1650,7 +1543,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
 
     step_full = FULL_STEPS
     step_quick = QUICK_STEPS
-    breadcrumb = "Judge › Review"
+    breadcrumb = "Judge â€º Review"
     title_text = "Review and start"
 
     def compose_extra(self) -> ComposeResult:
@@ -1660,7 +1553,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         yield self._error
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("⏎", "select"), ("←", "back"), ("esc", "cancel")]
+        return [("â†‘â†“", "move"), ("âŽ", "select"), ("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
         super().on_screen_ready()
@@ -1674,7 +1567,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
             Option("Cancel", "cancel"),
         ]
 
-    # ── The plan ──────────────────────────────────────────────────────────────
+    # â”€â”€ The plan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _target(self) -> JudgeTarget:
         return _target_from(self.draft)
@@ -1686,7 +1579,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         """
         Rows per request, when the pacing step named one.
 
-        `None` in Quick mode, which never asks — the runner then reads the saved
+        `None` in Quick mode, which never asks â€” the runner then reads the saved
         Settings value, exactly as before.
         """
         return self.draft.get("max_rows_per_request") or None
@@ -1712,7 +1605,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         dropped = set(self._criteria()) - set(criteria)
         pacing = self._pacing(plan)
         # The label, not the third id: for a combo that id is a uuid, and
-        # "Model 2171a408d40b…" tells nobody which combo is about to run.
+        # "Model 2171a408d40bâ€¦" tells nobody which combo is about to run.
         choice = resolve_choice(
             self.app.registry,
             draft.get("provider_id", ""),
@@ -1720,34 +1613,34 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
             draft.get("model_id", ""),
         )
         model_name = (
-            f"Group · {choice.label}" if choice.is_combo else choice.label
+            f"Group Â· {choice.label}" if choice.is_combo else choice.label
         )
         lines = [
             f"[{MUTED}]File[/]        {escape_markup(os.path.basename(draft['path']))}",
             f"[{MUTED}]Columns[/]     "
-            f"{ExcelReader.col_letter(draft['src_col'])} → "
+            f"{ExcelReader.col_letter(draft['src_col'])} â†’ "
             f"{ExcelReader.col_letter(draft['dst_col'])}"
-            + (f" · context {ExcelReader.col_letter(draft['ctx_col'])}"
+            + (f" Â· context {ExcelReader.col_letter(draft['ctx_col'])}"
                if draft.get("ctx_col") else "")
-            + f", rows {draft['start_row']}–"
+            + f", rows {draft['start_row']}â€“"
               f"{draft['start_row'] + draft['num_rows'] - 1} ({draft['num_rows']:,})",
             f"[{MUTED}]Model[/]       {escape_markup(model_name)}",
             f"[{MUTED}]Languages[/]   "
-            f"{escape_markup(draft.get('src_lang') or 'auto')} → "
+            f"{escape_markup(draft.get('src_lang') or 'auto')} â†’ "
             f"{escape_markup(draft.get('tgt_lang') or '(not stated)')}",
             f"[{MUTED}]Style[/]       {escape_markup(self._style_label())}",
             f"[{MUTED}]Criteria[/]    {escape_markup(', '.join(criteria))}",
-            f"[{MUTED}]Requests[/]    {plan.request_count} · "
-            f"~{plan.estimated_tokens:,} tokens estimated · "
+            f"[{MUTED}]Requests[/]    {plan.request_count} Â· "
+            f"~{plan.estimated_tokens:,} tokens estimated Â· "
             f"each under {plan.max_tokens:,}"
-            + (f" · up to {self._rows_cap()} row(s)" if self._rows_cap() else ""),
+            + (f" Â· up to {self._rows_cap()} row(s)" if self._rows_cap() else ""),
         ]
         if pacing:
             lines.append(f"[{MUTED}]Pacing[/]      {escape_markup(pacing)}")
         if dropped:
             lines.append(
                 f"[{WARN}]Dropped[/]     {escape_markup(', '.join(sorted(dropped)))} "
-                f"— no context column was picked"
+                f"â€” no context column was picked"
             )
         if plan.prejudged:
             lines.append(
@@ -1757,7 +1650,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         if plan.warned:
             lines.append(
                 f"[{WARN}]Large[/]       above the "
-                f"{config.TOKEN_WARN_THRESHOLD:,} token threshold — you will be "
+                f"{config.TOKEN_WARN_THRESHOLD:,} token threshold â€” you will be "
                 f"asked to confirm"
             )
         lines.append(
@@ -1776,7 +1669,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         draft = self.draft
         prompt = (draft.get("style_prompt") or "").strip()
         if not prompt:
-            return "none — register inferred from the text, judged objectively"
+            return "none â€” register inferred from the text, judged objectively"
         key = (draft.get("style_key") or "").strip()
         if key:
             from ...data.presets import find_preset
@@ -1784,14 +1677,14 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
             preset = find_preset(key)
             if preset:
                 return preset["label"]
-        return f"custom · {truncate(prompt, 60)}"
+        return f"custom Â· {truncate(prompt, 60)}"
 
     def _pacing(self, plan: EvaluationPlan) -> str:
         """
         The worker count these requests earn against the model's rate limit.
 
         Derived from the biggest section the estimator produced, because that is
-        the request that has to fit — and shown here rather than only in the
+        the request that has to fit â€” and shown here rather than only in the
         Activity Panel, so a token-bound limit is visible before the tokens are
         spent rather than after. For a combo it is the combo's own limit, which is
         the only rate limit a combo run is paced by.
@@ -1815,17 +1708,17 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         line = preset.describe_limits(rows, tokens_per_request=tokens)
         if choice.is_combo and choice.combo is not None:
             line = (
-                f"combo {choice.combo.label} · "
-                f"{choice.combo.strategy.replace('_', '-')} · {line}"
+                f"combo {choice.combo.label} Â· "
+                f"{choice.combo.strategy.replace('_', '-')} Â· {line}"
             )
         workers = draft.get("n_workers")
         if workers:
             # Full mode chose this, so the review must show what will run rather
             # than what the arithmetic suggests.
-            line += f" · running {int(workers)} worker(s)"
+            line += f" Â· running {int(workers)} worker(s)"
         return line
 
-    # ── Starting ──────────────────────────────────────────────────────────────
+    # â”€â”€ Starting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def handle_choice(self, option: Option) -> None:
         if option.value == "edit":
@@ -1875,7 +1768,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
 
 class _JudgeEditScreen(JudgeWizardScreen, MenuScreen):
     """
-    Review's Edit for Judge: jump to the part to change (UET_UX §6 Review).
+    Review's Edit for Judge: jump to the part to change (UET_UX Â§6 Review).
 
     Walking forward from the chosen step lands back on Review with the rest of
     the draft intact, the same contract the Translate review's Edit gives.
@@ -1883,7 +1776,7 @@ class _JudgeEditScreen(JudgeWizardScreen, MenuScreen):
 
     step_full = FULL_STEPS
     step_quick = QUICK_STEPS
-    breadcrumb = "Judge › Edit"
+    breadcrumb = "Judge â€º Edit"
     title_text = "Edit which part?"
 
     def build_options(self) -> list[Option]:
@@ -1914,7 +1807,7 @@ class ConfirmEstimateModal(ModalScreen[bool]):
     """
     The confirmation a large evaluation gets (FR-106 / AC-104).
 
-    It states the cost in the units being spent — requests and tokens — because
+    It states the cost in the units being spent â€” requests and tokens â€” because
     "this is a big job" is not a number anyone can decide on.
     """
 
@@ -1940,7 +1833,7 @@ class ConfirmEstimateModal(ModalScreen[bool]):
                 Option("Go back and narrow the range", "back"),
             ])
             yield self.picker
-            yield KeyHints([("↑↓", "move"), ("⏎", "select"), ("esc", "cancel")])
+            yield KeyHints([("â†‘â†“", "move"), ("âŽ", "select"), ("esc", "cancel")])
 
     def on_mount(self) -> None:
         self.picker.focus()
@@ -1952,13 +1845,13 @@ class ConfirmEstimateModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
-# ── The evaluation itself ─────────────────────────────────────────────────────
+# â”€â”€ The evaluation itself â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class FilterBar(Widget):
     """
     A row of clickable chips: `all`, `problems`, then one per error type.
 
-    A bar rather than a dropdown because the counts are the useful part — seeing
+    A bar rather than a dropdown because the counts are the useful part â€” seeing
     `placeholder 31` next to `style 2` tells you what is wrong with the file
     before you have read a single row, and a dropdown would hide exactly that
     behind a click.
@@ -1998,7 +1891,7 @@ class FilterBar(Widget):
     def watch_hover_chip(self, _old: int, _new: int) -> None:
         self.refresh()
 
-    # ── Mouse ─────────────────────────────────────────────────────────────────
+    # â”€â”€ Mouse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _chip_at(self, event: events.MouseEvent) -> int:
         offset = event.get_content_offset(self)
@@ -2025,7 +1918,7 @@ class FilterBar(Widget):
         if event.chain == 1:
             self.post_message(self.ChipClicked(self._spans[index][2]))
 
-    # ── Render ────────────────────────────────────────────────────────────────
+    # â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def get_content_height(self, container, viewport, width: int) -> int:
         return 1 if self._chips else 0
@@ -2082,7 +1975,7 @@ class GridPane(VerticalScroll):
     While the evaluation is live the grid grows underneath it, so wheeling has to
     mean what it means on the run screen: scrolling back stops the view being
     dragged along, and reaching the bottom starts following again. Without this,
-    reading a row that has just been flagged is impossible — the next section
+    reading a row that has just been flagged is impossible â€” the next section
     inserts rows above it and the line walks off the screen.
     """
 
@@ -2102,8 +1995,8 @@ class JudgeRunScreen(BaseScreen):
     The grid, the filter bar, the panel, and the actions.
 
     Layout mirrors the run screen on purpose: a wide grid on the left, a narrow
-    rail on the right. What the rail holds differs — a score and a distribution
-    rather than a progress bar — but the Activity Panel in it is the same widget
+    rail on the right. What the rail holds differs â€” a score and a distribution
+    rather than a progress bar â€” but the Activity Panel in it is the same widget
     the translation run uses, because Judge's evaluation and Fix All go through
     the same workers (FR-207 / AC-205).
 
@@ -2114,7 +2007,7 @@ class JudgeRunScreen(BaseScreen):
 
     Above it sits a filter bar: `all`, `problems`, one chip per severity, then one
     per error type that actually occurred. Clicking a chip narrows the grid to
-    those rows, and filtering is a *view* — `CompareGrid.set_row_filter` hides
+    those rows, and filtering is a *view* â€” `CompareGrid.set_row_filter` hides
     rows without discarding them, so nothing is re-read and no request is
     repeated. Fix All then offers what is on screen, which is what makes "fix
     just the critical placeholder problems" a single gesture.
@@ -2126,7 +2019,7 @@ class JudgeRunScreen(BaseScreen):
     does not get finished.
 
     Both long operations report as they go, in two places. The rail carries the
-    counters and the last few results; the grid *fills in* — a row appears with
+    counters and the last few results; the grid *fills in* â€” a row appears with
     its verdict under it the moment its section is parsed, so a file of a few
     thousand rows is readable while it is being reviewed rather than only after.
     The rows are merged in sheet order rather than appended as they arrive,
@@ -2138,11 +2031,11 @@ class JudgeRunScreen(BaseScreen):
     report by rows they are not looking at. Following (the default) keeps the
     newest line in view; scrolling back with the wheel, the arrows or PageUp
     detaches it and keeps the row that was at the top exactly where it was, and
-    coming back to the bottom follows again — the same gesture the translate feed
+    coming back to the bottom follows again â€” the same gesture the translate feed
     has.
     """
 
-    breadcrumb = "Judge · results"
+    breadcrumb = "Judge Â· results"
 
     BINDINGS = [
         Binding("a", "toggle_workers", "workers", show=False),
@@ -2202,9 +2095,9 @@ class JudgeRunScreen(BaseScreen):
         # disagree with what Review showed.
         self._processing: dict = dict(processing or {})
         self._stop = threading.Event()
-        # ── Force-cancel (double `c`) ─────────────────────────────────────────
+        # â”€â”€ Force-cancel (double `c`) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # The first `c` sets the stop flag and lets the request in flight
-        # finish — its result is real work and is kept. A second `c` while the
+        # finish â€” its result is real work and is kept. A second `c` while the
         # first is still pending SEVERS the request: every client the executors
         # hold gets its socket closed, the blocked read raises in the worker
         # thread, and the run ends now instead of after the current output.
@@ -2224,7 +2117,7 @@ class JudgeRunScreen(BaseScreen):
         self._events: list[str] = []
         # A worker-backed operation is in flight: the evaluation, or a Fix All.
         # Named `_busy_batch` rather than `_running` because `MessagePump` owns
-        # `self._running` and sets it True the moment a screen mounts — a screen
+        # `self._running` and sets it True the moment a screen mounts â€” a screen
         # that keeps its own flag under that name reads as permanently busy and
         # every action guarded by it silently does nothing.
         self._busy_batch = False
@@ -2249,7 +2142,7 @@ class JudgeRunScreen(BaseScreen):
         self._grading_mode = app_prefs.judge_grading_mode()
         # Live feeds, bounded. Painted from the rail's timer rather than per
         # event, so a fast section costs one repaint (NFR-201).
-        # Rows, as a set: a row reported twice — which a retry can do — must not
+        # Rows, as a set: a row reported twice â€” which a retry can do â€” must not
         # push the figure past its own total.
         self._reviewed_rows: set[int] = set()
         self._flagged_live: list[tuple[int, object]] = []
@@ -2271,22 +2164,22 @@ class JudgeRunScreen(BaseScreen):
         # "which of my repairs did the judge look at again, and how did they
         # come out" is a question the severity chips cannot answer.
         self._rejudged_rows: set[int] = set()
-        # Rows that PASSED a re-judge (layer 2 — verdict persistence): the
+        # Rows that PASSED a re-judge (layer 2 â€” verdict persistence): the
         # judge's verdicts fluctuate run to run on identical text (~9% flip
         # rate measured), so a row that already survived one re-judge is only
         # re-flaggable by a CRITICAL finding; a minor/style re-flag is treated
         # as sampling noise and ignored. Cleared only when the row is written
         # again (its text changed, so the old verdict no longer describes it).
         self._verdict_stable: set[int] = set()
-        # Fix cycle counter per row (layer 3 — convergence guard): a row that
+        # Fix cycle counter per row (layer 3 â€” convergence guard): a row that
         # has been fixed this many times and is STILL flagged leaves the
         # automatic loop and is marked for human review instead, so the
-        # fix→re-judge cycle provably terminates.
+        # fixâ†’re-judge cycle provably terminates.
         self._fix_cycles: dict[int, int] = {}
-        # Rows whose fix budget is exhausted — flagged "needs manual review"
+        # Rows whose fix budget is exhausted â€” flagged "needs manual review"
         # and excluded from Fix All / G by default.
         self._settled_rows: set[int] = set()
-        # Cached (rows, tokens) of the largest section — see _section_shape.
+        # Cached (rows, tokens) of the largest section â€” see _section_shape.
         # None until measured once; invalidated whenever the file is written.
         self._section_shape_cache: tuple[int, int] | None = None
         # Requests finished and requests planned, for the second progress line.
@@ -2302,22 +2195,22 @@ class JudgeRunScreen(BaseScreen):
         self._by_row: dict[int, tuple[str, str]] = {}  # row -> (source, translation)
         # Follow the newest reviewed row, like the translate feed. Scrolling back
         # detaches it; reaching the bottom again re-attaches. Only meaningful
-        # while the evaluation is live — once the report exists the grid stops
+        # while the evaluation is live â€” once the report exists the grid stops
         # growing and the cursor owns the view.
         self._follow_live = True
         # True while a temporary provider warning card is on screen, so the next
         # successful request can replace it with a recovery note.
         self._issue_active = False
-        # ── Lifecycle & timing (UET_UX bug #4/#5/#7) ──────────────────────────
+        # â”€â”€ Lifecycle & timing (UET_UX bug #4/#5/#7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # An explicit state rather than the single `_busy_batch` flag, so the UI,
         # the animation and the ETA can each say exactly what is happening:
-        #   idle → running → (retrying) → completed | paused | failed | cancelled
+        #   idle â†’ running â†’ (retrying) â†’ completed | paused | failed | cancelled
         self._run_state = "idle"
         # A monotonic animation tick that advances on every repaint while work is
         # in flight, INDEPENDENTLY of whether a new row landed. `grid._tick` only
         # moves while a column is PENDING, and Judge's columns are always `done`,
         # so the worker panel's spinner was being handed tick=0 forever and sat
-        # frozen on one frame — which is what read as a hang (bug #5).
+        # frozen on one frame â€” which is what read as a hang (bug #5).
         self._anim_tick = 0
         # Wall-clock accounting for the live progress feed (bug #7). `_elapsed`
         # accumulates only while running, so a pause does not keep inflating it.
@@ -2331,7 +2224,7 @@ class JudgeRunScreen(BaseScreen):
         # Rows a paused-run Retry is re-sending, for reference/diagnostics.
         self._retry_rows: list[int] = []
 
-    # ── Layout ────────────────────────────────────────────────────────────────
+    # â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def compose_body(self) -> ComposeResult:
         self.grid = CompareGrid(id="judge-grid")
@@ -2355,7 +2248,7 @@ class JudgeRunScreen(BaseScreen):
             with Vertical(id="judge-rail-pane"):
                 # Right rail: the fixed state block on top (score, rows,
                 # severity), then Worker above Events, each with a fixed
-                # header above its own bounded scroll area — a long run never
+                # header above its own bounded scroll area â€” a long run never
                 # grows the rail without bound.
                 yield self.rail
                 yield self.activity_header
@@ -2364,7 +2257,7 @@ class JudgeRunScreen(BaseScreen):
                 yield self.events_header
                 with VerticalScroll(id="judge-events-scroll"):
                     yield self.events
-                # Fatal errors render here — the bottom of the rail, not below
+                # Fatal errors render here â€” the bottom of the rail, not below
                 # the grid. An ErrorBox that grows under the grid shoves the
                 # whole report out of frame, which is worse than the error: the
                 # user loses the work they were reading to read a message they
@@ -2374,7 +2267,7 @@ class JudgeRunScreen(BaseScreen):
                 self._error = ErrorBox(id="judge-error")
                 yield self._error
         yield self.indicator
-        # Provider trouble shows here — a small card, bottom-right, not a
+        # Provider trouble shows here â€” a small card, bottom-right, not a
         # full-width wall of duplicated errors. The raw errors still go to the
         # events rail and the log.
         self._notice = ProviderNotice()
@@ -2413,7 +2306,7 @@ class JudgeRunScreen(BaseScreen):
         if self._busy_batch:
             # `end` is offered because scrolling back is now possible mid-run and
             # a key that resumes following has to be findable.
-            keys = [("↑↓", "scroll"), ("a", "workers"), ("e", "events")]
+            keys = [("â†‘â†“", "scroll"), ("a", "workers"), ("e", "events")]
             if not self._follow_live:
                 keys.append(("f", "follow latest"))
             if self._stop.is_set():
@@ -2422,9 +2315,9 @@ class JudgeRunScreen(BaseScreen):
                 return keys + [("c", "force stop")]
             return keys + [("c", "stop")]
         if self._report is None:
-            return [("↑↓", "move"), ("←", "back")]
+            return [("â†‘â†“", "move"), ("â†", "back")]
         keys = [
-            ("↑↓", "row"), ("⏎", "open"), ("tab", "filter"),
+            ("â†‘â†“", "row"), ("âŽ", "open"), ("tab", "filter"),
             ("a", "workers"), ("e", "events"),
         ]
         row = self._cursor_row
@@ -2448,18 +2341,18 @@ class JudgeRunScreen(BaseScreen):
             keys.append(("G", f"re-judge {len(self._before)} fixed"))
         if repaired:
             keys.append(("r", "revert"))
-        return keys + [("c", "confirm & save"), ("s", "summary"), ("←", "back")]
+        return keys + [("c", "confirm & save"), ("s", "summary"), ("â†", "back")]
 
     def _fix_all_label(self) -> str:
         """What `F` will offer, named after the filter it will draw from."""
         if self._filter in ("all", "problems"):
-            return "fix all…"
+            return "fix allâ€¦"
         if self._filter == "fixed":
-            # The repaired rows that are still flagged — a second pass over the
+            # The repaired rows that are still flagged â€” a second pass over the
             # ones the first repair did not settle.
-            return "fix flagged…"
+            return "fix flaggedâ€¦"
         scope = self._filter[4:] if self._filter.startswith("sev:") else self._filter
-        return f"fix {scope}…"
+        return f"fix {scope}â€¦"
 
     def on_screen_ready(self) -> None:
         self._app = self.app
@@ -2467,7 +2360,7 @@ class JudgeRunScreen(BaseScreen):
         self._expected_rows = self._count_rows()
         # (source, translation) per row, read once with the count. The live grid
         # needs the source text for a row the moment its verdict lands, and
-        # reading the sheet per row — or per repaint — would be absurd.
+        # reading the sheet per row â€” or per repaint â€” would be absurd.
         self._by_row = {
             row: (source, translation)
             for row, source, translation in self._expected_rows
@@ -2485,8 +2378,8 @@ class JudgeRunScreen(BaseScreen):
         """
         The rows this evaluation will review, read once.
 
-        Only the length is used — it is the denominator of the live progress
-        figure — but reading it here keeps that figure off the repaint path,
+        Only the length is used â€” it is the denominator of the live progress
+        figure â€” but reading it here keeps that figure off the repaint path,
         where it would cost a sheet read eight times a second.
         """
         try:
@@ -2498,14 +2391,14 @@ class JudgeRunScreen(BaseScreen):
 
     def _columns(self) -> list[Column]:
         """
-        Two columns only: Source and Translation (UET_UX §6 grid).
+        Two columns only: Source and Translation (UET_UX Â§6 grid).
 
-        Before/after is not shown as extra columns any more — it lives in the
+        Before/after is not shown as extra columns any more â€” it lives in the
         row popup. The grid stays two columns wide and readable, and status
         (severity, fixed) is carried by the row's colour instead.
 
         While the evaluation is still running the translation column is filled
-        from the live map instead of the report, which does not exist yet — that
+        from the live map instead of the report, which does not exist yet â€” that
         is what lets the grid grow row by row rather than appearing all at once.
         """
         report = self._report
@@ -2518,7 +2411,7 @@ class JudgeRunScreen(BaseScreen):
                 rows=dict(self._live_rows),
                 # The grid only paints flagged rows mid-run; this stat is what
                 # proves the run itself is moving when the grid is quiet.
-                stat=f"{len(self._reviewed_rows):,} reviewed · "
+                stat=f"{len(self._reviewed_rows):,} reviewed Â· "
                      f"{len(self._flagged_live):,} flagged",
             )
             return [live]
@@ -2536,10 +2429,10 @@ class JudgeRunScreen(BaseScreen):
     def _row_styles(self) -> dict[int, str]:
         """
         Row colours for the grid: severity for a flagged row, green for a
-        repaired one, default for a clean row (UET_UX §6).
+        repaired one, default for a clean row (UET_UX Â§6).
 
-        A repaired row keeps its place in whatever filter it was flagged under —
-        it is just green now instead of red — *unless a re-judge flagged it
+        A repaired row keeps its place in whatever filter it was flagged under â€”
+        it is just green now instead of red â€” *unless a re-judge flagged it
         again*: the row is back in `report.issues`, and the colour must say so.
         Green on a row the judge just re-flagged would read as "fixed and
         holding" when it is exactly the opposite, so `report.issues` wins over
@@ -2551,7 +2444,7 @@ class JudgeRunScreen(BaseScreen):
             return styles
         for row in self._before:
             if row not in report.issues:
-                # Repaired and not re-flagged — green. A row that IS in
+                # Repaired and not re-flagged â€” green. A row that IS in
                 # report.issues is painted below with its new severity.
                 styles[row] = OK
         for row, issue in report.issues.items():
@@ -2575,15 +2468,15 @@ class JudgeRunScreen(BaseScreen):
         What to *call* the judge on screen.
 
         The label rather than the raw third id, because for a combo that id is a
-        uuid: "Combo · premium-coding" is what the user picked it by, and a hex
+        uuid: "Combo Â· premium-coding" is what the user picked it by, and a hex
         string in the rail would be unreadable.
         """
         choice = self._choice()
         if choice.is_combo:
-            return f"Group · {choice.label}"
+            return f"Group Â· {choice.label}"
         return choice.label
 
-    # ── Repaint ───────────────────────────────────────────────────────────────
+    # â”€â”€ Repaint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _repaint(self) -> None:
         """
@@ -2641,8 +2534,8 @@ class JudgeRunScreen(BaseScreen):
             source, translation = self._by_row.get(row, ("", ""))
             self._live_rows[row] = translation
             # While the evaluation runs, only the rows the judge actually
-            # FLAGGED enter the grid. The clean ones are real progress — the
-            # bar and the counters move — but painting thousands of passing
+            # FLAGGED enter the grid. The clean ones are real progress â€” the
+            # bar and the counters move â€” but painting thousands of passing
             # rows buries the handful a reviewer came to read, and a clean
             # file looks exactly like a stalled one when both show a wall of
             # green-less lines. Everything reviewed is still kept in memory
@@ -2651,7 +2544,7 @@ class JudgeRunScreen(BaseScreen):
             if issue is None:
                 continue
             fresh.append((row, source))
-            self._live_notes[row] = f"{issue.label} · {issue.comment}"
+            self._live_notes[row] = f"{issue.label} Â· {issue.comment}"
             self._live_styles[row] = _SEVERITY_STYLES.get(
                 getattr(issue, "severity", ""), WARN
             )
@@ -2664,7 +2557,7 @@ class JudgeRunScreen(BaseScreen):
 
         self._restore_anchor(pane, anchor)
 
-    # ── Keeping the view still while rows land ────────────────────────────────
+    # â”€â”€ Keeping the view still while rows land â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _grid_pane(self) -> VerticalScroll | None:
         try:
@@ -2698,7 +2591,7 @@ class JudgeRunScreen(BaseScreen):
         if self._follow_live:
             # Scroll *after* the rebuild's layout has settled. Doing it inline
             # scrolls to the pre-rebuild bottom, then the new rows lay out and
-            # the view lurches again — the "jump/flicker" when a result lands
+            # the view lurches again â€” the "jump/flicker" when a result lands
             # (bug #4). `call_after_refresh` runs once layout is current, so the
             # view moves exactly once, to the real end.
             self.call_after_refresh(self._scroll_pane_end, pane)
@@ -2780,7 +2673,7 @@ class JudgeRunScreen(BaseScreen):
                 ]
             lines += [
                 "",
-                f"[{MUTED}]tokens ~{summary.estimated_tokens:,} est · "
+                f"[{MUTED}]tokens ~{summary.estimated_tokens:,} est Â· "
                 f"{summary.tokens_used:,} used[/]",
             ]
 
@@ -2793,16 +2686,16 @@ class JudgeRunScreen(BaseScreen):
     def _paint_events(self) -> None:
         """The Events panel, fed from the same list the rail used to print."""
         try:
-            self.events.set_events(self._events[-40:] or [f"[{MUTED}]—[/]"])
+            self.events.set_events(self._events[-40:] or [f"[{MUTED}]â€”[/]"])
         except Exception:
             pass
 
     @staticmethod
     def _bar(done: int, total: int, width: int = 16) -> str:
-        """A `████░░░░ 42%` bar. One place, so both feeds read identically."""
+        """A `â–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘ 42%` bar. One place, so both feeds read identically."""
         pct = 0 if total <= 0 else min(100, int(done / total * 100))
         filled = int(width * pct / 100)
-        return f"[{ACCENT}]{'█' * filled}{'░' * (width - filled)}[/] {pct}%"
+        return f"[{ACCENT}]{'â–ˆ' * filled}{'â–‘' * (width - filled)}[/] {pct}%"
 
     def _live_review_lines(self) -> list[str]:
         """The evaluation as it happens: how far along, and what it has flagged."""
@@ -2816,8 +2709,8 @@ class JudgeRunScreen(BaseScreen):
             lines.append(f"{done:,} rows")
         if self._sections_total:
             # The request figure alongside the row one: they answer different
-            # questions — how much of the file is done, and how many calls are
-            # left — and a row count alone hides a run stuck on one slow request.
+            # questions â€” how much of the file is done, and how many calls are
+            # left â€” and a row count alone hides a run stuck on one slow request.
             lines.append(
                 f"[{MUTED}]request {min(self._sections_done + 1, self._sections_total)}"
                 f" of {self._sections_total}[/]"
@@ -2838,8 +2731,8 @@ class JudgeRunScreen(BaseScreen):
         """
         The word the live rail leads with, driven by the lifecycle state.
 
-        `running_word` lets each operation name its own normal-progress verb —
-        "Reviewing", "Repairing", "Re-judging fixes" — while the retry / paused /
+        `running_word` lets each operation name its own normal-progress verb â€”
+        "Reviewing", "Repairing", "Re-judging fixes" â€” while the retry / paused /
         cancelled words stay shared, so every operation shows the same explicit
         lifecycle (bug #4).
         """
@@ -2860,11 +2753,11 @@ class JudgeRunScreen(BaseScreen):
         """
         elapsed = self._elapsed
         if self._run_state == "paused":
-            return f"[{WARN}]{self._fmt_short(elapsed)} elapsed · paused[/]"
+            return f"[{WARN}]{self._fmt_short(elapsed)} elapsed Â· paused[/]"
         if done <= 0 or total <= 0:
-            return f"[{MUTED}]{self._fmt_short(elapsed)} elapsed · estimating…[/]"
+            return f"[{MUTED}]{self._fmt_short(elapsed)} elapsed Â· estimatingâ€¦[/]"
         remaining = (elapsed / done) * max(0, total - done)
-        return (f"[{MUTED}]{self._fmt_short(elapsed)} elapsed · "
+        return (f"[{MUTED}]{self._fmt_short(elapsed)} elapsed Â· "
                 f"~{self._fmt_short(remaining)} left[/]")
 
     @staticmethod
@@ -2893,7 +2786,7 @@ class JudgeRunScreen(BaseScreen):
         lines.append(self._timing_line(done, total))
         lines.append("")
         if not self._fixed_live:
-            lines.append(f"[{MUTED}]waiting for the first reply…[/]")
+            lines.append(f"[{MUTED}]waiting for the first replyâ€¦[/]")
         for row, text, changed in self._fixed_live[-8:]:
             if changed:
                 lines.append(f"[{OK}]{row:>6}[/] {escape_markup(truncate(text, 20))}")
@@ -2941,7 +2834,7 @@ class JudgeRunScreen(BaseScreen):
         # text still reaches the log; this is only the on-screen events rail.
         if body == self._last_log_body and self._events:
             self._last_log_count += 1
-            self._events[-1] = f"[{style or MUTED}]{body}  ×{self._last_log_count}[/]"
+            self._events[-1] = f"[{style or MUTED}]{body}  Ã—{self._last_log_count}[/]"
         else:
             self._last_log_body = body
             self._last_log_count = 1
@@ -2955,7 +2848,7 @@ class JudgeRunScreen(BaseScreen):
         if not self._busy_batch:
             self._paint_rail()
 
-    # ── Evaluation ────────────────────────────────────────────────────────────
+    # â”€â”€ Evaluation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _job(
         self,
@@ -2967,7 +2860,7 @@ class JudgeRunScreen(BaseScreen):
 
         Pacing is derived from the model's own rate limit, at the size of the
         requests Judge actually sends, BUT a manual worker override typed by the
-        user is strictly honoured (UET_UX bug #3 fix) — never recalculated or
+        user is strictly honoured (UET_UX bug #3 fix) â€” never recalculated or
         quietly capped back down.
         """
         provider_id, connection_id, model_id = model_slot or self._model_slot
@@ -3036,7 +2929,7 @@ class JudgeRunScreen(BaseScreen):
         trip it.
 
         Cached per session: the measurement reads and plans the WHOLE file
-        (~0.5-1s), and every operation builds a JobConfig — a single-row
+        (~0.5-1s), and every operation builds a JobConfig â€” a single-row
         re-judge paying that per keystroke was pure hidden latency. The shape
         only changes when the file is written (a Fix All / hand edit), which
         invalidates the cache explicitly.
@@ -3098,7 +2991,7 @@ class JudgeRunScreen(BaseScreen):
         feeds, passed only by the caller that has somewhere to show them.
 
         `registry` is passed as well as `provider` because a combo has no single
-        provider — the runner asks `build_pool`, which needs the registry to
+        provider â€” the runner asks `build_pool`, which needs the registry to
         resolve the combo's members.
         """
         return JudgeRunner(
@@ -3148,7 +3041,7 @@ class JudgeRunScreen(BaseScreen):
 
     def _row_reviewed(self, row: int, issue) -> None:
         """
-        One reviewed row, live — into the grid as well as the rail.
+        One reviewed row, live â€” into the grid as well as the rail.
 
         Queued rather than painted: a section of fifty rows arrives as fifty
         calls within a few milliseconds, and the repaint timer turns the burst
@@ -3168,7 +3061,7 @@ class JudgeRunScreen(BaseScreen):
         The progress figure needs this as well as the per-row one: a request that
         fails or answers in prose reports no rows at all, so a bar fed only by
         rows would stop moving exactly when something has gone wrong. Its rows are
-        counted as done — they will not be reviewed again — while staying out of
+        counted as done â€” they will not be reviewed again â€” while staying out of
         the score, which is `_summarise`'s job.
         """
         self._sections_done += 1
@@ -3197,7 +3090,7 @@ class JudgeRunScreen(BaseScreen):
             n = len(report.failed_sections)
             self._notice.notify_issue(
                 "Some requests failed",
-                f"{n} request(s) — see Workers for details",
+                f"{n} request(s) â€” see Workers for details",
                 kind="warn",
             )
         if self._aborted_run:
@@ -3206,12 +3099,12 @@ class JudgeRunScreen(BaseScreen):
             # connection is back (bug #4).
             self._notice.notify_issue(
                 "Judge paused",
-                f"{self._op_model_id()} — provider unavailable. R retries the "
+                f"{self._op_model_id()} â€” provider unavailable. R retries the "
                 f"unfinished rows.",
                 kind="error",
             )
             self.notify_status(
-                "Paused — the provider became unavailable. Finished rows are "
+                "Paused â€” the provider became unavailable. Finished rows are "
                 "kept; press R to retry the rest when it is back.",
                 WARN,
             )
@@ -3219,11 +3112,11 @@ class JudgeRunScreen(BaseScreen):
         problems = len(report.problem_rows)
         if not problems:
             self.notify_status(
-                "No problems found — every row passed. s for the summary.", OK
+                "No problems found â€” every row passed. s for the summary.", OK
             )
         else:
             self.notify_status(
-                f"{problems} row(s) flagged · f fixes the row under the cursor, "
+                f"{problems} row(s) flagged Â· f fixes the row under the cursor, "
                 f"F fixes what this filter shows, e edits it by hand.",
                 WARN,
             )
@@ -3264,7 +3157,7 @@ class JudgeRunScreen(BaseScreen):
             return
         rows = self._unfinished_rows()
         if not rows:
-            self.notify_status("Nothing is unfinished — the run completed.", MUTED)
+            self.notify_status("Nothing is unfinished â€” the run completed.", MUTED)
             return
         self._busy_batch = True
         self._run_state = "running"
@@ -3273,7 +3166,7 @@ class JudgeRunScreen(BaseScreen):
         self._begin_op("Judge", self._model_slot)
         self.refresh_keys()
         self.notify_status(
-            f"Retrying {len(rows)} unfinished row(s)…", ACCENT
+            f"Retrying {len(rows)} unfinished row(s)â€¦", ACCENT
         )
         self._retry_unfinished(list(rows))
 
@@ -3325,17 +3218,17 @@ class JudgeRunScreen(BaseScreen):
         if remaining:
             self._run_state = "paused"
             self.notify_status(
-                f"{len(remaining)} row(s) still unfinished — the provider may "
+                f"{len(remaining)} row(s) still unfinished â€” the provider may "
                 f"still be unavailable. R retries again.",
                 WARN,
             )
         else:
-            self.notify_status("Retry complete — every row has a verdict now.", OK)
+            self.notify_status("Retry complete â€” every row has a verdict now.", OK)
         self.refresh_keys()
 
     def _fill_grid(self) -> None:
         """
-        Source and translation, two columns, coloured by status (UET_UX §6).
+        Source and translation, two columns, coloured by status (UET_UX Â§6).
 
         The row's colour carries severity (or green once repaired); a short note
         under a still-flagged row names its category. The full comment and the
@@ -3347,7 +3240,7 @@ class JudgeRunScreen(BaseScreen):
         if report is None:
             return
         rows = [(row, source) for row, source, _dst in report.rows]
-        # A short note per still-flagged row — category only, since the colour
+        # A short note per still-flagged row â€” category only, since the colour
         # already says the severity. Fixed rows carry no note: the green row is
         # the whole message, and the detail is one click away.
         notes = {
@@ -3364,7 +3257,7 @@ class JudgeRunScreen(BaseScreen):
             self.grid.set_row_styles(self._row_styles())
         self._apply_filter()
 
-    # ── Filtering ─────────────────────────────────────────────────────────────
+    # â”€â”€ Filtering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _filter_counts(self) -> list[tuple[str, str, int]]:
         """
@@ -3372,7 +3265,7 @@ class JudgeRunScreen(BaseScreen):
         error types that actually occurred.
 
         Counts include repaired rows under their original flag, so the numbers
-        do not shrink as someone fixes — a critical row that has been fixed is
+        do not shrink as someone fixes â€” a critical row that has been fixed is
         still counted under `critical` (and shown green), which keeps the chip a
         stable tally of what the file had rather than what is left. The `fixed`
         chip says how many of those are now green.
@@ -3429,14 +3322,14 @@ class JudgeRunScreen(BaseScreen):
         Row numbers a filter shows. `None` means every row.
 
         A repaired row keeps its place in the filter it was flagged under
-        (UET_UX §6): `_fixed_issue` remembers the flag `report.drop` removed, so
-        a critical row that has been fixed still appears under `critical` — now
-        green — instead of vanishing. The `fixed` chip lists exactly those.
+        (UET_UX Â§6): `_fixed_issue` remembers the flag `report.drop` removed, so
+        a critical row that has been fixed still appears under `critical` â€” now
+        green â€” instead of vanishing. The `fixed` chip lists exactly those.
 
         `problems` counts ONLY the rows still flagged now. It used to include
-        every row ever fixed (flagged ∪ _before), which made the number
+        every row ever fixed (flagged âˆª _before), which made the number
         mathematically incapable of going down no matter how much was repaired
-        — two contradictory numbers on one screen, and the one a user reads as
+        â€” two contradictory numbers on one screen, and the one a user reads as
         "how much is left" lied. The `fixed` chip is the tally of everything
         already repaired; `problems` is what remains.
         """
@@ -3448,11 +3341,11 @@ class JudgeRunScreen(BaseScreen):
         if key == "fixed":
             return sorted(self._before)
         if key == "settled":
-            # Rows whose three fix cycles are spent and are still flagged —
+            # Rows whose three fix cycles are spent and are still flagged â€”
             # the automatic loop is done with them; a human decides.
             return sorted(self._settled_rows)
         if key == "rejudged":
-            # Every row the judge has looked at twice — passed or still wrong,
+            # Every row the judge has looked at twice â€” passed or still wrong,
             # the colour tells them apart. Kept separately from `fixed` because
             # a row can be repaired and not yet re-checked, and vice versa a
             # re-check can cover a row repaired by hand before any Fix All.
@@ -3476,7 +3369,7 @@ class JudgeRunScreen(BaseScreen):
         self.grid.set_row_filter(None if rows is None else set(rows))
         self.filters.set_chips(self._filter_counts(), self._filter)
         # The cursor is a sheet row, so narrowing the view only has to move it
-        # when the row it is on has been hidden — which keeps someone's place
+        # when the row it is on has been hidden â€” which keeps someone's place
         # when they switch to `critical` and back.
         visible = self.grid.visible_rows
         if self._cursor_row not in visible:
@@ -3512,7 +3405,7 @@ class JudgeRunScreen(BaseScreen):
         Keep the cursor row on screen as it moves.
 
         The grid paints two header lines and hangs a note under any row that has
-        one, so a row's y is not its index — it has to be counted, which is what
+        one, so a row's y is not its index â€” it has to be counted, which is what
         `line_of_row` does.
 
         `scroll_target_y` rather than `scroll_y`: with smooth scrolling in flight
@@ -3546,7 +3439,7 @@ class JudgeRunScreen(BaseScreen):
         screen that offers "fix this row" has to let someone choose which row.
 
         While the evaluation is live, moving up also detaches the follow and
-        moving to the last row re-attaches it — the same gesture the translate
+        moving to the last row re-attaches it â€” the same gesture the translate
         feed has, so a row can be read while the report is still growing.
         """
         visible = self.grid.visible_rows
@@ -3585,25 +3478,25 @@ class JudgeRunScreen(BaseScreen):
             self.notify_status(f"showing {shown} flagged row(s)", WARN)
         elif key == "fixed":
             self.notify_status(
-                f"showing {len(self._before)} repaired row(s) — before and after, "
+                f"showing {len(self._before)} repaired row(s) â€” before and after, "
                 f"r reverts the one under the cursor",
                 OK,
             )
         elif key == "rejudged":
             self.notify_status(
-                f"showing {len(self._rejudged_rows)} re-judged row(s) — "
+                f"showing {len(self._rejudged_rows)} re-judged row(s) â€” "
                 f"severity colour = still wrong, green = the fix holds up",
                 ACCENT,
             )
         elif key.startswith("sev:"):
             severity = key[4:]
             self.notify_status(
-                f"showing {shown} {severity} row(s) — f offers just these",
+                f"showing {shown} {severity} row(s) â€” f offers just these",
                 _SEVERITY_STYLES.get(severity, WARN),
             )
         else:
             self.notify_status(
-                f"showing {shown} row(s) with {key} — f offers just these", WARN
+                f"showing {shown} row(s) with {key} â€” f offers just these", WARN
             )
 
     def on_filter_bar_chip_clicked(self, event: "FilterBar.ChipClicked") -> None:
@@ -3622,14 +3515,14 @@ class JudgeRunScreen(BaseScreen):
     def action_prev_filter(self) -> None:
         self._cycle_filter(-1)
 
-    # ── Callbacks from the worker thread ──────────────────────────────────────
+    # â”€â”€ Callbacks from the worker thread â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _on_status(self, status) -> None:
         self._workers[getattr(status, "worker_id", 0)] = status
         # Observe every transition so the panel can hold Success/Failed/Retrying.
         self._ledger.note(status)
 
-    # ── Operation context (UET_UX bug #1/#9) ─────────────────────────────────
+    # â”€â”€ Operation context (UET_UX bug #1/#9) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #
     # Judge, Fix Row, Fix All and Rejudge are separate operations that may run
     # on different models. The status card used to read the model from the Judge
@@ -3641,8 +3534,8 @@ class JudgeRunScreen(BaseScreen):
         self._op_label = label
         self._op_slot = slot or self._model_slot
         # A new operation starts with a clear stop flag: `c` sets it to stop
-        # whatever is running, and without a clear here the next operation —
-        # started after the previous one finished — would be instantly
+        # whatever is running, and without a clear here the next operation â€”
+        # started after the previous one finished â€” would be instantly
         # cancelled by the flag an earlier cancel left behind.
         self._stop.clear()
         # And a fresh cancel window: the double-press force-cancel counts
@@ -3671,7 +3564,7 @@ class JudgeRunScreen(BaseScreen):
         except Exception:
             return self._model_id()
         if choice.is_combo:
-            return f"Group · {choice.label}"
+            return f"Group Â· {choice.label}"
         return choice.label
 
     def _on_event(self, event) -> None:
@@ -3698,7 +3591,7 @@ class JudgeRunScreen(BaseScreen):
                 self._run_state = "retrying"
             self._show_retry(event)
         elif event.kind in ("batch_done", "wave_done"):
-            # A request went through — the connection is working. If a warning
+            # A request went through â€” the connection is working. If a warning
             # card was up, replace it with a brief recovery note, and the state
             # returns to plain running from a transient retry.
             if self._run_state == "retrying":
@@ -3714,7 +3607,7 @@ class JudgeRunScreen(BaseScreen):
             self._issue_active = True
 
     def _show_retry(self, event) -> None:
-        # A retry is temporary by definition — a small warning card, merged.
+        # A retry is temporary by definition â€” a small warning card, merged.
         self._notice.notify_issue(
             f"{self._op_label} retrying",
             self._op_model_id(),
@@ -3728,24 +3621,24 @@ class JudgeRunScreen(BaseScreen):
         model = self._op_model_id()
         if kind == "quota":
             return ("Provider quota reached",
-                    f"{model} — confirmed daily/quota limit", "error")
+                    f"{model} â€” confirmed daily/quota limit", "error")
         if kind == "auth":
-            return ("Authentication failed", f"{model} — check the API key", "error")
+            return ("Authentication failed", f"{model} â€” check the API key", "error")
         if kind == "invalid":
             return ("Request rejected",
-                    f"{model} — invalid request or model", "error")
+                    f"{model} â€” invalid request or model", "error")
         if kind == "server":
             return ("Provider unavailable",
-                    f"{model} — server error, retrying", "warn")
+                    f"{model} â€” server error, retrying", "warn")
         if kind == "rate_limit":
             return ("Rate limited",
-                    f"{model} — temporary, retrying", "warn")
+                    f"{model} â€” temporary, retrying", "warn")
         # Unknown / all-connections-unavailable: neutral, temporary wording. Only
         # a confirmed quota is ever called exhaustion.
         low = (message or "").lower()
         if "unavailable" in low or "cooldown" in low or "rate" in low:
             return ("Provider temporarily unavailable",
-                    f"{model} — paused, retry when it is back", "warn")
+                    f"{model} â€” paused, retry when it is back", "warn")
         return ("Provider issue", f"{model}", "warn")
 
     def _maybe_recover(self) -> None:
@@ -3753,7 +3646,7 @@ class JudgeRunScreen(BaseScreen):
             self._issue_active = False
             self._notice.notify_issue(
                 "Provider recovered",
-                f"{self._op_model_id()} — resumed automatically",
+                f"{self._op_model_id()} â€” resumed automatically",
                 kind="ok",
             )
 
@@ -3774,12 +3667,12 @@ class JudgeRunScreen(BaseScreen):
             else:
                 title, detail, level = (
                     "Provider unavailable",
-                    f"{self._op_model_id()} — may be temporary, try again shortly",
+                    f"{self._op_model_id()} â€” may be temporary, try again shortly",
                     "error",
                 )
             self._notice.notify_issue(title, detail, kind=level)
 
-    # ── Row selection ─────────────────────────────────────────────────────────
+    # â”€â”€ Row selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _current_row(self) -> int:
         """
@@ -3813,7 +3706,7 @@ class JudgeRunScreen(BaseScreen):
         self._open_row(event.row_num)
 
     def action_open_row(self) -> None:
-        """Enter opens the row under the cursor — the one gateway to fixing it."""
+        """Enter opens the row under the cursor â€” the one gateway to fixing it."""
         if self._busy_batch or self._busy_row:
             return
         row = self._current_row()
@@ -3824,7 +3717,7 @@ class JudgeRunScreen(BaseScreen):
         """
         Open one row in the fix popup: read source and comment, edit the
         translation by hand, or hand off to a model. The single entry point for
-        fixing one row — clicking a row and pressing Enter both land here.
+        fixing one row â€” clicking a row and pressing Enter both land here.
         """
         report = self._report
         if report is None or self._busy_batch or self._busy_row:
@@ -3844,9 +3737,9 @@ class JudgeRunScreen(BaseScreen):
     def _row_action(self, row: int, result) -> None:
         """
         The row popup came back with an action:
-          ("edit", text) — a hand edit, applied immediately as a manual Fixed.
-          ("fix", None)  — repair with a model, via the usual model popup.
-          None           — closed with no change.
+          ("edit", text) â€” a hand edit, applied immediately as a manual Fixed.
+          ("fix", None)  â€” repair with a model, via the usual model popup.
+          None           â€” closed with no change.
         """
         if not result:
             return
@@ -3861,7 +3754,7 @@ class JudgeRunScreen(BaseScreen):
         Page through the report.
 
         Paging back detaches the live follow and paging to the bottom re-attaches
-        it, matching what the arrow keys and the wheel do — otherwise PageUp would
+        it, matching what the arrow keys and the wheel do â€” otherwise PageUp would
         move the view and the next section would immediately drag it away again.
         """
         pane = self._grid_pane()
@@ -3878,7 +3771,7 @@ class JudgeRunScreen(BaseScreen):
         if self._follow_live and self._report is None:
             self._follow_live = False
             self.notify_status(
-                "scroll freely — rows keep landing; F follows the latest again",
+                "scroll freely â€” rows keep landing; F follows the latest again",
                 WARN,
             )
             self.refresh_keys()
@@ -3923,8 +3816,8 @@ class JudgeRunScreen(BaseScreen):
         `c` cancels the running operation; on the finished report it confirms
         and saves.
 
-        Cancelling only stops the operation in flight — Fix Row, Fix All,
-        Rejudge, or a paused retry — and stays on the results screen. The
+        Cancelling only stops the operation in flight â€” Fix Row, Fix All,
+        Rejudge, or a paused retry â€” and stays on the results screen. The
         report already on screen and every result that landed before the stop
         are kept; nothing is re-sent, and nothing takes the user back to the
         setup. It is a cancel, not a leave.
@@ -3936,10 +3829,10 @@ class JudgeRunScreen(BaseScreen):
 
     def action_cancel_operation(self) -> None:
         """
-        `c` — stop whatever is running (batch or single-row) and stay here.
+        `c` â€” stop whatever is running (batch or single-row) and stay here.
 
         The FIRST press is a graceful stop: the stop flag is set, and the
-        request in flight is allowed to finish — its reply is real work the
+        request in flight is allowed to finish â€” its reply is real work the
         report keeps. Nothing new is sent after it.
 
         The SECOND press, while the first is still pending, is a force stop:
@@ -3957,7 +3850,7 @@ class JudgeRunScreen(BaseScreen):
             self._force_abort()
             self._run_state = "cancelled"
             self.notify_status(
-                "Force-cancelling — aborting the request in flight…", ERROR,
+                "Force-cancelling â€” aborting the request in flightâ€¦", ERROR,
             )
             self.refresh_keys()
             return
@@ -3967,7 +3860,7 @@ class JudgeRunScreen(BaseScreen):
         if self._busy_batch:
             self._run_state = "cancelled"
         self.notify_status(
-            "Cancelling after the current output — press c again to abort "
+            "Cancelling after the current output â€” press c again to abort "
             "immediately.",
             WARN,
         )
@@ -3978,7 +3871,7 @@ class JudgeRunScreen(BaseScreen):
         Sever every HTTP request this screen's operation has in flight.
 
         Every client the executors built carries this screen's stop event, and
-        the client module keeps a registry of (event → clients); `abort_all_for`
+        the client module keeps a registry of (event â†’ clients); `abort_all_for`
         closes each registered client's live socket. The blocked reads raise
         in their worker threads as cancelled ProviderErrors, which the retry
         loop sees (stop flag set) and gives up on without rotating or
@@ -3991,7 +3884,7 @@ class JudgeRunScreen(BaseScreen):
             abort_all_for(self._stop)
         except Exception:
             # The registry is best-effort: with or without it, the stop flag
-            # alone still ends the run at the next checkpoint — every result
+            # alone still ends the run at the next checkpoint â€” every result
             # already read is kept, and nothing new is sent.
             pass
 
@@ -4002,8 +3895,8 @@ class JudgeRunScreen(BaseScreen):
         `f` while running is the counterpart to scrolling back: a reader who
         paged up to study an earlier flag presses it to catch up with the live
         feed, exactly as the translate run screen's follow key does. Row
-        insertion never forces the view down on its own — scrolling up detaches
-        follow and it stays put — so this is the one gesture that re-attaches it.
+        insertion never forces the view down on its own â€” scrolling up detaches
+        follow and it stays put â€” so this is the one gesture that re-attaches it.
         """
         pane = self._grid_pane()
         if pane is None:
@@ -4024,11 +3917,11 @@ class JudgeRunScreen(BaseScreen):
         self.action_toggle_workers()
 
     def action_toggle_events(self) -> None:
-        """Show or hide the events rail — `e`, or click its header."""
+        """Show or hide the events rail â€” `e`, or click its header."""
         open_now = self.events.toggle()
         self.refresh_keys()
         self.notify_status(
-            "events panel shown" if open_now else "events panel hidden — e to show",
+            "events panel shown" if open_now else "events panel hidden â€” e to show",
             MUTED,
         )
 
@@ -4038,7 +3931,7 @@ class JudgeRunScreen(BaseScreen):
         """Clicking the events header is the same gesture as pressing `e`."""
         self.refresh_keys()
 
-    # ── Fix It (one row, small indicator) ─────────────────────────────────────
+    # â”€â”€ Fix It (one row, small indicator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _fix_row_for(self, row: int) -> None:
         """Repair one row: reuse the session model, or ask for one via popup."""
@@ -4068,7 +3961,7 @@ class JudgeRunScreen(BaseScreen):
         self._busy_row = row
         self._fix_row_slot = slot
         self._begin_op("Fix Row", slot)
-        self.indicator.start(f"fixing row {row}…")
+        self.indicator.start(f"fixing row {row}â€¦")
         self.refresh_keys()
         self._fix_one(row)
 
@@ -4105,7 +3998,7 @@ class JudgeRunScreen(BaseScreen):
             self._fixes_applied,
         )
 
-    # ── Fix All (batch, worker panel) ─────────────────────────────────────────
+    # â”€â”€ Fix All (batch, worker panel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def action_fix_all(self) -> None:
         """
@@ -4120,10 +4013,10 @@ class JudgeRunScreen(BaseScreen):
         `F` repairs the critical rows and leaves everything else alone, which is
         one gesture for what would otherwise be three passes. It works from the
         `fixed` view too, where the scope is the repaired rows a re-judge has
-        flagged again — a second attempt at the ones the first repair did not
+        flagged again â€” a second attempt at the ones the first repair did not
         settle.
 
-        An empty cell is excluded here rather than in the wizard — there is
+        An empty cell is excluded here rather than in the wizard â€” there is
         nothing to repair in a row that was never translated, and it needs a
         translate run instead.
         """
@@ -4133,7 +4026,7 @@ class JudgeRunScreen(BaseScreen):
         visible = self._visible_problems()
         if not visible:
             self.notify_status(
-                "Nothing flagged in this filter — tab to another one, or press e "
+                "Nothing flagged in this filter â€” tab to another one, or press e "
                 "to edit the row under the cursor."
                 if self._filter != "problems"
                 else "Nothing is flagged.",
@@ -4146,7 +4039,7 @@ class JudgeRunScreen(BaseScreen):
         ]
         if not fixable:
             self.notify_status(
-                "The flagged rows are empty cells — translate them instead.", WARN
+                "The flagged rows are empty cells â€” translate them instead.", WARN
             )
             return
         self.app.push_screen(
@@ -4186,8 +4079,8 @@ class JudgeRunScreen(BaseScreen):
         self._begin_op("Fix All", plan.model_slot)
         self.refresh_keys()
         self.notify_status(
-            f"Fixing {len(plan.rows)} row(s) with {plan.model_label} · "
-            f"{plan.rows_per_request} per request · {plan.workers} worker(s)…",
+            f"Fixing {len(plan.rows)} row(s) with {plan.model_label} Â· "
+            f"{plan.rows_per_request} per request Â· {plan.workers} worker(s)â€¦",
             ACCENT,
         )
         self._fix_many(plan)
@@ -4237,7 +4130,7 @@ class JudgeRunScreen(BaseScreen):
         A repair request finished, so all of its rows are settled.
 
         Counted per request as well as per row because a row can be settled
-        without producing a fix — left alone, or failed — and a bar fed only by
+        without producing a fix â€” left alone, or failed â€” and a bar fed only by
         rewrites would understate a run that is going fine.
         """
         self._fix_seen.update(rows)
@@ -4252,12 +4145,12 @@ class JudgeRunScreen(BaseScreen):
             # the notice card; a second panel repeating the same raw strings
             # was the duplication the rail lost space to.
             self._log(
-                f"{len(staged.errors)} fix request(s) failed — see Events for "
+                f"{len(staged.errors)} fix request(s) failed â€” see Events for "
                 f"the provider text", WARN,
             )
             self._notice.notify_issue(
                 "Some fix requests failed",
-                f"{len(staged.errors)} request(s) — see Events for details",
+                f"{len(staged.errors)} request(s) â€” see Events for details",
                 kind="warn",
             )
         if not staged.texts:
@@ -4266,7 +4159,7 @@ class JudgeRunScreen(BaseScreen):
             # point of tracking it separately.
             if staged.unchanged:
                 self.notify_status(
-                    f"{len(staged.unchanged)} row(s) were left as they were — "
+                    f"{len(staged.unchanged)} row(s) were left as they were â€” "
                     f"fixing them would have changed what the source means.",
                     WARN,
                 )
@@ -4284,7 +4177,7 @@ class JudgeRunScreen(BaseScreen):
 
     def _fixes_applied(self, applied: dict[int, str] | None) -> None:
         """
-        Reflect approved rows in the report — they are no longer problems.
+        Reflect approved rows in the report â€” they are no longer problems.
 
         The pre-fix text is kept so the grid can show before and after side by
         side (that is what grows the comparison column), and the view switches to
@@ -4292,13 +4185,13 @@ class JudgeRunScreen(BaseScreen):
         to see it.
 
         The flag each row carried is kept too, because a revert has to put it
-        back — the problem is in the file again the moment the old text is.
+        back â€” the problem is in the file again the moment the old text is.
 
         A "fix" whose text is identical to what the file already held is not a
         repair: writing it changed nothing, so the row keeps its flag and its
         severity colour rather than turning green. A green row that still carries
         the exact text the judge flagged would read as "fixed" while the problem
-        the judge named is still in it — which is precisely what Fix All exists
+        the judge named is still in it â€” which is precisely what Fix All exists
         to remove.
         """
         report = self._report
@@ -4321,8 +4214,8 @@ class JudgeRunScreen(BaseScreen):
                 self._fixed_issue.setdefault(row, issue)
             report.replace_translation(row, text)
             report.drop(row)
-            # The text changed, so any verdict this row earned — including a
-            # pass the noise-suppressor was holding onto — no longer describes
+            # The text changed, so any verdict this row earned â€” including a
+            # pass the noise-suppressor was holding onto â€” no longer describes
             # what is in the file: it must be re-earned on the next re-judge.
             # A settled row that the human chose to rewrite by hand re-enters
             # the loop too: new text, new chance.
@@ -4343,7 +4236,7 @@ class JudgeRunScreen(BaseScreen):
         if unchanged and not changed:
             self.notify_status(
                 f"{len(unchanged)} row(s) were written back IDENTICAL to the "
-                f"file — the problem the judge named is still in them, so they "
+                f"file â€” the problem the judge named is still in them, so they "
                 f"stay flagged. Open a row to edit it by hand, or try a "
                 f"stronger repair model.",
                 WARN,
@@ -4351,19 +4244,19 @@ class JudgeRunScreen(BaseScreen):
         elif unchanged:
             self.notify_status(
                 f"{len(changed)} row(s) written to column "
-                f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
+                f"{ExcelReader.col_letter(self._target.dst_col)} â€” now green. "
                 f"{len(unchanged)} row(s) came back identical and stay flagged.",
                 OK,
             )
         else:
             self.notify_status(
                 f"{len(changed)} row(s) written to column "
-                f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
+                f"{ExcelReader.col_letter(self._target.dst_col)} â€” now green. "
                 f"Click a row to see before/after, g re-judges it, r reverts it.",
                 OK,
             )
 
-    # ── Judge Again (one row, small indicator) ────────────────────────────────
+    # â”€â”€ Judge Again (one row, small indicator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def action_judge_again(self) -> None:
         """
@@ -4371,11 +4264,11 @@ class JudgeRunScreen(BaseScreen):
 
         Works on a flagged row and on a repaired one, which is the point: after a
         fix is applied the row leaves the problem list, and that is exactly the
-        row someone doubts. The loop this screen exists to serve is see → fix →
+        row someone doubts. The loop this screen exists to serve is see â†’ fix â†’
         re-check, and all three steps are keys on this one screen.
 
         A re-judge is a grading job in its own right, so it asks which model to
-        grade with — the Rejudge popup — rather than silently reusing the Judge
+        grade with â€” the Rejudge popup â€” rather than silently reusing the Judge
         or Fix model (UET_UX bug #10).
         """
         row = self._current_row()
@@ -4384,7 +4277,7 @@ class JudgeRunScreen(BaseScreen):
         if self._report is not None and row not in self._report.issues \
                 and row not in self._before:
             self.notify_status(
-                "Row {} was not flagged and has not been repaired — there is "
+                "Row {} was not flagged and has not been repaired â€” there is "
                 "nothing to re-check.".format(row), MUTED
             )
             return
@@ -4440,7 +4333,7 @@ class JudgeRunScreen(BaseScreen):
         self._busy_row = row
         self._rejudge_row_slot = slot
         self._begin_op("Rejudge", slot)
-        self.indicator.start(f"re-judging row {row}…")
+        self.indicator.start(f"re-judging row {row}â€¦")
         self.refresh_keys()
         self._rejudge(row, slot)
 
@@ -4476,8 +4369,8 @@ class JudgeRunScreen(BaseScreen):
         if verdict.passed:
             report.drop(verdict.row)
             self.notify_status(
-                f"Row {verdict.row} passed — the fix holds up."
-                if repaired else f"Row {verdict.row} passed — removed.",
+                f"Row {verdict.row} passed â€” the fix holds up."
+                if repaired else f"Row {verdict.row} passed â€” removed.",
                 OK,
             )
         elif verdict.unparsed:
@@ -4493,7 +4386,7 @@ class JudgeRunScreen(BaseScreen):
             # second pass over exactly these; open the row to edit it by hand
             # when a second pass is not going to help either.
             self.notify_status(
-                f"Row {verdict.row} is still wrong after the fix — "
+                f"Row {verdict.row} is still wrong after the fix â€” "
                 f"{escape_markup(verdict.issue.label) if verdict.issue else 'flagged'}"
                 f". f retries the repaired rows, open it to edit, r reverts it."
                 if repaired else f"Row {verdict.row} is still flagged.",
@@ -4502,7 +4395,7 @@ class JudgeRunScreen(BaseScreen):
         self._fill_grid()
         self._paint_rail()
 
-    # ── Judge Again, every applied fix (batch, worker panel) ──────────────────
+    # â”€â”€ Judge Again, every applied fix (batch, worker panel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def action_judge_again_fixed(self) -> None:
         """
@@ -4510,8 +4403,8 @@ class JudgeRunScreen(BaseScreen):
 
         `g` sends one row on its own, and that is where the false negatives come
         from: a lone row has no neighbours, so every question that needs
-        comparison — is this name spelled the way the rest of the file spells it,
-        does this register match the lines around it — cannot be answered, and a
+        comparison â€” is this name spelled the way the rest of the file spells it,
+        does this register match the lines around it â€” cannot be answered, and a
         whole class of problem passes by default.
 
         So this goes down the batch path instead: `plan()` + `evaluate()`, the
@@ -4539,10 +4432,10 @@ class JudgeRunScreen(BaseScreen):
             settled = len(self._settled_rows)
             self.notify_status(
                 "Nothing left to re-judge automatically."
-                + (f" {settled} row(s) are settled after 3 fix cycles — "
+                + (f" {settled} row(s) are settled after 3 fix cycles â€” "
                    f"open them to review by hand." if settled else "")
                 if self._settled_rows else
-                "Nothing has been written yet — G re-checks the rows an applied "
+                "Nothing has been written yet â€” G re-checks the rows an applied "
                 "fix changed. A staged fix is not in the file, so there is "
                 "nothing to read back.",
                 MUTED,
@@ -4568,7 +4461,7 @@ class JudgeRunScreen(BaseScreen):
         self.refresh_keys()
         self.notify_status(
             f"Re-judging {len(rows)} applied fix(es) the same way the first "
-            f"evaluation did — batched, with neighbours…",
+            f"evaluation did â€” batched, with neighboursâ€¦",
             ACCENT,
         )
         self._rejudge_many(list(rows), slot, workers=workers)
@@ -4619,7 +4512,7 @@ class JudgeRunScreen(BaseScreen):
         )
 
     def _rejudge_row_landed(self, row: int, issue) -> None:
-        """One re-checked row, live — the same feed the evaluation has."""
+        """One re-checked row, live â€” the same feed the evaluation has."""
         self._rejudge_seen.add(row)
         if issue is not None:
             self._rejudge_flagged.append((row, issue))
@@ -4640,8 +4533,8 @@ class JudgeRunScreen(BaseScreen):
         """
         Fold the second verdict into the report already on screen.
 
-        The old flag goes whatever happens — it described text that is no longer
-        in the file — and a row that is still wrong is flagged again with what
+        The old flag goes whatever happens â€” it described text that is no longer
+        in the file â€” and a row that is still wrong is flagged again with what
         the re-judge said. A row in a request that failed or answered in prose is
         left exactly as it was: it was not judged, and treating that as a pass is
         the false negative this whole path exists to remove.
@@ -4655,7 +4548,7 @@ class JudgeRunScreen(BaseScreen):
             return
         if fresh is None or not rows:
             self.notify_status(
-                "Those rows are no longer in the evaluated range — nothing was "
+                "Those rows are no longer in the evaluated range â€” nothing was "
                 "re-judged.", WARN
             )
             return
@@ -4688,7 +4581,7 @@ class JudgeRunScreen(BaseScreen):
             if row in self._verdict_stable and \
                     getattr(issue, "severity", "") != "critical":
                 # Layer 2 suppression: this row already passed a re-judge and
-                # the new finding is not critical — keep the pass, drop the
+                # the new finding is not critical â€” keep the pass, drop the
                 # flag. The verdict stays stable in the report and the count
                 # stays converged.
                 held_stable.append(row)
@@ -4711,7 +4604,7 @@ class JudgeRunScreen(BaseScreen):
             # Per-request provider failures already reach the Events rail and
             # the notice card; the ErrorBox below is for terminal failures only.
             self._log(
-                f"{len(fresh.failed_sections)} re-judge request(s) failed — "
+                f"{len(fresh.failed_sections)} re-judge request(s) failed â€” "
                 f"see Events for the provider text", WARN,
             )
 
@@ -4730,20 +4623,20 @@ class JudgeRunScreen(BaseScreen):
             parts.append(f"{len(still)} still wrong")
         if newly_settled:
             parts.append(
-                f"{len(newly_settled)} settled after 3 cycles — needs manual "
+                f"{len(newly_settled)} settled after 3 cycles â€” needs manual "
                 f"review"
             )
         skipped = len(unevaluated & set(rows))
         if skipped:
             parts.append(f"{skipped} unjudged (request failed)")
         self.notify_status(
-            " · ".join(parts)
+            " Â· ".join(parts)
             + (". f retries the ones still flagged, open a row to edit by hand."
                if still else "."),
             ERROR if still else OK,
         )
 
-    # ── Editing by hand ───────────────────────────────────────────────────────
+    # â”€â”€ Editing by hand â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _edited(self, row: int, text: str | None) -> None:
         """
@@ -4760,12 +4653,12 @@ class JudgeRunScreen(BaseScreen):
         text = text.strip()
         if not text:
             self.notify_status(
-                "An empty cell is what Judge flags as a problem — nothing written.",
+                "An empty cell is what Judge flags as a problem â€” nothing written.",
                 WARN,
             )
             return
         if text == (report.translation_for(row) or "").strip():
-            self.notify_status("Unchanged — nothing written.", MUTED)
+            self.notify_status("Unchanged â€” nothing written.", MUTED)
             return
 
         runner = self._runner or self._make_runner()
@@ -4785,7 +4678,7 @@ class JudgeRunScreen(BaseScreen):
         report.replace_translation(row, text)
         report.drop(row)
         # New text: any prior verdict is void, and a settled row re-enters
-        # the loop — a human rewrite deserves a fresh check.
+        # the loop â€” a human rewrite deserves a fresh check.
         self._verdict_stable.discard(row)
         self._settled_rows.discard(row)
         self._fix_cycles.pop(row, None)
@@ -4794,12 +4687,12 @@ class JudgeRunScreen(BaseScreen):
         self._cursor_row = row
         self._fill_grid()
         # The row stays put in its filter, now green. Keep the cursor on it so
-        # the follow-up — check it, undo it — needs no travel.
+        # the follow-up â€” check it, undo it â€” needs no travel.
         self._follow_row(row)
         self._paint_rail()
         self.notify_status(
             f"Row {row} written by hand to column "
-            f"{ExcelReader.col_letter(self._target.dst_col)} — now green. "
+            f"{ExcelReader.col_letter(self._target.dst_col)} â€” now green. "
             f"g re-judges it, r reverts it.",
             OK,
         )
@@ -4809,7 +4702,7 @@ class JudgeRunScreen(BaseScreen):
         Keep the cursor on a row after an action, staying in the current filter.
 
         A repaired row keeps its place in whatever filter it was in (now green),
-        so there is no need to switch views — only to make sure the cursor lands
+        so there is no need to switch views â€” only to make sure the cursor lands
         on it and it is scrolled into sight.
         """
         report = self._report
@@ -4831,7 +4724,7 @@ class JudgeRunScreen(BaseScreen):
         self._sync_cursor()
         self.refresh_keys()
 
-    # ── Reverting ─────────────────────────────────────────────────────────────
+    # â”€â”€ Reverting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def action_revert_row(self) -> None:
         """
@@ -4839,7 +4732,7 @@ class JudgeRunScreen(BaseScreen):
 
         A fix can be worse than what it replaced, and until now the only way back
         was to remember the old text and retype it. The pre-fix text is already
-        kept for the comparison column, so the undo costs nothing to offer — and
+        kept for the comparison column, so the undo costs nothing to offer â€” and
         the flag comes back with it, because the problem is in the file again.
         """
         row = self._current_row()
@@ -4891,19 +4784,19 @@ class JudgeRunScreen(BaseScreen):
         self._paint_rail()
         self.notify_status(
             f"Row {row} reverted to what it said before the fix"
-            + (" — flagged again." if issue is not None else "."),
+            + (" â€” flagged again." if issue is not None else "."),
             WARN,
         )
 
-    # ── Leaving ───────────────────────────────────────────────────────────────
+    # â”€â”€ Leaving â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def action_confirm_save(self) -> None:
         """
-        Confirm & Save (UET_UX §6): show Problems / Fixed / Remaining, then go
+        Confirm & Save (UET_UX Â§6): show Problems / Fixed / Remaining, then go
         to the summary.
 
-        Applied fixes are already written to the file — `apply_fix` is the only
-        writer and runs when a fix is approved — so this is a confirmation and a
+        Applied fixes are already written to the file â€” `apply_fix` is the only
+        writer and runs when a fix is approved â€” so this is a confirmation and a
         way out, not a second write. It states what still stands so leaving is a
         decision rather than a drift.
         """
@@ -4936,7 +4829,7 @@ class JudgeRunScreen(BaseScreen):
             self.app.pop_screen()
 
 
-# ── Fix All setup ─────────────────────────────────────────────────────────────
+# â”€â”€ Fix All setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class FixAllPlan:
@@ -4967,12 +4860,12 @@ class FixAllPlan:
     def model_label(self) -> str:
         """
         The name to print. For a combo the slot carries a uuid, so it is resolved
-        to the combo's name — a hex string in a status line tells nobody anything.
+        to the combo's name â€” a hex string in a status line tells nobody anything.
         """
         provider_id, _connection_id, model_id = self.model_slot
         if provider_id == COMBO_PROVIDER_ID:
             combo = find_combo(model_id)
-            return f"Group · {combo.label}" if combo else "Group · (missing)"
+            return f"Group Â· {combo.label}" if combo else "Group Â· (missing)"
         return model_id
 
     @property
@@ -4983,27 +4876,27 @@ class FixAllPlan:
 
 class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
     """
-    The popup between pressing Fix All and anything being sent (UET_UX §6).
+    The popup between pressing Fix All and anything being sent (UET_UX Â§6).
 
     A popup rather than a screen: the Judge Results panel stays visible behind
     it, so scope and model are chosen without losing sight of the report they
-    act on — the same overlay treatment single-row Fix already gets.
+    act on â€” the same overlay treatment single-row Fix already gets.
 
     Fix All spends real tokens and rewrites lines a human may not have read, so
     it does not start on a keystroke. Four decisions live here:
 
-      **model** — repairing is a different job from reviewing, and a model that
+      **model** â€” repairing is a different job from reviewing, and a model that
         grades well is not always the one that writes well. Defaults to the
         Judge model, because that is the least surprising answer and often right.
-      **categories and severities** — two filters, ANDed. Narrowing is the point:
+      **categories and severities** â€” two filters, ANDed. Narrowing is the point:
         "fix the critical placeholder problems and leave the register alone" is a
         sentence a user can mean, and without both filters it takes three passes.
-      **rows per request** — opens at the Settings default (20). A repair reply
+      **rows per request** â€” opens at the Settings default (20). A repair reply
         is a whole rewritten line per row, so a model asked for fifty at once
         starts merging and dropping them; lower it for a model that does, raise
-        it for one that copes. What is typed here applies to this run only —
+        it for one that copes. What is typed here applies to this run only â€”
         changing the default is a Settings act (CR-002 FR-613).
-      **workers** — pre-filled from the rate limit arithmetic, editable because
+      **workers** â€” pre-filled from the rate limit arithmetic, editable because
         the derivation assumes a request duration it cannot measure.
 
     The severity block is hidden entirely when the evaluation was not graded.
@@ -5046,20 +4939,20 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         # the Judge Results panel stays behind it the whole time.
         self._step = 1
 
-    # ── Layout ────────────────────────────────────────────────────────────────
+    # â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal"):
             yield Label("Fix All", classes="title")
-            scope = f" · {self._scope}" if self._scope else ""
+            scope = f" Â· {self._scope}" if self._scope else ""
             yield Label(
                 f"{len(self._offered)} flagged row(s){scope}",
                 classes="hint",
             )
 
             with VerticalScroll(id="fix-all-body"):
-                # Step 1: one combined checkbox list — categories and severity in
-                # a single Picker, so ↑↓ walks the whole thing without Tab.
+                # Step 1: one combined checkbox list â€” categories and severity in
+                # a single Picker, so â†‘â†“ walks the whole thing without Tab.
                 self._filters = Picker(multi_select=True)
                 yield self._filters
 
@@ -5124,22 +5017,22 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         self._error.clear()
         if step == 1:
             self._confirm.set_options([
-                Option("Next →", "next", style=OK),
+                Option("Next â†’", "next", style=OK),
                 Option("Cancel", "cancel"),
             ])
             self._hints.set_keys([
-                ("↑↓", "move"), ("space", "tick"), ("a", "all"), ("n", "none"),
-                ("⏎", "next"), ("esc", "cancel"),
+                ("â†‘â†“", "move"), ("space", "tick"), ("a", "all"), ("n", "none"),
+                ("âŽ", "next"), ("esc", "cancel"),
             ])
             self._filters.focus()
         else:
             self._confirm.set_options([
                 Option("Start fixing", "go", style=OK),
-                Option("← Back", "back"),
+                Option("â† Back", "back"),
                 Option("Cancel", "cancel"),
             ])
             self._hints.set_keys([
-                ("↑↓", "move"), ("tab", "field"), ("⏎", "start"), ("esc", "cancel"),
+                ("â†‘â†“", "move"), ("tab", "field"), ("âŽ", "start"), ("esc", "cancel"),
             ])
             self._paint_scope()
             self._model.focus()
@@ -5158,7 +5051,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             return
         self._show_step(2)
 
-    # ── Options ───────────────────────────────────────────────────────────────
+    # â”€â”€ Options â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _model_options(self) -> list[Option]:
         """
@@ -5167,7 +5060,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         Listed flat rather than as three columns: this is a single choice on a
         screen that already has four, and the provider/connection cascade would
         dominate it. Combos are listed at the end of the models for the same
-        reason they are a separate column entry elsewhere — they are a different
+        reason they are a separate column entry elsewhere â€” they are a different
         kind of thing, and mixing them in would hide that.
         """
         options: list[Option] = []
@@ -5180,7 +5073,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
                     options.append(Option(
                         model.label + ("   (judge model)" if is_judge else ""),
                         slot,
-                        hint=f"{provider.name} · {connection.name} · "
+                        hint=f"{provider.name} Â· {connection.name} Â· "
                              f"{model.preset.label()}",
                         style=OK if is_judge else "",
                     ))
@@ -5192,16 +5085,16 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             slot = (COMBO_PROVIDER_ID, "", combo.id)
             is_judge = slot == current
             options.append(Option(
-                f"Group · {combo.label}"
+                f"Group Â· {combo.label}"
                 + ("   (judge model)" if is_judge else ""),
                 slot,
-                hint=f"{combo.size} model(s) · "
+                hint=f"{combo.size} model(s) Â· "
                      f"{combo.strategy.replace('_', '-')}",
                 style=OK if is_judge else ACCENT,
             ))
         options.sort(key=lambda option: option.value != current)
         return options or [
-            Option("No models available — add one under Providers & Models", None,
+            Option("No models available â€” add one under Providers & Models", None,
                    enabled=False, style=MUTED)
         ]
 
@@ -5252,7 +5145,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             ))
         return options
 
-    # ── Live scope ────────────────────────────────────────────────────────────
+    # â”€â”€ Live scope â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _chosen_criteria(self) -> list[str]:
         return [
@@ -5296,7 +5189,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
 
         Recomputed as the batch changes, because the two are not independent: a
         bigger repair request costs more tokens, so a TPM allowance affords fewer
-        of them. For a combo it is the combo's own limit — the same rule as
+        of them. For a combo it is the combo's own limit â€” the same rule as
         everywhere else, including "0 means no limit, so the parallel cap decides".
         """
         slot = self._chosen_slot()
@@ -5328,17 +5221,17 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             )
             if choice.is_combo and choice.combo is not None:
                 lines.append(
-                    f"[{MUTED}]Group[/]     {escape_markup(choice.combo.label)} · "
-                    f"{choice.combo.size} model(s) · "
+                    f"[{MUTED}]Group[/]     {escape_markup(choice.combo.label)} Â· "
+                    f"{choice.combo.size} model(s) Â· "
                     f"{choice.combo.strategy.replace('_', '-')}"
                 )
         if not rows:
             lines.append(
-                f"[{WARN}]Nothing matches both filters — widen one of them.[/]"
+                f"[{WARN}]Nothing matches both filters â€” widen one of them.[/]"
             )
         panel.update("\n".join(lines))
 
-    # ── Events ────────────────────────────────────────────────────────────────
+    # â”€â”€ Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
         if event.picker is self._model:
@@ -5394,7 +5287,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
                 self.action_cancel()
             return
         if event.picker is self._filters:
-            # Enter on the combined checkbox list means "done choosing" → Next.
+            # Enter on the combined checkbox list means "done choosing" â†’ Next.
             self._next_step()
             return
         if event.picker is self._model:
@@ -5415,7 +5308,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             option.selected = False
         self._filters.refresh()
 
-    # ── Confirming ────────────────────────────────────────────────────────────
+    # â”€â”€ Confirming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _start(self) -> None:
         self._error.clear()
@@ -5425,7 +5318,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
             return
         if not self._chosen_criteria():
             self._error.show(
-                "Tick at least one category — there is nothing to fix otherwise.",
+                "Tick at least one category â€” there is nothing to fix otherwise.",
                 "cannot start",
             )
             return
@@ -5453,7 +5346,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         # Per-model and persisted: ticking stores this model's rows/workers in
         # the app preferences, so the next Fix All that opens on this model is
         # prefilled with them; unticking removes the entry. The scope filters
-        # are never remembered (UET_UX §6).
+        # are never remembered (UET_UX Â§6).
         from ...data.app_prefs import remember_judge_settings
 
         remember_judge_settings(
@@ -5481,7 +5374,7 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         self.dismiss(None)
 
 
-# ── Review and approve ────────────────────────────────────────────────────────
+# â”€â”€ Review and approve â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeFixReviewScreen(ModalScreen["dict | None"]):
     """
@@ -5556,7 +5449,7 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
                         f"left as they were."
                     )
                 if extra:
-                    yield Label(" · ".join(extra), classes="hint")
+                    yield Label(" Â· ".join(extra), classes="hint")
             with Vertical(id="fix-review-foot"):
                 self._error = ErrorBox()
                 yield self._error
@@ -5566,8 +5459,8 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
                 ], id="fix-review-actions")
                 yield self._confirm
                 yield KeyHints([
-                    ("↑↓", "move"), ("space", "toggle"), ("a", "all"), ("n", "none"),
-                    ("e", "edit"), ("⏎", "apply"), ("esc", "discard"),
+                    ("â†‘â†“", "move"), ("space", "toggle"), ("a", "all"), ("n", "none"),
+                    ("e", "edit"), ("âŽ", "apply"), ("esc", "discard"),
                 ])
 
     def on_mount(self) -> None:
@@ -5618,7 +5511,7 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
         """
         Amend the staged text for the row under the cursor.
 
-        Still staged afterwards — this changes the proposal, not the file, so the
+        Still staged afterwards â€” this changes the proposal, not the file, so the
         row keeps its checkbox and the write still waits for Apply.
         """
         option = self.picker.current
@@ -5642,9 +5535,9 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
         text = text.strip()
         if not text:
             # Blanking a staged fix means "do not apply this one", which is what
-            # the checkbox is for — and writing an empty cell is what Judge flags.
+            # the checkbox is for â€” and writing an empty cell is what Judge flags.
             self.notify_status(
-                "An empty fix is not applied — untick the row instead.", WARN
+                "An empty fix is not applied â€” untick the row instead.", WARN
             )
             return
         if text == (self._staged.texts.get(row) or "").strip():
@@ -5661,7 +5554,7 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
             for number in self._staged.rows
         ], keep_index=True)
         self._show_detail()
-        self.notify_status(f"Row {row} edited — still staged, apply to write.", OK)
+        self.notify_status(f"Row {row} edited â€” still staged, apply to write.", OK)
 
     def notify_status(self, message: str, style: str = "") -> None:
         # A modal has no footer StatusBar of its own; surface transient notes
@@ -5693,7 +5586,7 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
             option.value for option in self.picker.options if option.selected
         ]
         if not approved:
-            self._error.show("Nothing is ticked — tick a row or discard.", "cannot apply")
+            self._error.show("Nothing is ticked â€” tick a row or discard.", "cannot apply")
             return
         try:
             written = self._runner.apply_fix(self._staged.texts, approved=approved)
@@ -5716,18 +5609,18 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
         self.action_discard()
 
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# â”€â”€ Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class JudgeSummaryScreen(MenuScreen):
     """
-    Score, problem count, error-type distribution — on screen only (FR-114).
+    Score, problem count, error-type distribution â€” on screen only (FR-114).
 
     No export, no report file. The decision was deliberate: a saved report goes
     stale the moment a row is fixed, and a stale quality report is worse than
     none (ADR-001).
     """
 
-    breadcrumb = "Judge · summary"
+    breadcrumb = "Judge Â· summary"
     title_text = "Evaluation summary"
 
     def __init__(self, report: JudgeReport, target: JudgeTarget, **kwargs) -> None:
@@ -5753,10 +5646,10 @@ class JudgeSummaryScreen(MenuScreen):
         if summary.unevaluated:
             lines.append(
                 f"[{WARN}]unjudged[/]    {summary.unevaluated:>8,}   "
-                f"a request failed — these were never reviewed"
+                f"a request failed â€” these were never reviewed"
             )
         lines += [
-            f"[{MUTED}]───────────────────[/]",
+            f"[{MUTED}]â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€[/]",
             f"total       {summary.total:>8,}",
             "",
         ]
@@ -5767,7 +5660,7 @@ class JudgeSummaryScreen(MenuScreen):
             lines.append(f"[bold {ACCENT}]Severity[/]")
             width = max(1, summary.problem_rows)
             for name, count in summary.ranked_severities():
-                bar = "█" * max(1, round(20 * count / width))
+                bar = "â–ˆ" * max(1, round(20 * count / width))
                 style = _SEVERITY_STYLES.get(name, WARN)
                 lines.append(f"  {name:<15}{count:>5,}  [{style}]{bar}[/]")
             lines.append("")
@@ -5776,7 +5669,7 @@ class JudgeSummaryScreen(MenuScreen):
             lines.append(f"[bold {ACCENT}]Error types[/]")
             width = max(1, summary.problem_rows)
             for name, count in summary.ranked_distribution():
-                bar = "█" * max(1, round(20 * count / width))
+                bar = "â–ˆ" * max(1, round(20 * count / width))
                 lines.append(f"  {name:<15}{count:>5,}  [{WARN}]{bar}[/]")
             lines.append(
                 f"  [{MUTED}]a row can carry more than one type, so these "
@@ -5791,10 +5684,10 @@ class JudgeSummaryScreen(MenuScreen):
             f"[{MUTED}]column      {ExcelReader.col_letter(self._target.dst_col)}[/]",
             f"[{MUTED}]criteria    {escape_markup(', '.join(report.criteria))}[/]",
             f"[{MUTED}]grading     {report.grading_mode}[/]",
-            f"[{MUTED}]tokens      ~{summary.estimated_tokens:,} estimated · "
+            f"[{MUTED}]tokens      ~{summary.estimated_tokens:,} estimated Â· "
             f"{summary.tokens_used:,} used[/]",
             "",
-            f"[{MUTED}]This report is on screen only — nothing was written to "
+            f"[{MUTED}]This report is on screen only â€” nothing was written to "
             f"disk, and no fix was applied without approval.[/]",
         ]
         return "\n".join(lines)
@@ -5808,14 +5701,14 @@ class JudgeSummaryScreen(MenuScreen):
         ]
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("⏎", "select"), ("←", "back")]
+        return [("â†‘â†“", "move"), ("âŽ", "select"), ("â†", "back")]
 
     def handle_choice(self, option: Option) -> None:
         if option.value == "home":
             self.app.go_home()
         elif option.value == "again":
             # A full re-evaluation from scratch, carrying the file and columns so
-            # the setup only asks for a model again (UET_UX §6 Judge Again).
+            # the setup only asks for a model again (UET_UX Â§6 Judge Again).
             job = JobConfig(
                 provider_id="",
                 model_id="",
@@ -5843,7 +5736,7 @@ class RowEditModal(ModalScreen[str | None]):
 
     The escape hatch the fix loop needs. A model that has already failed twice on
     a line will fail a third time, and the person reading the file usually knows
-    what it should say — so at some point the useful thing is a text box, not
+    what it should say â€” so at some point the useful thing is a text box, not
     another request. The source and the AI's complaint stay on screen while the
     text is edited, because they are what the edit is answering.
 
@@ -5900,19 +5793,19 @@ class RowEditModal(ModalScreen[str | None]):
                 self._editor = LabeledTextArea(
                     "TRANSLATION",
                     value=self._text,
-                    hint="⏎ saves · ctrl+j new line · esc cancels",
+                    hint="âŽ saves Â· ctrl+j new line Â· esc cancels",
                     min_lines=3,
                     max_lines=10,
                 )
                 yield self._editor
-                yield KeyHints([("⏎", "save"), ("ctrl+j", "new line"), ("esc", "cancel")])
+                yield KeyHints([("âŽ", "save"), ("ctrl+j", "new line"), ("esc", "cancel")])
 
     def on_mount(self) -> None:
         self._editor.focus_input()
         # Cursor at the end, not the start: this box opens pre-filled, and typing
         # into it should extend the line rather than push characters in front of
         # it. Someone replacing the whole thing selects or deletes; someone
-        # tweaking the tail — the common case — just types.
+        # tweaking the tail â€” the common case â€” just types.
         try:
             area = self._editor.area
             area.move_cursor(area.document.end)
@@ -5936,7 +5829,7 @@ class ConfirmRevertModal(ModalScreen[bool]):
     A revert overwrites a cell, so it is the same class of action as applying a
     fix and gets the same treatment: both versions on screen, and a deliberate
     choice between them. Reading the two side by side is also the only way to
-    answer the question that prompted it — whether the repair actually made
+    answer the question that prompted it â€” whether the repair actually made
     things worse.
     """
 
@@ -5979,7 +5872,7 @@ class ConfirmRevertModal(ModalScreen[bool]):
                     Option("Keep the repair", "keep"),
                 ])
                 yield self.picker
-                yield KeyHints([("↑↓", "move"), ("⏎", "select"), ("esc", "cancel")])
+                yield KeyHints([("â†‘â†“", "move"), ("âŽ", "select"), ("esc", "cancel")])
 
     def on_mount(self) -> None:
         self.picker.focus()
@@ -5993,9 +5886,9 @@ class ConfirmRevertModal(ModalScreen[bool]):
 
 class ConfirmSaveModal(ModalScreen[bool]):
     """
-    Confirm and Save the evaluation (UET_UX §6).
+    Confirm and Save the evaluation (UET_UX Â§6).
 
-    States what still stands — Problems, Fixed, Remaining — so leaving the
+    States what still stands â€” Problems, Fixed, Remaining â€” so leaving the
     results screen is a decision rather than a drift. Applied fixes are already
     on disk (`apply_fix` is the only writer), so this confirms and exits to the
     summary; it never writes a second time.
@@ -6017,7 +5910,7 @@ class ConfirmSaveModal(ModalScreen[bool]):
                 f"Fixed      {self._fixed:>6,}\n"
                 f"Remaining  {self._remaining:>6,}\n\n"
                 "Approved fixes are already written to the file. Remaining "
-                "rows are still flagged — you can keep fixing, or save and "
+                "rows are still flagged â€” you can keep fixing, or save and "
                 "review the summary."
             ), classes="panel")
             self.picker = Picker([
@@ -6025,7 +5918,7 @@ class ConfirmSaveModal(ModalScreen[bool]):
                 Option("Keep working", "stay"),
             ])
             yield self.picker
-            yield KeyHints([("↑↓", "move"), ("⏎", "select"), ("esc", "cancel")])
+            yield KeyHints([("â†‘â†“", "move"), ("âŽ", "select"), ("esc", "cancel")])
 
     def on_mount(self) -> None:
         self.picker.focus()

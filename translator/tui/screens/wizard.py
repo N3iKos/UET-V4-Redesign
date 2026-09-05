@@ -367,114 +367,21 @@ class OperationModeScreen(WizardMenuScreen):
 
     def handle_choice(self, option: Option) -> None:
         self.draft["op_mode"] = option.value
-        self.app.push_screen(FileSelectScreen())
+        from .file_engine import FileEngineScreen
+        self.app.push_screen(FileEngineScreen(
+            on_accept=self._file_engine_accepted,
+            next_screen=lambda: ColumnsScreen(),
+            existing_path=self.draft.get("src_path", ""),
+        ))
 
-
-# ── Step 3: file ──────────────────────────────────────────────────────────────
-
-class FileSelectScreen(WizardScreen):
-    """
-    Pick the spreadsheet, on its own screen (UET_UX §5).
-
-    File selection is kept apart from column mapping — the same shape Judge
-    uses — so a folder with dozens of files does not force the column form to be
-    scrolled past. Pick a file (or type a path), then move on to the columns.
-    """
-
-    step = 3
-
-    def compose_body(self) -> ComposeResult:
-        yield Label("Select a spreadsheet", classes="title")
-        yield Label(f".xlsx / .csv files in {os.getcwd()}", classes="muted")
-        self.picker = Picker()
-        yield self.picker
-        yield Label("")
-        self._path = LabeledInput("Or type a path",
-                                  placeholder="/path/to/file.xlsx or .csv")
-        yield self._path
-        yield Static("", id="out-note", classes="hint")
-        yield Label("", id="file-error", classes="error")
-
-    def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("⏎", "select"), ("←", "back"), ("esc", "cancel")]
-
-    def on_screen_ready(self) -> None:
-        files = ExcelReader.scan_directory(os.getcwd())
-        options = []
-        for name in files:
-            full = os.path.join(os.getcwd(), name)
-            try:
-                size = os.path.getsize(full) / 1024
-                size_text = f"{size / 1024:.1f} MB" if size > 1024 else f"{size:.0f} KB"
-            except OSError:
-                size_text = "?"
-            options.append(Option(name, full, hint=size_text))
-        if not options:
-            options.append(
-                Option("No spreadsheet found here — type a path below", "",
-                       enabled=False)
-            )
-        self.picker.set_options(options)
-        existing = self.draft.get("src_path", "")
-        for index, option in enumerate(options):
-            if option.value == existing:
-                self.picker.index = index
-                break
-        self.picker.focus()
-        self._show_output_note()
-
-    def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
-        self._show_output_note()
-
-    def on_picker_selected(self, event: Picker.Selected) -> None:
-        if event.option.value:
-            self._accept(str(event.option.value))
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        self._show_output_note()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self._accept(self._path.value)
-
-    def _current_path(self) -> str:
-        typed = (self._path.input.value or "").strip().strip('"')
-        if typed:
-            return os.path.expanduser(typed)
-        option = self.picker.current
-        return str(option.value) if option and option.value else ""
-
-    def _show_output_note(self) -> None:
-        note = self.query_one("#out-note", Static)
-        path = self._current_path()
-        if not path:
-            note.update("")
-            return
-        out = translated_path(path)
-        name = os.path.basename(out)
-        if os.path.exists(out):
-            note.update(Text.assemble(
-                ("Writes to ", MUTED), (name, OK),
-                (" — exists, already-filled rows will be skipped (resume).", MUTED),
-            ))
-        else:
-            note.update(Text.assemble(
-                ("Writes to ", MUTED), (name, OK),
-                ("  ·  your source file is never modified.", MUTED),
-            ))
-
-    def _accept(self, path: str) -> None:
-        path = os.path.expanduser((path or "").strip().strip('"'))
-        error = self.query_one("#file-error", Label)
-        if not path or not os.path.isfile(path):
-            error.update(f"File not found: {path}")
-            return
+    def _file_engine_accepted(self, path: str, engine: str) -> None:
         if path != self.draft.get("src_path"):
             # A different file invalidates the columns picked for the old one.
             for key in ("src_col", "dst_col", "ctx_col", "repair_col"):
                 self.draft.pop(key, None)
         self.draft["src_path"] = path
         self.draft["out_path"] = translated_path(path)
-        self.app.push_screen(ColumnsScreen())
+        self.draft["fitting_engine"] = engine
 
 
 # ── Step 4: columns ───────────────────────────────────────────────────────────
@@ -1168,7 +1075,7 @@ class _TranslateEditScreen(WizardMenuScreen):
         target = {
             "model": ModelSelectScreen,
             "operation": OperationModeScreen,
-            "file": FileSelectScreen,
+            "file": OperationModeScreen,   # re-runs the choice that opens FileEngineScreen
             "columns": ColumnsScreen,
             "lang": LanguageStyleScreen,
             "processing": ProcessingScreen,
