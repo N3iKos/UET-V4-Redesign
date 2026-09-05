@@ -184,6 +184,7 @@ class JudgeRunner:
         on_fix: Callable[[int, str, bool], None] | None = None,
         on_section: Callable[[int, int, list[int], bool], None] | None = None,
         stop_event: threading.Event | None = None,
+        fitting_profile: str = "general",
     ) -> None:
         self._target = target
         self._job = job
@@ -218,6 +219,9 @@ class JudgeRunner:
         # asks for it explicitly — and Settings supplies the default when it does
         # not (FR-104 / the Judge pacing step).
         self._max_rows = int(max_rows) if max_rows else _saved_max_rows()
+        self._fitting_profile = fitting_profile or "general"
+        from ..fitting.profiles import get_profile as _get_profile
+        self._profile = _get_profile(self._fitting_profile)
         self._client = None
         self._tokens_used = 0
         # Rows a valid reply has actually given a verdict for, across every
@@ -339,7 +343,45 @@ class JudgeRunner:
         chosen = [name for name in source if name in CRITERIA]
         if not self._target.has_context and "context" in chosen:
             chosen.remove("context")
+        if self._profile is None and "fitting" in chosen:
+            # Fitting without a profile is a criterion about nothing: the
+            # machine that feeds it has no window to measure against (spec 3.2).
+            chosen.remove("fitting")
         return chosen or ["mistranslation"]
+
+    def _fitting_map(self, rows: list[tuple[int, str, str]]) -> dict[int, str]:
+        """Per-row FITTING prompt line — machine-measured, only for flagged rows."""
+        from ..fitting.audit import audit_rows, fitting_line
+        if self._profile is None:
+            return {}
+        return {
+            f.row: fitting_line(f) for f in audit_rows(rows, self._profile)
+        }
+
+    def revalidate_fix(self, row: int, fixed_text: str, source: str) -> str | None:
+        """
+        Post-fix gate (spec 3.5): a fix is a promise about the window.
+
+        Re-measures the fixed text and checks that every token in it existed
+        in the source (models sometimes invent a plausible-looking [br] for
+        an engine that has none). Returns None when the fix is clean, or the
+        failure kind for the caller to feed back into the retry.
+        """
+        from ..fitting.measure import detect_newline_tag
+        from ..fitting.wrap import wrap_metrics
+        if self._profile is None:
+            return None
+        metrics = wrap_metrics(fixed_text or "", self._profile)
+        if not metrics.max_ok:
+            return "sinking"
+        if metrics.overflow_lines:
+            return "overflow"
+        src_tag = detect_newline_tag(source or "")
+        allowed = {src_tag} if src_tag else set()
+        fix_tag = detect_newline_tag(fixed_text or "")
+        if fix_tag is not None and fix_tag not in allowed:
+            return "invented-token"
+        return None
 
     def load_rows(self) -> tuple[list[tuple[int, str, str]], dict[int, str]]:
         """
@@ -554,6 +596,7 @@ class JudgeRunner:
                 grading_mode=self._grading_mode,
                 chain=self._chain_enabled(),
                 comment_style=self._comment_style(),
+                fitting_map=self._fitting_map(rows),
             )
 
         def apply_result(index: int, task: BatchTask, result: JudgeResult) -> None:
@@ -916,10 +959,12 @@ class JudgeRunner:
                 context_map=self._section_context(task.extra["rows"], contexts),
                 custom_placeholders=self._target.custom_placeholders,
                 severities=severities,
+                fitting_map=self._fitting_map(task.extra["rows"]),
             )
 
         def build_solo(row: int, task: BatchTask) -> str:
             source, translation = by_row.get(row, ("", ""))
+            fitting_info = self._fitting_map([(row, source, translation)]).get(row, "")
             return build_fix_solo_prompt(
                 row=row,
                 source=source,
@@ -932,6 +977,7 @@ class JudgeRunner:
                 custom_placeholders=self._target.custom_placeholders,
                 criteria=criteria or self.criteria,
                 severities=severities,
+                fitting=fitting_info,
             )
 
         def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
@@ -963,6 +1009,14 @@ class JudgeRunner:
                     staged.unchanged.append(row)
                     self._emit_fix(row, text, changed=False)
                     continue
+                # Fitting gate (spec 3.5): check the proposed fix against the
+                # window and the token whitelist before staging.
+                if "fitting" in (criteria or self.criteria):
+                    fail = self.revalidate_fix(row, text, by_row.get(row, ("", ""))[0])
+                    if fail:
+                        staged.failed.append(row)
+                        staged.errors.append(f"row {row}: [FITTING_STILL_FAIL] {fail}")
+                        continue
                 staged.texts[row] = text
                 self._emit_fix(row, text, changed=True)
             staged.failed.extend(
@@ -1069,6 +1123,7 @@ class JudgeRunner:
             source, translation = found
 
         contexts = self._context_for(row)
+        fitting_info = self._fitting_map([(row, source, translation)]).get(row, "")
         prompt = build_fix_solo_prompt(
             row=row,
             source=source,
@@ -1079,6 +1134,8 @@ class JudgeRunner:
             style_prompt=self._target.style_prompt,
             context=contexts,
             custom_placeholders=self._target.custom_placeholders,
+            criteria=self.criteria,
+            fitting=fitting_info,
         )
         content, error = self._one_request(prompt, label=f"fix row {row}")
         if error:
@@ -1088,6 +1145,10 @@ class JudgeRunner:
             return SingleFix(
                 row=row, error="The model returned nothing usable for this row."
             )
+        if "fitting" in self.criteria:
+            fail = self.revalidate_fix(row, text, source)
+            if fail:
+                return SingleFix(row=row, error=f"[FITTING_STILL_FAIL] {fail}")
         return SingleFix(row=row, text=text)
 
     def judge_again(

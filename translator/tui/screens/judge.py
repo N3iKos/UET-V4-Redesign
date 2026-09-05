@@ -837,10 +837,13 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
                 ("â†", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
-        chosen = set(self.draft.get("criteria") or CRITERIA)
+        from ...fitting.profiles import get_profile
+        has_profile = get_profile(self.draft.get("fitting_engine", "general") or "general") is not None
+        visible_criteria = [c for c in CRITERIA if c != "fitting" or has_profile]
+        chosen = set(self.draft.get("criteria") or visible_criteria)
         self.picker.set_options([
             Option(CRITERION_LABELS[name], name, selected=name in chosen)
-            for name in CRITERIA
+            for name in visible_criteria
         ])
         self.picker.focus()
         self._note()
@@ -1592,6 +1595,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
                 target=target,
                 criteria=self._criteria(),
                 max_rows=self._rows_cap(),
+                fitting_profile=self.draft.get("fitting_engine", "general"),
             )
             plan = runner.plan()
         except Exception as exc:
@@ -1763,6 +1767,7 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
                 "debug_log": draft.get("debug_log", False),
                 "raw_log": draft.get("raw_log", False),
             },
+            fitting_profile=draft.get("fitting_engine", "general"),
         ))
 
 
@@ -2076,12 +2081,14 @@ class JudgeRunScreen(BaseScreen):
         workers: int | None = None,
         preset=None,
         processing: dict | None = None,
+        fitting_profile: str = "general",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._target = target
         self._model_slot = model_slot
         self._criteria = list(criteria)
+        self._fitting_profile = fitting_profile or "general"
         # What Full mode's pacing step chose. All three are None in Quick, where
         # the model's own preset and the saved row cap are used instead.
         self._max_rows = int(max_rows) if max_rows else None
@@ -3015,6 +3022,7 @@ class JudgeRunScreen(BaseScreen):
             on_fix=on_fix,
             on_section=on_section,
             stop_event=self._stop,
+            fitting_profile=self._fitting_profile,
         )
 
     @work(thread=True)
