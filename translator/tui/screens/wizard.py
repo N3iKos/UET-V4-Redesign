@@ -24,7 +24,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Input, Label, Static
 
 from ... import config
@@ -52,7 +52,9 @@ from ..widgets.common import (
     ColumnPreview,
     ColumnRole,
     LabeledInput,
+    LabeledTextArea,
     Option,
+    PasteArea,
     Picker,
     escape_markup,
 )
@@ -639,7 +641,10 @@ class LanguageStyleScreen(WizardScreen):
 
     NEW = "__new__"
 
-    BINDINGS = [Binding("d", "delete", "delete", show=False)]
+    BINDINGS = [
+        Binding("d", "delete", "delete", show=False),
+        Binding("e", "edit_style", "edit", show=False),
+    ]
 
     def compose_body(self) -> ComposeResult:
         yield Label("Language and style", classes="title")
@@ -652,23 +657,34 @@ class LanguageStyleScreen(WizardScreen):
         yield Label("", id="lang-error", classes="error")
         yield Label("")
         yield Label("Style", classes="muted")
-        self.picker = Picker()
-        yield self.picker
-        yield Static("", id="style-preview", classes="panel")
-        self._custom = LabeledInput(
-            "Custom prompt",
-            hint="What the model should do with the text: tone, what to keep "
-                 "verbatim, what to leave alone.",
+        with VerticalScroll(id="style-scroll") as scroll:
+            scroll.styles.border = ("round", MUTED)
+            self.picker = Picker(click_activates=False)
+            self.picker.styles.max_height = 10000
+            yield self.picker
+        self._prompt_edit = LabeledTextArea(
+            "Prompt (press 'e' or click below to edit, Shift+Enter for newline)",
+            placeholder="Style prompt...",
+            min_lines=3,
+            max_lines=6,
         )
-        self._custom.display = False
-        yield self._custom
+        yield self._prompt_edit
         self._name = LabeledInput(
-            "Save as preset",
+            "Save as preset (optional)",
             hint="Name it to keep it for next time, or leave empty to use it "
                  "just this once.",
         )
-        self._name.display = False
         yield self._name
+
+    def compose_above_footer(self) -> ComposeResult:
+        self._confirm_bar = Picker(
+            [
+                Option("Confirm and next", "confirm", style=OK),
+                Option("Edit prompt in place (e)", "edit"),
+            ],
+            id="style-actions",
+        )
+        yield self._confirm_bar
 
     def on_screen_ready(self) -> None:
         self._src.value = self.draft.get("src_lang", "")
@@ -685,13 +701,16 @@ class LanguageStyleScreen(WizardScreen):
         ]
         options.append(Option("+ New custom prompt", self.NEW, style=ACCENT))
         self.picker.set_options(options, keep_index=keep_index)
+        try:
+            scroll = self.query_one("#style-scroll", VerticalScroll)
+            scroll.styles.height = min(len(options), 8) + 2
+        except Exception:
+            pass
         self.refresh_keys()
         self._show_prompt()
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        if getattr(self, "_custom", None) is not None and self._custom.display:
-            return [("⏎", "next / save"), ("esc", "back to list")]
-        keys = [("tab", "next field"), ("↑↓", "style"), ("⏎", "select")]
+        keys = [("tab", "next field"), ("↑↓", "style"), ("e", "edit prompt"), ("⏎", "confirm")]
         if getattr(self, "_saved", None):
             keys.append(("d", "delete saved"))
         return keys + [("←", "back"), ("esc", "cancel")]
@@ -700,15 +719,33 @@ class LanguageStyleScreen(WizardScreen):
         return next((p for p in PRESETS + self._saved if p["key"] == key), None)
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
-        self._show_prompt()
+        if event.picker is self.picker:
+            self._show_prompt()
+            self._keep_style_cursor_visible()
+
+    def _keep_style_cursor_visible(self) -> None:
+        try:
+            scroll = self.query_one("#style-scroll", VerticalScroll)
+            view = max(1, scroll.size.height - 1)
+            y = scroll.scroll_offset.y
+            index = self.picker.index
+            if index < y:
+                scroll.scroll_to(y=index, animate=False)
+            elif index >= y + view:
+                scroll.scroll_to(y=index - view + 1, animate=False)
+        except Exception:
+            pass
 
     def _show_prompt(self) -> None:
         option = self.picker.current
-        preset = self._find(option.value) if option else None
-        self.query_one("#style-preview", Static).update(
-            escape_markup(preset["prompt"]) if preset
-            else "[dim]You will type your own prompt.[/]"
-        )
+        if option is None:
+            return
+        if option.value == self.NEW:
+            self._prompt_edit.value = ""
+            return
+        preset = self._find(option.value)
+        if preset:
+            self._prompt_edit.value = preset["prompt"]
 
     def _langs_ok(self) -> bool:
         if not self._tgt.value:
@@ -728,31 +765,39 @@ class LanguageStyleScreen(WizardScreen):
             if self._langs_ok():
                 self.picker.focus()
             return
-        if event.input is self._custom.input:
-            if not self._custom.value.strip():
-                self.notify_status("Type a prompt, or press Esc to go back.", WARN)
-                return
-            self._name.display = True
-            self._name.focus_input()
-            return
-        self._accept_custom()
+        if hasattr(self, "_name") and event.input is self._name.input:
+            self._confirm()
+
+    def on_paste_area_submitted(self, event: PasteArea.Submitted) -> None:
+        self._confirm()
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
+        if event.picker is getattr(self, "_confirm_bar", None):
+            if event.option.value == "confirm":
+                self._confirm()
+            elif event.option.value == "edit":
+                self.action_edit_style()
+            return
+        if event.picker is self.picker:
+            if event.option.value == self.NEW:
+                self._prompt_edit.value = ""
+                self._prompt_edit.focus_input()
+                return
+            self._show_prompt()
+            self._confirm_bar.focus()
+
+    def action_edit_style(self) -> None:
+        self._prompt_edit.focus_input()
+        self.refresh_keys()
+
+    def _confirm(self) -> None:
         if not self._langs_ok():
             return
-        if event.option.value == self.NEW:
-            self._custom.display = True
-            self._custom.focus_input()
-            self.refresh_keys()
+        prompt = self._prompt_edit.value.strip()
+        if not prompt:
+            self.notify_status("Style prompt cannot be empty.", WARN)
+            self._prompt_edit.focus_input()
             return
-        preset = self._find(event.option.value)
-        if preset is None:
-            return
-        self.draft["style_prompt"] = preset["prompt"]
-        self.app.push_screen(ProcessingScreen())
-
-    def _accept_custom(self) -> None:
-        prompt = self._custom.value.strip()
         name = self._name.value.strip()
         if name:
             try:
@@ -780,15 +825,6 @@ class LanguageStyleScreen(WizardScreen):
         self.notify_status(f"Deleted {preset['label'] if preset else 'preset'}.", WARN)
 
     def action_cancel(self) -> None:
-        if self._custom.display:
-            self._custom.display = False
-            self._name.display = False
-            self._custom.input.value = ""
-            self._name.input.value = ""
-            self.picker.focus()
-            self.notify_status("")
-            self.refresh_keys()
-            return
         super().action_cancel()
 
 
