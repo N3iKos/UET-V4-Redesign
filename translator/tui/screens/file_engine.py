@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from textual.app import ComposeResult
 from textual.widgets import Label
 
 from ... import config
@@ -29,7 +30,7 @@ from ...data import app_prefs
 from ...fitting.profiles import ENGINE_LABELS, ENGINE_ORDER, get_profile
 from ...io.excel_io import ExcelReader
 from ..app import BaseScreen
-from ..theme import MUTED
+from ..theme import MUTED, OK
 from ..widgets.common import LabeledInput, Option, Picker
 
 MAX_VISIBLE_FILES = 5
@@ -85,6 +86,13 @@ class FileEngineScreen(BaseScreen):
                     "wordwrap plugins make it inaccurate.", classes="muted")
         yield Label("", id="file-engine-error", classes="error")
 
+    def compose_above_footer(self) -> ComposeResult:
+        self._confirm_bar = Picker(
+            [Option(self._confirm_label, "confirm", style=OK)],
+            id="confirm-bar",
+        )
+        yield self._confirm_bar
+
     def on_screen_ready(self) -> None:
         files = ExcelReader.scan_directory(os.getcwd())
         options = []
@@ -132,11 +140,16 @@ class FileEngineScreen(BaseScreen):
                 break
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
+        if event.picker is getattr(self, "_confirm_bar", None):
+            self._confirm()
+            return
         # Enter/click on a file: fill the path, move to the engine select.
         if event.picker is self.picker and event.option.value:
             self._path.input.value = str(event.option.value)
             self._recall_engine(str(event.option.value))
             self._engine.focus()
+        elif event.picker is self._engine and event.option.value:
+            self._confirm()
 
     def on_input_submitted(self, event) -> None:
         self._confirm()
