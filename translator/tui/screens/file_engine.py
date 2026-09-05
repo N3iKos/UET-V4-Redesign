@@ -23,7 +23,7 @@ import os
 from typing import Callable
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Label
 
 from ... import config
@@ -77,29 +77,35 @@ class FileEngineScreen(BaseScreen):
 
     def compose_body(self):
         yield Label(self._title, classes="title")
-        yield Label(f".xlsx / .csv files in {os.getcwd()}", classes="muted")
-        # Full list, half-screen high, natively scrollable (mouse wheel +
-        # scrollbar): max_visible would only CLIP the widget, hiding files
-        # past the fifth row with no way to reach them.
-        with VerticalScroll(id="file-scroll") as scroll:
-            scroll.styles.height = FILE_BOX_HEIGHT
-            scroll.styles.border = ("round", MUTED)
-            self.picker = Picker()
-            # The global Picker rule clamps max-height to the container, which
-            # makes virtual_size == size: nothing to scroll, files past the
-            # fold unreachable. Inline styles beat CSS rules, and Textual CSS
-            # has no "none" for max-height — so a large numeric lift it is.
-            self.picker.styles.max_height = 10000
-            yield self.picker
-        yield Label("")
-        self._path = LabeledInput("Path", value=self._existing,
-                                  placeholder="/path/to/file.xlsx or .csv")
-        yield self._path
-        yield Label("Engine (text fitting)", classes="muted")
-        self._engine = Picker(click_activates=False)   # click sets, never commits
-        yield self._engine
-        yield Label("Fitting measures the engine's default message window — "
-                    "wordwrap plugins make it inaccurate.", classes="muted")
+        yield Label(f"Spreadsheet & Engine configuration for {os.getcwd()}", classes="muted")
+
+        with Horizontal(id="file-engine-split"):
+            # Kolom Kiri: Daftar File Spreadsheet
+            with Vertical(id="col-files"):
+                yield Label("Spreadsheet file (.xlsx / .csv)", classes="accent")
+                with VerticalScroll(id="file-scroll") as scroll:
+                    scroll.styles.height = 14
+                    scroll.styles.border = ("round", MUTED)
+                    self.picker = Picker()
+                    self.picker.styles.max_height = 10000
+                    yield self.picker
+
+            # Kolom Kanan: Path terpilih + Pilihan Engine
+            with Vertical(id="col-settings"):
+                yield Label("Selected Path", classes="accent")
+                self._path = LabeledInput("Target file path", value=self._existing,
+                                          placeholder="/path/to/file.xlsx or .csv")
+                yield self._path
+
+                yield Label("Engine Profile (Text Fitting)", classes="accent")
+                with VerticalScroll(id="engine-scroll") as escroll:
+                    escroll.styles.height = 8
+                    escroll.styles.border = ("round", MUTED)
+                    self._engine = Picker(click_activates=False)
+                    self._engine.styles.max_height = 10000
+                    yield self._engine
+                yield Label("Measures dialog window limits (wordwrap plugins may alter bounds).", classes="muted")
+
         yield Label("", id="file-engine-error", classes="error")
 
     def compose_above_footer(self) -> ComposeResult:

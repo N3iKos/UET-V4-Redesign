@@ -104,6 +104,21 @@ Picker {{
     max-height: 100%;
 }}
 
+#file-engine-split {{
+    height: auto;
+    width: 1fr;
+}}
+
+#col-files {{
+    width: 1fr;
+    margin-right: 1;
+}}
+
+#col-settings {{
+    width: 1fr;
+    margin-left: 1;
+}}
+
 /* The file box's picker must grow to its FULL content height — the
    max-height clamp above gives its scroll container nothing to scroll
    (virtual_size == size), so files past the fold were invisible. The clamp
