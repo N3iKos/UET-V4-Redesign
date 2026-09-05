@@ -1033,6 +1033,7 @@ class PreviewScreen(WizardMenuScreen):
             debug_log=draft.get("debug_log", False),
             raw_log=draft.get("raw_log", False),
             mode=draft.get("mode", "full"),
+            fitting_engine=draft.get("fitting_engine", "general"),
         )
         job.wave_delay = preset.wave_delay
         job.batch_delay = preset.delay_per_request

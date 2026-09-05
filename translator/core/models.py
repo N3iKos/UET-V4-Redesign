@@ -102,6 +102,9 @@ class JobConfig:
     # None = no opinion, follow the model's own reasoning_default (FR-403).
     reasoning_enabled:     bool | None  = None
     prompt_format:         PromptFormat = "plain"   # "json" = explicit per-model opt-in
+    # Engine profile for text fitting ("general" = off). The wizard's
+    # FileEngineScreen sets it; engine.py turns it into a prompt budget line.
+    fitting_engine:        str          = "general"
     max_completion_tokens: int          = 0         # 0 = let provider decide
     tok_per_row:           int          = config.DEFAULT_TOK_PER_ROW
     skip_filled:           bool         = True
