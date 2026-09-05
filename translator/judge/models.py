@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 # The criteria a user can ask for, and therefore the error types a reply may
 # carry. `empty` and `failed` are not criteria — they are conditions the runner
 # detects itself, before any model is asked (FR-105 / business rule 2).
-CRITERIA: tuple[str, ...] = ("mistranslation", "context", "placeholder", "style")
+CRITERIA: tuple[str, ...] = ("mistranslation", "context", "placeholder", "style", "fitting")
 ERROR_TYPES: tuple[str, ...] = CRITERIA + ("empty", "failed", "other")
 
 CRITERION_LABELS: dict[str, str] = {
@@ -30,6 +30,7 @@ CRITERION_LABELS: dict[str, str] = {
     "context":        "Context — wrong for this row's context",
     "placeholder":    "Placeholder — a token was broken or dropped",
     "style":          "Style — does not match the requested tone",
+    "fitting":        "Fitting — the line does not fit the game dialog window (overflow / too many lines / much longer than source)",
 }
 
 ERROR_TYPE_LABELS: dict[str, str] = {

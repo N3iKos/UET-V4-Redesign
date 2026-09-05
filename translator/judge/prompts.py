@@ -282,6 +282,23 @@ _CRITERION_RULES: dict[str, str] = {
         "source, and the inconsistency is in the source file, not in the work "
         "under review"
     ),
+    "fitting": (
+        "fitting — the line does not fit the game dialog window. The FITTING "
+        "data printed with a row is measured mechanically and is ground "
+        "truth: never re-estimate it, never argue with it.\n"
+        "    Rows marked OVERFLOW or SINKING are already flagged by that "
+        "measurement — your job for them is only the repair advice, not the "
+        "verdict. Rows marked LONG are much wider than their own source "
+        "beyond normal expansion; you may flag them, and your comment MUST "
+        "quote the measured ratio.\n"
+        "    Do NOT flag a line merely because the source itself is long: "
+        "compare against the row's own source width only. In the FIX: "
+        "shorten the line naturally (never by dropping facts, names, numbers "
+        "or clauses — tighten the wording, do not cut the content), OR insert "
+        "the exact line-break tag printed with the row at a natural phrase "
+        "boundary. Never invent a tag the row does not show, never split a "
+        "control code, never add a line beyond the window's line count"
+    ),
 }
 
 # What "style" means when nobody stated a style.
@@ -383,6 +400,7 @@ def _criteria_block(criteria: list[str], with_context: bool) -> str:
 def _rows_block(
     rows: list[tuple[int, str, str]],
     context_map: dict[int, str] | None = None,
+    fitting_map: dict[int, str] | None = None,
 ) -> str:
     """Source and translation per row, numbered, with context where present."""
     blocks: list[str] = []
@@ -392,6 +410,8 @@ def _rows_block(
             lines.append(f"  CONTEXT     : {encode_placeholders(context_map[row])}")
         lines.append(f"  SOURCE      : {encode_placeholders(source or '')}")
         lines.append(f"  TRANSLATION : {encode_placeholders(translation or '')}")
+        if fitting_map and (fitting_map.get(row) or "").strip():
+            lines.append(f"  FITTING     : {fitting_map[row]}")
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -492,6 +512,7 @@ def build_judge_prompt(
     grading_mode: str = "severity",
     chain: bool = False,
     comment_style: str = "auto",
+    fitting_map: dict[int, str] | None = None,
 ) -> str:
     """
     Review one section. The reply is JSON listing only the problem rows.
@@ -578,7 +599,7 @@ def build_judge_prompt(
         f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
         f"{example}\n"
         f'If every line is acceptable, reply exactly: {{"lines": []}}\n'
-        f"\nLines:\n{_rows_block(rows, context_map)}\n"
+        f"\nLines:\n{_rows_block(rows, context_map, fitting_map)}\n"
     )
 
 
@@ -733,6 +754,7 @@ def build_fix_prompt(
     context_map: dict[int, str] | None = None,
     custom_placeholders: str = "",
     severities: list[str] | None = None,
+    fitting_map: dict[int, str] | None = None,
 ) -> str:
     """
     Repair the flagged rows, guided by the comments the evaluation produced.
@@ -758,6 +780,8 @@ def build_fix_prompt(
         note = ((comments or {}).get(row) or "").strip()
         if note:
             lines.append(f"  CORRECTION NOTE : {note}")
+        if fitting_map and (fitting_map.get(row) or "").strip():
+            lines.append(f"  FITTING         : {fitting_map[row]}")
         blocks.append("\n".join(lines))
 
     target = (tgt_lang or "").strip() or "the target language"
@@ -782,6 +806,10 @@ def build_fix_prompt(
         f"- Example: [{example}] the corrected line in {target}\n"
         f"- Output ONLY the corrected translation — never the source, never an explanation\n"
         f"- Keep every placeholder byte-for-byte\n"
+        f"- A FITTING line means the text must end up within the window: "
+        f"shorten it naturally or insert the line-break tag shown in that "
+        f"row at a natural pause; the result must not exceed 4 lines and "
+        f"must never split a control code or invent a tag\n"
         f"\nLines:\n" + "\n".join(blocks) + "\n\nOutput:"
     )
 
@@ -798,6 +826,7 @@ def build_fix_solo_prompt(
     custom_placeholders: str = "",
     criteria: list[str] | None = None,
     severities: list[str] | None = None,
+    fitting: str = "",
 ) -> str:
     """
     Repair one row (Fix It).
@@ -815,8 +844,18 @@ def build_fix_solo_prompt(
     parts.append(f"Translation: {encode_placeholders(translation or '')}\n")
     if (comment or "").strip():
         parts.append(f"Correction Note: {comment.strip()}\n")
+    if (fitting or "").strip():
+        parts.append(f"FITTING    : {fitting.strip()}\n")
     parts.append(f"\n{_PLACEHOLDER_RULE}\n")
     parts.append(_extra_placeholders(custom_placeholders))
+    fit_rule = ""
+    if (fitting or "").strip():
+        fit_rule = (
+            "The Fitting note means the text must end up within the game's dialog "
+            "window: shorten it naturally or insert the line-break tag shown in the note "
+            "at a natural pause; the result must not exceed 4 lines and must never split "
+            "a control code or invent a tag.\n"
+        )
     parts.append(
         f"\nInstruction:\n"
         f"Apply the correction from the Correction Note, in the wording a native "
@@ -824,6 +863,7 @@ def build_fix_solo_prompt(
         f"suggested wording is stiff or unnatural, write the natural {target} "
         f"wording yourself while still fixing the problem the note identified.\n"
         f"Do not keep the wrong words that were flagged.\n"
+        f"{fit_rule}"
         f"Return ONLY the corrected translation — no prefix, no quotes, no explanation.\n"
         f"Keep every placeholder byte-for-byte.\n"
         f"\nCorrected:"
