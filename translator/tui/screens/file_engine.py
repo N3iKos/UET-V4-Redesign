@@ -85,6 +85,11 @@ class FileEngineScreen(BaseScreen):
             scroll.styles.height = FILE_BOX_HEIGHT
             scroll.styles.border = ("round", MUTED)
             self.picker = Picker()
+            # The global Picker rule clamps max-height to the container, which
+            # makes virtual_size == size: nothing to scroll, files past the
+            # fold unreachable. Inline styles beat CSS rules, and Textual CSS
+            # has no "none" for max-height — so a large numeric lift it is.
+            self.picker.styles.max_height = 10000
             yield self.picker
         yield Label("")
         self._path = LabeledInput("Path", value=self._existing,
