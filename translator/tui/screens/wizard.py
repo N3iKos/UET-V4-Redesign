@@ -295,17 +295,26 @@ class ReasoningScreen(WizardMenuScreen):
 
     def _skip(self, note: str = "") -> None:
         """
-        Replace this step with the next one, optionally with something to say.
-
-        The note is queued on the target screen rather than pushed onto it:
-        `push_screen` returns before the screen mounts, so its footer does not
-        exist yet and calling `notify_status` on it raises.
+        Skip reasoning when the model has none, jumping straight to file picking.
         """
         self.app.pop_screen()
-        target = OperationModeScreen()
+        from .file_engine import FileEngineScreen
+        target = FileEngineScreen(
+            on_accept=self._file_engine_accepted,
+            next_screen=lambda: ColumnsScreen(),
+            existing_path=self.draft.get("src_path", ""),
+        )
         if note:
             target.queue_note(note, MUTED)
         self.app.push_screen(target)
+
+    def _file_engine_accepted(self, path: str, engine: str) -> None:
+        if path != self.draft.get("src_path"):
+            for key in ("src_col", "dst_col", "ctx_col", "repair_col"):
+                self.draft.pop(key, None)
+        self.draft["src_path"] = path
+        self.draft["out_path"] = translated_path(path)
+        self.draft["fitting_engine"] = engine
 
     @staticmethod
     def _quick_level(model) -> str:
@@ -353,35 +362,12 @@ class ReasoningScreen(WizardMenuScreen):
         else:
             self.draft["reasoning_effort"] = option.value
             self.draft["reasoning_enabled"] = None
-        self.app.push_screen(OperationModeScreen())
-
-
-# ── Operation mode (folded into the Model step, not counted) ──────────────────
-
-class OperationModeScreen(WizardMenuScreen):
-    step = 2
-    title_text = "Operation mode"
-
-    def build_options(self) -> list[Option]:
-        return [Option(label, value, hint=hint) for value, label, hint in OP_MODES]
-
-    def handle_choice(self, option: Option) -> None:
-        self.draft["op_mode"] = option.value
         from .file_engine import FileEngineScreen
         self.app.push_screen(FileEngineScreen(
             on_accept=self._file_engine_accepted,
             next_screen=lambda: ColumnsScreen(),
             existing_path=self.draft.get("src_path", ""),
         ))
-
-    def _file_engine_accepted(self, path: str, engine: str) -> None:
-        if path != self.draft.get("src_path"):
-            # A different file invalidates the columns picked for the old one.
-            for key in ("src_col", "dst_col", "ctx_col", "repair_col"):
-                self.draft.pop(key, None)
-        self.draft["src_path"] = path
-        self.draft["out_path"] = translated_path(path)
-        self.draft["fitting_engine"] = engine
 
 
 # ── Step 4: columns ───────────────────────────────────────────────────────────
@@ -633,6 +619,7 @@ class ColumnsScreen(WizardScreen):
         self.draft.update(
             src_col=src_col, dst_col=dst_col, ctx_col=ctx_col,
             repair_col=repair_col, start_row=start, num_rows=num_rows,
+            op_mode="translate_context" if ctx_col else "translate",
         )
         self.app.push_screen(LanguageStyleScreen())
 
@@ -1064,7 +1051,6 @@ class _TranslateEditScreen(WizardMenuScreen):
     def build_options(self) -> list[Option]:
         return [
             Option("Model", "model"),
-            Option("Operation mode", "operation"),
             Option("File", "file"),
             Option("Columns", "columns"),
             Option("Language & style", "lang"),
@@ -1075,8 +1061,11 @@ class _TranslateEditScreen(WizardMenuScreen):
     def handle_choice(self, option: Option) -> None:
         target = {
             "model": ModelSelectScreen,
-            "operation": OperationModeScreen,
-            "file": OperationModeScreen,   # re-runs the choice that opens FileEngineScreen
+            "file": lambda: FileEngineScreen(
+                on_accept=lambda p, e: self.draft.update(src_path=p, out_path=translated_path(p), fitting_engine=e),
+                next_screen=lambda: ColumnsScreen(),
+                existing_path=self.draft.get("src_path", ""),
+            ),
             "columns": ColumnsScreen,
             "lang": LanguageStyleScreen,
             "processing": ProcessingScreen,
