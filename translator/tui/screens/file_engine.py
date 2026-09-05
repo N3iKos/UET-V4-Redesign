@@ -59,7 +59,7 @@ class FileEngineScreen(BaseScreen):
     def __init__(self, *, title="Select a spreadsheet",
                  confirm_label="Confirm and next",
                  on_accept: Callable[[str, str], None],
-                 next_screen: Callable[[], BaseScreen],
+                 next_screen: Callable[[], BaseScreen] | None,
                  existing_path: str = "",
                  sort_translated_first: bool = False,
                  **kwargs) -> None:
@@ -67,6 +67,10 @@ class FileEngineScreen(BaseScreen):
         self._title = title
         self._confirm_label = confirm_label
         self._on_accept = on_accept
+        # next_screen=None means "pop me instead": a caller that stays mounted
+        # (the audit screen) receives the pick via on_accept and needs no push.
+        # Re-pushing an already-mounted screen would skip its remount and leave
+        # the stack with the same object twice.
         self._next = next_screen
         self._existing = existing_path
         self._sort_translated = sort_translated_first
@@ -178,7 +182,11 @@ class FileEngineScreen(BaseScreen):
         self._confirm()
 
     def _confirm(self) -> None:
-        path = (self._path.input.value or "").strip().strip('"')
+        raw = (self._path.input.value or "").strip().strip('"')
+        # Expand BEFORE both the accept callback and the memory write, so
+        # "~"-prefixed paths are stored under the same key they will be
+        # recalled with later.
+        path = os.path.expanduser(raw)
         engine = str(self._engine.current.value) if self._engine.current else "general"
         error = self.query_one("#file-engine-error", Label)
         def accept(path_: str, engine_: str) -> None:
@@ -187,7 +195,10 @@ class FileEngineScreen(BaseScreen):
             error.update(f"File not found: {path}")
             return
         app_prefs.remember_engine(path, engine)
-        self.app.push_screen(self._next())
+        if self._next is None:
+            self.app.pop_screen()
+        else:
+            self.app.push_screen(self._next())
 
     def screen_keys(self) -> list[tuple[str, str]]:
         return [("↑↓", "move"), ("⏎", "select"), ("tab", "next field"),

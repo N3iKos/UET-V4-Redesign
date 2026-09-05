@@ -23,6 +23,7 @@ from .measure import char_width, detect_newline_tag, strip_tokens
 from .profiles import EngineProfile
 
 _SEGMENT_SPLIT = re.compile(r"\n|\[r\]|\[br\]|\[BR\]|\\n")
+_SEGMENT_SPLIT_CAPTURE = re.compile(r"(\n|\[r\]|\[br\]|\[BR\]|\\n)")
 
 @dataclass
 class WrapMetrics:
@@ -66,21 +67,41 @@ def wrap_metrics(text: str, profile: EngineProfile) -> WrapMetrics:
         max_ok=len(lines) <= profile.max_lines,
     )
 
-def suggest_wrap(text: str, profile: EngineProfile) -> str:
-    tag = detect_newline_tag(text)
-    if tag is None:
+def suggest_wrap(text: str, profile: EngineProfile, tag: str | None = None) -> str:
+    """
+    Re-flow overlong rows, inserting `tag` at the new breaks only.
+
+    `tag` defaults to the one detected in THIS text. The caller (audit apply)
+    may pass the SOURCE row's tag instead: a translation that dropped the
+    source's tags is still wrapped with the tag the file proves — the machine
+    never invents one.
+
+    Original separators are preserved exactly: a real 0x0A stays a 0x0A, a
+    `[r]` stays a `[r]` — only NEW breaks get the tag. Rebuilding the string
+    with `tag.join(...)` would silently convert every existing separator
+    (including a raw newline the engine renders but cannot parse back as the
+    two-char token) into the tag — a data change on apply, not a fix.
+    """
+    insert = tag if tag is not None else detect_newline_tag(text)
+    if insert is None:
         return text
     budget = profile.window_cols * profile.safe_margin
-    segments: list[str] = []
-    for seg in _SEGMENT_SPLIT.split(text):
-        words = seg.split(" ")
+    out: list[str] = []
+    # Capturing split: pieces alternate [seg, sep, seg, sep, ..., seg]; each
+    # separator is kept verbatim in its original position.
+    pieces = _SEGMENT_SPLIT_CAPTURE.split(text)
+    for i, piece in enumerate(pieces):
+        if i % 2 == 1:              # an original separator — untouched
+            out.append(piece)
+            continue
+        words = piece.split(" ")
         current = ""
         for word in words:
             candidate = word if not current else current + " " + word
             if _width(candidate, profile) <= budget or not current:
                 current = candidate
             else:
-                segments.append(current)
+                out.append(current + insert)
                 current = word
-        segments.append(current)
-    return tag.join(segments)
+        out.append(current)
+    return "".join(out)

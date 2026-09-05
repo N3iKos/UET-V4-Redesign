@@ -66,3 +66,20 @@ def test_suggest_wrap_with_tag():
     text = r"Kalimat panjang\nyang harus turun ke baris kedua karena sangat tidak muat di jendela"
     out = suggest_wrap(text, MV)
     assert out.count(r"\n") >= 2   # re-flows using the tag it found in source
+
+def test_suggest_wrap_preserves_real_newlines():
+    # A cell mixing a real 0x0A and a tag keeps BOTH separators as they are;
+    # only NEW breaks get the tag (QA bug: tag.join rewrote everything).
+    text = "baris1[r]baris2\nbaris3"
+    out = suggest_wrap(text, MV, tag="[r]")
+    assert "\n" in out          # real newline survived
+    assert "[r]" in out         # original tag survived
+    assert out.count("[r]") >= text.count("[r]")
+
+def test_suggest_wrap_tag_override():
+    # A translation that dropped the source tags is wrapped with the SOURCE's
+    # proven tag, not whatever the translation happens to contain. The text
+    # must be genuinely overlong (~40 em > 28.8 budget) to force a new break.
+    text = "kalimat panjang sekali yang pasti tidak akan pernah muat satu baris jendela dialog game"
+    out = suggest_wrap(text, MV, tag="[r]")
+    assert "[r]" in out

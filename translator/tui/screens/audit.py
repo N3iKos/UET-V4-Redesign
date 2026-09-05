@@ -8,16 +8,24 @@ pick a file, pick an engine (General is refused — there is nothing to measure
 without a window), see the findings, apply the wrap suggestions wholesale or
 one by one. Applying backs the file up once (<stem>.bak) and writes the
 Translated column.
+
+Flow: AuditScreen pushes FileEngineScreen; on confirm the picker pops itself
+off the stack (next_screen=None) and this screen — which stayed mounted the
+whole time — runs the audit in `_file_accepted`. Re-pushing this same instance
+as `next_screen` would skip remounting (Textual mounts a screen once), so
+`_run` would never fire; popping instead keeps the stack honest.
 """
 
 from __future__ import annotations
 
 import os
 
+from textual.binding import Binding
 from textual.widgets import Label
 
 from ...fitting import Finding, apply_wrapped, audit_rows, suggest_wrap
-from ...fitting.profiles import get_profile
+from ...fitting.profiles import EngineProfile, get_profile
+from ...io import csv_io
 from ...io.excel_io import ExcelReader
 from ...parsing.columns import detect_columns
 from ..app import BaseScreen
@@ -42,10 +50,16 @@ def findings_notes(findings: list[Finding]) -> dict[int, str]:
 class AuditScreen(BaseScreen):
     """File+engine (via FileEngineScreen) -> findings grid -> apply."""
 
+    BINDINGS = [
+        Binding("a", "apply_all", "apply all", show=False),
+        Binding("r", "rerun", "rerun", show=False),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._path = ""
         self._engine = "general"
+        self._dst_col: int | None = None   # the column the findings audited
         self.grid = CompareGrid(id="audit-grid")
 
     def compose_body(self):
@@ -66,7 +80,7 @@ class AuditScreen(BaseScreen):
             title="Audit a spreadsheet",
             confirm_label="Run audit",
             on_accept=self._file_accepted,
-            next_screen=lambda: self,
+            next_screen=None,               # picker pops itself; we stay mounted
             existing_path=self._path,
             sort_translated_first=True,
         ))
@@ -74,6 +88,9 @@ class AuditScreen(BaseScreen):
     def _file_accepted(self, path: str, engine: str) -> None:
         self._path = path
         self._engine = engine
+        # The picker pops itself after this returns; the screen below is live,
+        # so the audit runs now and its results are on screen after the pop.
+        self._run()
 
     def _run(self) -> None:
         profile = get_profile(self._engine)
@@ -91,11 +108,17 @@ class AuditScreen(BaseScreen):
         if src is None or dst is None:
             self.notify_status("Could not find Source/Translated columns by header.", WARN)
             return []
-        sources = ExcelReader.load_column(self._path, src, 2, 0)
-        targets = dict(ExcelReader.load_column(self._path, dst, 2, 0))
+        self._dst_col = dst
+        # num_rows=0 is NOT an "all rows" sentinel anywhere in this app: it
+        # makes load_column's range empty (excel_io computes end = start+0-1).
+        # Read the real count, like the judge runner does.
+        total = ExcelReader.row_count(self._path)
+        num_rows = max(0, total - 2 + 1)
+        sources = ExcelReader.load_column(self._path, src, 2, num_rows)
+        targets = dict(ExcelReader.load_column(self._path, dst, 2, num_rows))
         return [(r, s, targets.get(r, "")) for r, s in sources if (s or "").strip()]
 
-    def _show_findings(self, findings: list[Finding], profile, rows) -> None:
+    def _show_findings(self, findings: list[Finding], profile: EngineProfile, rows) -> None:
         src_map = {r: s for r, s, _t in rows}
         tgt_map = {r: t for r, _s, t in rows}
         grid_rows = [(f.row, src_map.get(f.row, "")) for f in findings]
@@ -104,7 +127,8 @@ class AuditScreen(BaseScreen):
             self.grid.set_sources(grid_rows, [
                 Column(letter="S", label="TARGET", rows={f.row: tgt_map.get(f.row, "") for f in findings}),
                 Column(letter="W", label="WRAP SUGGESTION",
-                       rows={f.row: (suggest_wrap(tgt_map.get(f.row, ""), profile)
+                       rows={f.row: (suggest_wrap(tgt_map.get(f.row, ""), profile,
+                                                  tag=f.newline_tag)
                                      if f.newline_tag else "— shorten via Judge (no tag in source)")
                              for f in findings}),
             ])
@@ -113,23 +137,40 @@ class AuditScreen(BaseScreen):
             self.grid.set_row_styles({f.row: styles.get(f.severity, MUTED) for f in findings})
         self.notify_status(f"{len(findings)} row(s) do not fit the dialog window.", OK)
 
+    def action_rerun(self) -> None:
+        self._run()
+
     def action_apply_all(self) -> None:
         profile = get_profile(self._engine)
-        if profile is None:
+        if profile is None or not self._path:
+            return
+        if not csv_io.is_csv(self._path):
+            # apply_wrapped is a CSV writer; feeding it an xlsx binary would
+            # overwrite the workbook with mojibake text (the reader handles
+            # xlsx fine, the writer does not — so the gate is honest here).
+            self.notify_status("Apply-all supports CSV/TSV only — xlsx files are read-only in the audit.", WARN)
             return
         rows = self._load_rows()
         tgt_map = {r: t for r, _s, t in rows}
-        from ...fitting import audit_rows as _ar
         payload = {}
-        for f in _ar(rows, profile):
+        for f in audit_rows(rows, profile):
             # Only rows whose SOURCE has a tag are wrappable (spec 2a): the
-            # machine never invents a token the file does not prove.
-            if f.newline_tag:
-                payload[f.row] = suggest_wrap(tgt_map.get(f.row, ""), profile)
+            # machine never invents a token the file does not prove. The tag
+            # comes from the SOURCE, not the translation — a translation that
+            # dropped the source's tags is still wrapped with the proven tag.
+            if not f.newline_tag:
+                continue
+            suggestion = suggest_wrap(tgt_map.get(f.row, ""), profile, tag=f.newline_tag)
+            if suggestion == (tgt_map.get(f.row) or ""):
+                continue    # a no-op "fix" must not count as applied
+            payload[f.row] = suggestion
         if not payload:
             self.notify_status("Nothing to apply — no wrappable rows (try the judge's shorten advice).", WARN)
             return
-        n = apply_wrapped(self._path, payload)
+        n = apply_wrapped(self._path, payload, col=self._dst_col)
+        if n == 0:
+            self.notify_status("Nothing was written (no rows changed).", WARN)
+            return
         self.notify_status(f"Applied {n} wrap fix(es). Backup at {os.path.splitext(self._path)[0]}.bak", OK)
 
     def screen_keys(self) -> list[tuple[str, str]]:

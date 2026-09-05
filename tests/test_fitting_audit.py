@@ -58,3 +58,8 @@ def test_fitting_line_shape():
     line = fitting_line(f)
     assert "OVERFLOW" in line
     assert "lines" in line and "tag" in line
+
+def test_empty_source_not_ratio_flagged():
+    # Empty source + fitting translation: ratio would degenerate to
+    # target/1.0em and flag a healthy line LONG (QA bug). Row is skipped.
+    assert audit_rows([(1, "", "Halo dunia ini adalah terjemahan yang cukup panjang sekali")], MV) == []

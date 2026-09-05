@@ -39,6 +39,12 @@ def audit_rows(rows: list[tuple[int, str, str]], profile: EngineProfile) -> list
     for row, source, translation in rows:
         if not (translation or "").strip():
             continue
+        if not (source or "").strip():
+            # A row with no source has nothing to compare against: its ratio
+            # would degenerate to target-width-over-1.0-em and flag a healthy
+            # line LONG (audit.py used to do exactly that). Skip it — the
+            # judge's own criteria are what can speak about such a row.
+            continue
         sw = wrap_metrics(source or "", profile)
         tw = wrap_metrics(translation, profile)
         base = max(sw.max_width, 1.0)
