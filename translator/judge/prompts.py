@@ -614,13 +614,21 @@ def build_judge_single_prompt(
     context: str = "",
     custom_placeholders: str = "",
     grading_mode: str = "severity",
+    fitting: str = "",
 ) -> str:
     """
     Re-check one row after a fix (FR-112).
 
     Same JSON shape as a section, so one parser reads both — an empty `lines`
     means the row passed and can leave the problem list.
+
+    `fitting` is the row's machine-measured FITTING line. It must travel with
+    the row whenever `fitting` is among the criteria: the criterion's rule
+    tells the model to quote measured data, so a prompt that lists the
+    criterion without the data is hallucination bait (the model would either
+    pass an overflowing line or invent a measurement).
     """
+    fitting_map = {row: fitting} if (fitting or "").strip() else None
     return build_judge_prompt(
         rows=[(row, source, translation)],
         criteria=criteria,
@@ -630,6 +638,7 @@ def build_judge_single_prompt(
         context_map={row: context} if (context or "").strip() else None,
         custom_placeholders=custom_placeholders,
         grading_mode=grading_mode,
+        fitting_map=fitting_map,
     )
 
 
@@ -643,6 +652,7 @@ def build_judge_rechain_prompt(
     custom_placeholders: str = "",
     grading_mode: str = "severity",
     comment_style: str = "auto",
+    fitting_map: dict[int, str] | None = None,
 ) -> str:
     """
     Re-check flagged rows with their physical neighbours as context.
@@ -686,10 +696,12 @@ def build_judge_rechain_prompt(
     review_numbers = {row for row, _s, _t in rows}
     entries: list[tuple[int, str]] = []
     for row, source, translation in rows:
+        fitting_line_txt = (fitting_map or {}).get(row, "")
         entries.append((row, (
             f"[{row}] — UNDER REVIEW\n"
             f"  SOURCE      : {encode_placeholders(source or '')}\n"
             f"  TRANSLATION : {encode_placeholders(translation or '')}"
+            + (f"\n  FITTING     : {fitting_line_txt}" if fitting_line_txt.strip() else "")
         )))
     for row, (source, translation) in neighbours.items():
         if row in review_numbers:
@@ -788,7 +800,7 @@ def build_fix_prompt(
     numbers = ", ".join(str(row) for row, _s, _t in rows)
     example = rows[0][0] if rows else 1
 
-    return (
+    prompt = (
         f"{_FIX_SYS}\n\n"
         f"Correct {len(rows)} translated line(s).\n"
         f"{_lang_line(src_lang, tgt_lang)}"
@@ -806,12 +818,20 @@ def build_fix_prompt(
         f"- Example: [{example}] the corrected line in {target}\n"
         f"- Output ONLY the corrected translation — never the source, never an explanation\n"
         f"- Keep every placeholder byte-for-byte\n"
-        f"- A FITTING line means the text must end up within the window: "
-        f"shorten it naturally or insert the line-break tag shown in that "
-        f"row at a natural pause; the result must not exceed 4 lines and "
-        f"must never split a control code or invent a tag\n"
-        f"\nLines:\n" + "\n".join(blocks) + "\n\nOutput:"
     )
+    # The fitting rule is only stated when at least one row carries measured
+    # FITTING data: printed unconditionally (engine off) it invited the model
+    # to insert "the line-break tag shown in that row" for rows that show no
+    # tag — and with no profile there is no gate to catch the invention.
+    if fitting_map and any((fitting_map.get(row) or "").strip() for row, _s, _t in rows):
+        prompt += (
+            f"- A FITTING line means the text must end up within the window: "
+            f"shorten it naturally or insert the line-break tag shown in that "
+            f"row at a natural pause; the result must not exceed 4 lines and "
+            f"must never split a control code or invent a tag\n"
+        )
+    prompt += f"\nLines:\n" + "\n".join(blocks) + "\n\nOutput:"
+    return prompt
 
 
 def build_fix_solo_prompt(

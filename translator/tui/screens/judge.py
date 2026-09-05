@@ -277,6 +277,11 @@ class JudgeSetupScreen(JudgeWizardScreen):
                 tgt_lang=job.tgt_lang,
                 style_prompt=job.style_prompt,
                 custom_placeholders=job.custom_placeholders,
+                # The engine the translate run used — carrying it keeps the
+                # re-judge measured against the same window (and stops the
+                # file screen from overwriting the remembered engine with
+                # "general" just because the picker defaulted there).
+                fitting_engine=getattr(job, "fitting_engine", "general"),
                 from_job=True,
             )
         self.app.pop_screen()
@@ -4388,7 +4393,29 @@ class JudgeRunScreen(BaseScreen):
             )
         else:
             if verdict.issue is not None:
-                report.issues[verdict.row] = verdict.issue
+                if verdict.row in report.issues:
+                    # Replace in place: the old issue's counts are already in
+                    # the summary, so a swap must not double-count.
+                    old = report.issues[verdict.row]
+                    report.issues[verdict.row] = verdict.issue
+                    if old is not verdict.issue:
+                        for error_type in old.error_types:
+                            count = report.summary.distribution.get(error_type, 0)
+                            if count > 1:
+                                report.summary.distribution[error_type] = count - 1
+                            else:
+                                report.summary.distribution.pop(error_type, None)
+                    for error_type in verdict.issue.error_types:
+                        report.summary.distribution[error_type] = (
+                            report.summary.distribution.get(error_type, 0) + 1
+                        )
+                else:
+                    # The row was dropped when its fix was applied: restore
+                    # properly, counts included. A direct assignment here used
+                    # to leave the summary without the fitting key, which hid
+                    # the category from Fix All and silently skipped the
+                    # re-measure gate for the row.
+                    report.restore(verdict.issue)
             # A repaired row that comes back flagged is the case this button
             # exists for: the fix was applied and it is still wrong. f offers a
             # second pass over exactly these; open the row to edit it by hand
@@ -5452,10 +5479,22 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
                         f"purpose (fixing would change the meaning)."
                     )
                 if self._staged.failed:
-                    extra.append(
-                        f"{len(self._staged.failed)} row(s) produced nothing and are "
-                        f"left as they were."
-                    )
+                    gate_failures = [e for e in self._staged.errors
+                                     if "FITTING_STILL_FAIL" in e]
+                    if gate_failures:
+                        # A gate rejection DID produce text — "produced nothing"
+                        # would be a lie. Name the rows and the reason so the
+                        # user can fix them by hand (spec 3.5).
+                        extra.append(
+                            f"{len(gate_failures)} row(s) failed the dialog-window "
+                            f"re-measure after retries and are left as they were: "
+                            + "; ".join(gate_failures)
+                        )
+                    else:
+                        extra.append(
+                            f"{len(self._staged.failed)} row(s) produced nothing and are "
+                            f"left as they were."
+                        )
                 if extra:
                     yield Label(" · ".join(extra), classes="hint")
             with Vertical(id="fix-review-foot"):

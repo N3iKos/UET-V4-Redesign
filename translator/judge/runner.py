@@ -573,7 +573,9 @@ class JudgeRunner:
             if plan.rechain:
                 # Chain-mode re-judge: the section's rows are the flagged ones
                 # under review, and their physical neighbours from the file are
-                # printed as CONTEXT ONLY rows around them.
+                # printed as CONTEXT ONLY rows around them. The fitting rule
+                # lists measured data per reviewed row — a criterion that says
+                # "quote the measurement" with no measurement is bait.
                 return build_judge_rechain_prompt(
                     rows=rows,
                     neighbours=plan.rechain_neighbours,
@@ -584,6 +586,7 @@ class JudgeRunner:
                     custom_placeholders=self._target.custom_placeholders,
                     grading_mode=self._grading_mode,
                     comment_style=self._comment_style(),
+                    fitting_map=self._fitting_map(rows),
                 )
             return build_judge_prompt(
                 rows=rows,
@@ -670,6 +673,7 @@ class JudgeRunner:
                 if number == row:
                     source, translation = src, dst
                     break
+            fitting_info = self._fitting_map([(row, source, translation)]).get(row, "")
             return build_judge_single_prompt(
                 row=row,
                 source=source,
@@ -681,6 +685,7 @@ class JudgeRunner:
                 context=contexts.get(row, ""),
                 custom_placeholders=self._target.custom_placeholders,
                 grading_mode=self._grading_mode,
+                fitting=fitting_info,
             )
 
         def parse_solo(raw: str, row: int, task: BatchTask) -> str:
@@ -803,6 +808,10 @@ class JudgeRunner:
             context_map=self._section_context(task.extra["rows"], contexts),
             custom_placeholders=self._target.custom_placeholders,
             grading_mode=self._grading_mode,
+            # Same data the first attempt had: a retry whose prompt drops the
+            # FITTING lines (but keeps the criterion) would re-judge without
+            # the measurements the verdict is required to quote.
+            fitting_map=self._fitting_map(task.extra["rows"]),
         )
         while attempts < MAX_FORMAT_RETRIES and result.unparsed:
             if self._stop.is_set():
@@ -948,6 +957,13 @@ class JudgeRunner:
         # What the original said, so an unchanged reply can be told from a repair.
         before = {row: translation for row, _s, translation in targets}
 
+        # Spec 3.5: a fix the re-measure rejects is retried (the reason is fed
+        # back into the note), at most MAX_FITTING_RETRIES rounds, before the
+        # row lands in staged.failed with a [FITTING_STILL_FAIL] reason.
+        MAX_FITTING_RETRIES = 2
+        fitting_retries: dict[int, tuple[int, str]] = {}
+        retry_rows: set[int] = set()
+
         def build_prompt(task: BatchTask) -> str:
             return build_fix_prompt(
                 rows=task.extra["rows"],
@@ -1010,10 +1026,19 @@ class JudgeRunner:
                     self._emit_fix(row, text, changed=False)
                     continue
                 # Fitting gate (spec 3.5): check the proposed fix against the
-                # window and the token whitelist before staging.
+                # window and the token whitelist before staging. A rejected fix
+                # is not a failure yet — it is queued for a solo retry with the
+                # gate's reason in its correction note (up to 2 rounds below).
                 if "fitting" in (criteria or self.criteria):
                     fail = self.revalidate_fix(row, text, by_row.get(row, ("", ""))[0])
                     if fail:
+                        fitting_retries[row] = (
+                            fitting_retries.get(row, MAX_FITTING_RETRIES) - 1,
+                            fail,
+                        )
+                        if fitting_retries[row][0] >= 0:
+                            retry_rows.add(row)
+                            continue
                         staged.failed.append(row)
                         staged.errors.append(f"row {row}: [FITTING_STILL_FAIL] {fail}")
                         continue
@@ -1047,6 +1072,81 @@ class JudgeRunner:
             on_result=collect, solo_prompt_builder=build_solo, solo_parser=parse_solo,
             errors=staged.errors,
         )
+
+        # Fitting retry rounds (spec 3.5): each rejected fix is re-requested on
+        # its own with the gate's reason in the note, so the model knows WHY it
+        # must compress harder. The gate re-runs on every round.
+        round_num = 0
+        while retry_rows and round_num < MAX_FITTING_RETRIES:
+            round_num += 1
+            self._notify(
+                "info",
+                f"Fitting re-measure rejected {len(retry_rows)} fix(es) — "
+                f"retrying with the reason fed back (round {round_num}/{MAX_FITTING_RETRIES}).",
+            )
+            current = sorted(retry_rows)
+            retry_rows.clear()
+            retry_tasks = []
+            for index, row in enumerate(current, start=1):
+                source, translation = by_row.get(row, ("", ""))
+                fail_kind = fitting_retries.get(row, (0, ""))[1]
+                retry_notes = dict(notes)
+                retry_notes[row] = (
+                    f"{notes.get(row, '')} "
+                    f"[FITTING RETRY {round_num}/{MAX_FITTING_RETRIES}: the previous fix "
+                    f"failed the window check ({fail_kind}) — compress the line so it "
+                    f"fits {self._profile.max_lines} lines x {self._profile.window_cols} em, "
+                    f"or insert the source's line-break tag at a natural pause]"
+                ).strip()
+                retry_tasks.append(BatchTask(
+                    batch_num=index,
+                    total_batches=len(current),
+                    rows=[(row, translation)],
+                    extra={
+                        "rows": [(row, source, translation)],
+                        "index": index,
+                        "note_override": retry_notes,
+                    },
+                ))
+
+            def retry_build_prompt(task: BatchTask) -> str:
+                return build_fix_prompt(
+                    rows=task.extra["rows"],
+                    comments=task.extra["note_override"],
+                    criteria=criteria or self.criteria,
+                    src_lang=self._target.src_lang,
+                    tgt_lang=self._target.tgt_lang,
+                    style_prompt=self._target.style_prompt,
+                    context_map=self._section_context(task.extra["rows"], contexts),
+                    custom_placeholders=self._target.custom_placeholders,
+                    severities=severities,
+                    fitting_map=self._fitting_map(task.extra["rows"]),
+                )
+
+            def retry_build_solo(row: int, task: BatchTask) -> str:
+                source, translation = by_row.get(row, ("", ""))
+                fitting_info = self._fitting_map([(row, source, translation)]).get(row, "")
+                return build_fix_solo_prompt(
+                    row=row,
+                    source=source,
+                    translation=translation,
+                    comment=task.extra["note_override"].get(row, ""),
+                    src_lang=self._target.src_lang,
+                    tgt_lang=self._target.tgt_lang,
+                    style_prompt=self._target.style_prompt,
+                    context=contexts.get(row, ""),
+                    custom_placeholders=self._target.custom_placeholders,
+                    criteria=criteria or self.criteria,
+                    severities=severities,
+                    fitting=fitting_info,
+                )
+
+            self._run_tasks(
+                retry_tasks, retry_build_prompt, parse, None,
+                on_result=collect, solo_prompt_builder=retry_build_solo,
+                solo_parser=parse_solo, errors=staged.errors,
+            )
+
         staged.tokens_used = self._tokens_used
         staged.unchanged = [row for row in dict.fromkeys(staged.unchanged)]
         staged.failed = [row for row in dict.fromkeys(staged.failed)]
@@ -1179,6 +1279,7 @@ class JudgeRunner:
             source = source if source is not None else file_source
             text = text if text is not None else file_text
 
+        fitting_info = self._fitting_map([(row, source or "", text or "")]).get(row, "")
         prompt = build_judge_single_prompt(
             row=row,
             source=source,
@@ -1190,6 +1291,7 @@ class JudgeRunner:
             context=self._context_for(row),
             custom_placeholders=self._target.custom_placeholders,
             grading_mode=self._grading_mode,
+            fitting=fitting_info,
         )
         content, error = self._one_request(prompt, label=f"judge row {row}")
         if error:
