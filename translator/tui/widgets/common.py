@@ -121,12 +121,17 @@ class Picker(Widget, can_focus=True):
         options: Iterable[Option] | None = None,
         multi_select: bool = False,
         click_activates: bool = True,
+        max_visible: int | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.options: list[Option] = list(options or [])
         self.multi_select = multi_select
         self.click_activates = click_activates
+        # A scrolled list instead of a screen-growing one: the file screen
+        # with dozens of spreadsheets must stay compact (spec 2.1). None keeps
+        # the old grow-to-fit behaviour for every other picker.
+        self.max_visible = max_visible
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -246,7 +251,10 @@ class Picker(Widget, can_focus=True):
     # ── Render ────────────────────────────────────────────────────────────────
 
     def get_content_height(self, container, viewport, width: int) -> int:
-        return max(1, len(self.options))
+        height = max(1, len(self.options))
+        if self.max_visible is not None:
+            height = min(height, self.max_visible)
+        return height
 
     def render_line(self, y: int) -> Strip:
         row = y + self.scroll_offset.y
