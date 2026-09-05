@@ -78,14 +78,24 @@ def detect_newline_tag(source_row: str) -> str | None                # lihat 1.2
   `\C[1]` sebagai 5 huruf). Pengukuran per segmen `\n`.
 
 ### 1.2b Deteksi tag line-break dari source (keputusan diskusi)
-`detect_newline_tag(source_row)` scan SATU baris source dan cari, berurutan
-prioritas: `\n` → `[r]` → `[br]` → `[BR]` → `\n` literal (escape engine).
-Rumah fungsi: `measure.py`. Hasil:
-- Tag ditemukan → AI Judge diberi tip verbatim per baris: "this game's line
-  break token, as it appears in the source: `[r]` — if you suggest a line
-  break, suggest exactly this token".
-- Tidak ada tag → prompt **tidak menyebut line break sama sekali**; AI hanya
-  boleh menyarankan peringkasan. Tanpa bukti, tanpa saran — konservatif.
+Dua hal berbeda yang tidak boleh tertukar:
+- **Pemisah segmen (untuk pengukuran)**: karakter newline asli (0x0A) di dalam
+  sel DAN tag teks — keduanya dianggap jeda oleh `measure_lines`/`wrap.py`.
+- **Tag sisip (untuk saran AI)**: HANYA tag teks yang literal muncul di sel —
+  sesuatu yang bisa AI ketik dalam output satu-baris dan aman round-trip
+  lewat `encode_placeholders`. Karakter 0x0A asli BUKAN tag sisip: AI tidak
+  bisa menghasilkannya lewat protokol `[N]` per baris.
+
+`detect_newline_tag(source_row)` scan SATU baris source dan cari tag teks,
+prioritas: `\n` literal (backslash-n) → `[r]` → `[br]` → `[BR]`. Rumah fungsi:
+`measure.py`. Hasil:
+- Tag teks ditemukan → AI Judge diberi tip verbatim per baris: "this game's
+  line break token, as it appears in the source: `[r]` — if you suggest a
+  line break, suggest exactly this token".
+- Tidak ada tag teks (termasuk sel yang hanya punya 0x0A asli) → prompt
+  **tidak menyebut line break sama sekali**; AI hanya boleh menyarankan
+  peringkasan. Tanpa bukti yang bisa disisipkan, tanpa saran sisipan —
+  konservatif; pemisah 0x0A tetap dihitung saat mengukur.
 - Deteksi dilakukan per-baris pada source, bukan global file (file bisa
   campur event type).
 
