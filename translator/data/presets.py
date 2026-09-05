@@ -137,6 +137,23 @@ def save_user_preset(label: str, prompt: str) -> dict:
     return preset
 
 
+def update_user_preset(key: str, prompt: str) -> bool:
+    """Update an existing saved preset's prompt. False if not found or is builtin."""
+    if is_builtin(key):
+        return False
+    presets = load_user_presets()
+    found = False
+    for p in presets:
+        if p["key"] == key:
+            p["prompt"] = prompt.strip()
+            found = True
+            break
+    if not found:
+        return False
+    _write(presets)
+    return True
+
+
 def delete_user_preset(key: str) -> bool:
     """False if there was no such saved preset — built-ins never match."""
     presets = load_user_presets()

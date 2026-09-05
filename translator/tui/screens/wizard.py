@@ -25,6 +25,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import Input, Label, Static
 
 from ... import config
@@ -36,6 +37,7 @@ from ...data.presets import (
     is_builtin,
     load_user_presets,
     save_user_preset,
+    update_user_preset,
 )
 from ...io.excel_io import ExcelReader, translated_path
 from ...parsing.columns import detect_columns
@@ -51,6 +53,7 @@ from ..theme import ACCENT, ERROR, MUTED, OK, WARN
 from ..widgets.common import (
     ColumnPreview,
     ColumnRole,
+    KeyHints,
     LabeledInput,
     LabeledTextArea,
     Option,
@@ -628,6 +631,101 @@ class ColumnsScreen(WizardScreen):
 
 # ── Step 3: languages and style (one screen) ──────────────────────────────────
 
+class SaveNewPresetModal(ModalScreen[tuple[bool, str] | None]):
+    """
+    Modal popup asking to save a custom or modified prompt as a reusable preset.
+    Returns:
+      (True, name)  -> save to preset list with the given name
+      (False, "")   -> use once without saving to presets
+      None          -> cancelled
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(self, default_name: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._default_name = default_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Save as new preset?", classes="title")
+            yield Label("Give this preset a name to save it, or use once without saving:", classes="muted")
+            self._name = LabeledInput("Preset name", value=self._default_name, placeholder="e.g. RPG Dialogue Casual")
+            yield self._name
+            yield Label("", id="save-preset-error", classes="error")
+            self.picker = Picker([
+                Option("Yes, save to presets list", "yes", style=OK),
+                Option("No, use once without saving", "no"),
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "select"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        self._name.focus_input()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save_yes()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        if event.option.value == "yes":
+            self._save_yes()
+        elif event.option.value == "no":
+            self.dismiss((False, ""))
+        else:
+            self.dismiss(None)
+
+    def _save_yes(self) -> None:
+        name = (self._name.value or "").strip()
+        if not name:
+            self.query_one("#save-preset-error", Label).update("Preset name cannot be empty.")
+            self._name.focus_input()
+            return
+        self.dismiss((True, name))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmPresetChangeModal(ModalScreen[str | None]):
+    """
+    Modal popup when an existing saved preset's prompt was edited.
+    Returns:
+      "save" -> update preset file
+      "once" -> use edited text once
+      None   -> cancelled
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(self, preset_label: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._preset_label = preset_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Save changes to preset?", classes="title")
+            yield Label(
+                f"You modified the prompt for '{self._preset_label}'. "
+                "Do you want to save these changes to the preset file?",
+                classes="muted",
+            )
+            self.picker = Picker([
+                Option("Yes, save changes to preset", "save", style=OK),
+                Option("No, use once without saving", "once"),
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "select"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        self.picker.focus()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self.dismiss(str(event.option.value))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
 class LanguageStyleScreen(WizardScreen):
     """
     Source/target languages and the translation style on one screen (UET_UX §5).
@@ -665,19 +763,12 @@ class LanguageStyleScreen(WizardScreen):
             self.picker.styles.max_height = 10000
             yield self.picker
         self._prompt_edit = LabeledTextArea(
-            "Prompt (press 'e' or click below to edit, Shift+Enter for newline)",
+            "Prompt (press 'e' or click below to edit, Enter for newline)",
             placeholder="Style prompt...",
             min_lines=3,
             max_lines=5,
         )
         yield self._prompt_edit
-        self._name = LabeledInput(
-            "Save as preset (optional)",
-            hint="Name it to keep it for next time, or leave empty to use it "
-                 "just this once.",
-        )
-        self._name.display = False
-        yield self._name
 
     def compose_above_footer(self) -> ComposeResult:
         self._confirm_bar = Picker(
@@ -741,10 +832,7 @@ class LanguageStyleScreen(WizardScreen):
 
     def _show_prompt(self) -> None:
         option = self.picker.current
-        if option is None:
-            return
-        if option.value == self.NEW:
-            self._prompt_edit.value = ""
+        if option is None or option.value == self.NEW:
             return
         preset = self._find(option.value)
         if preset:
@@ -768,11 +856,11 @@ class LanguageStyleScreen(WizardScreen):
             if self._langs_ok():
                 self.picker.focus()
             return
-        if hasattr(self, "_name") and event.input is self._name.input:
-            self._confirm()
 
     def on_paste_area_submitted(self, event: PasteArea.Submitted) -> None:
-        self._confirm()
+        # Pressing Enter inside multi-line prompt editor inserts a newline;
+        # does NOT submit the wizard so user never accidentally advances!
+        event.area.insert("\n")
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
         if event.picker is getattr(self, "_confirm_bar", None):
@@ -801,15 +889,93 @@ class LanguageStyleScreen(WizardScreen):
             self.notify_status("Style prompt cannot be empty.", WARN)
             self._prompt_edit.focus_input()
             return
-        name = self._name.value.strip()
-        if name:
-            try:
-                save_user_preset(name, prompt)
-            except OSError as exc:
-                self.notify_status(f"Could not save the preset: {exc}", ERROR)
-                return
+        self._pending_prompt = prompt
+
+        option = self.picker.current
+        is_new = (option is None or option.value == self.NEW)
+        preset = self._find(option.value) if (option and option.value != self.NEW) else None
+
+        if is_new:
+            # Case 1: Custom prompt created from "+ New custom prompt" -> Ask to save
+            self.app.push_screen(
+                SaveNewPresetModal(),
+                self._handle_new_preset_modal,
+            )
+            return
+
+        if preset:
+            original_prompt = (preset.get("prompt") or "").strip()
+            if prompt != original_prompt:
+                # Prompt was modified!
+                if is_builtin(option.value):
+                    # Builtin preset cannot be overwritten directly -> offer to save as new preset
+                    self.app.push_screen(
+                        SaveNewPresetModal(default_name=f"{preset['label']} (Custom)"),
+                        self._handle_new_preset_modal,
+                    )
+                    return
+                else:
+                    # User's own saved preset (green) -> offer to save changes or use once
+                    self.app.push_screen(
+                        ConfirmPresetChangeModal(preset["label"]),
+                        self._handle_change_preset_modal,
+                    )
+                    return
+
+        # Case 3: Untouched preset -> continue directly
         self.draft["style_prompt"] = prompt
         self.app.push_screen(ProcessingScreen())
+
+    def _handle_new_preset_modal(self, result: tuple[bool, str] | None) -> None:
+        if result is None:
+            # Cancelled -> stay on screen, focus prompt editor
+            self._prompt_edit.focus_input()
+            return
+
+        save_it, name = result
+        prompt = getattr(self, "_pending_prompt", "") or self._prompt_edit.value.strip()
+
+        if save_it:
+            try:
+                new_preset = save_user_preset(name, prompt)
+                self._reload()
+                # Select the newly created preset in the list
+                for idx, opt in enumerate(self.picker.options):
+                    if opt.value == new_preset["key"]:
+                        self.picker.index = idx
+                        break
+                self._keep_style_cursor_visible()
+                self._show_prompt()
+                self.notify_status(f"Saved preset '{name}'. Select and confirm to proceed.", OK)
+                self.picker.focus()
+            except Exception as exc:
+                self.notify_status(f"Could not save preset: {exc}", ERROR)
+        else:
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(ProcessingScreen())
+
+    def _handle_change_preset_modal(self, choice: str | None) -> None:
+        if choice is None:
+            # Cancelled -> stay on screen, focus prompt editor
+            self._prompt_edit.focus_input()
+            return
+
+        prompt = getattr(self, "_pending_prompt", "") or self._prompt_edit.value.strip()
+        option = self.picker.current
+        preset = self._find(option.value) if option else None
+
+        if choice == "save" and preset:
+            try:
+                update_user_preset(preset["key"], prompt)
+                self._reload(keep_index=True)
+                self.notify_status(f"Updated preset '{preset['label']}'.", OK)
+            except Exception as exc:
+                self.notify_status(f"Could not update preset: {exc}", ERROR)
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(ProcessingScreen())
+        elif choice == "once":
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(ProcessingScreen())
 
     def action_delete(self) -> None:
         option = self.picker.current
