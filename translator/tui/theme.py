@@ -104,27 +104,6 @@ Picker {{
     max-height: 100%;
 }}
 
-#file-engine-split {{
-    height: auto;
-    width: 1fr;
-}}
-
-#col-files {{
-    width: 1fr;
-    margin-right: 1;
-}}
-
-#col-settings {{
-    width: 1fr;
-    margin-left: 1;
-}}
-
-/* The file box's picker must grow to its FULL content height — the
-   max-height clamp above gives its scroll container nothing to scroll
-   (virtual_size == size), so files past the fold were invisible. The clamp
-   is unset from Python (file_engine.py) because Textual CSS has no "none"
-   for max-height. */
-
 /* Must grow to its full content height, otherwise the scroll container
    has nothing to scroll and the feed silently clips at one screenful. */
 TranslationFeed {{
@@ -176,6 +155,21 @@ KeyHints {{
 #confirm-bar {{
     height: 2;
     border-top: solid {BORDER};
+}}
+
+#lang-row {{
+    height: auto;
+    width: 1fr;
+}}
+
+#lang-row > Vertical {{
+    width: 1fr;
+    height: auto;
+    margin-right: 1;
+}}
+
+#lang-row > Vertical:last-child {{
+    margin-right: 0;
 }}
 
 Input {{

@@ -91,7 +91,7 @@ class FileEngineScreen(BaseScreen):
         # capped at FILE_BOX_MAX rows with native scrolling past that (mouse
         # wheel + cursor-follow). max_visible would only CLIP the widget,
         # hiding rows with no way to reach them.
-        with VerticalScroll(id="file-scroll") as scroll:
+        with VerticalScroll(id="file-scroll", can_focus=False) as scroll:
             scroll.styles.border = ("round", MUTED)
             self.picker = Picker()
             # The global Picker rule clamps max-height to the container, which

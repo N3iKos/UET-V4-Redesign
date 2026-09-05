@@ -649,15 +649,17 @@ class LanguageStyleScreen(WizardScreen):
     def compose_body(self) -> ComposeResult:
         yield Label("Language and style", classes="title")
         self._src = LabeledInput("Source language", default="auto",
-                                 hint="auto = let the model detect it")
+                                 hint="auto = let model detect")
         self._tgt = LabeledInput("Target language", default="Indonesian")
-        yield self._src
-        yield self._tgt
+        with Horizontal(id="lang-row"):
+            with Vertical():
+                yield self._src
+            with Vertical():
+                yield self._tgt
         yield Label("Common: " + " · ".join(COMMON_LANGS), classes="hint")
         yield Label("", id="lang-error", classes="error")
-        yield Label("")
         yield Label("Style", classes="muted")
-        with VerticalScroll(id="style-scroll") as scroll:
+        with VerticalScroll(id="style-scroll", can_focus=False) as scroll:
             scroll.styles.border = ("round", MUTED)
             self.picker = Picker(click_activates=False)
             self.picker.styles.max_height = 10000
@@ -666,7 +668,7 @@ class LanguageStyleScreen(WizardScreen):
             "Prompt (press 'e' or click below to edit, Shift+Enter for newline)",
             placeholder="Style prompt...",
             min_lines=3,
-            max_lines=6,
+            max_lines=5,
         )
         yield self._prompt_edit
         self._name = LabeledInput(
@@ -674,6 +676,7 @@ class LanguageStyleScreen(WizardScreen):
             hint="Name it to keep it for next time, or leave empty to use it "
                  "just this once.",
         )
+        self._name.display = False
         yield self._name
 
     def compose_above_footer(self) -> ComposeResult:
@@ -703,7 +706,7 @@ class LanguageStyleScreen(WizardScreen):
         self.picker.set_options(options, keep_index=keep_index)
         try:
             scroll = self.query_one("#style-scroll", VerticalScroll)
-            scroll.styles.height = min(len(options), 8) + 2
+            scroll.styles.height = min(len(options), 10) + 2
         except Exception:
             pass
         self.refresh_keys()
