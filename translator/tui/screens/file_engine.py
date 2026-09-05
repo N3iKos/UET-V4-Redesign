@@ -23,6 +23,7 @@ import os
 from typing import Callable
 
 from textual.app import ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import Label
 
 from ... import config
@@ -33,7 +34,7 @@ from ..app import BaseScreen
 from ..theme import MUTED, OK
 from ..widgets.common import LabeledInput, Option, Picker
 
-MAX_VISIBLE_FILES = 5
+FILE_BOX_HEIGHT = "50%"   # half the screen, per the file-screen spec
 
 def engine_options() -> list[tuple[str, str]]:
     """(value, label) pairs; unverified profiles are marked so the user is told."""
@@ -73,14 +74,20 @@ class FileEngineScreen(BaseScreen):
     def compose_body(self):
         yield Label(self._title, classes="title")
         yield Label(f".xlsx / .csv files in {os.getcwd()}", classes="muted")
-        self.picker = Picker(max_visible=MAX_VISIBLE_FILES)
-        yield self.picker
+        # Full list, half-screen high, natively scrollable (mouse wheel +
+        # scrollbar): max_visible would only CLIP the widget, hiding files
+        # past the fifth row with no way to reach them.
+        with VerticalScroll(id="file-scroll") as scroll:
+            scroll.styles.height = FILE_BOX_HEIGHT
+            scroll.styles.border = ("round", MUTED)
+            self.picker = Picker()
+            yield self.picker
         yield Label("")
         self._path = LabeledInput("Path", value=self._existing,
                                   placeholder="/path/to/file.xlsx or .csv")
         yield self._path
         yield Label("Engine (text fitting)", classes="muted")
-        self._engine = Picker()          # single-select, click_activates=False
+        self._engine = Picker(click_activates=False)   # click sets, never commits
         yield self._engine
         yield Label("Fitting measures the engine's default message window — "
                     "wordwrap plugins make it inaccurate.", classes="muted")
@@ -131,6 +138,18 @@ class FileEngineScreen(BaseScreen):
         if event.picker is self.picker and event.option and event.option.value:
             self._path.input.value = str(event.option.value)
             self._recall_engine(str(event.option.value))
+            self._keep_cursor_visible()
+
+    def _keep_cursor_visible(self) -> None:
+        """Scroll the half-screen box so the cursor row never leaves view."""
+        scroll = self.query_one("#file-scroll", VerticalScroll)
+        view = max(1, scroll.size.height - 1)
+        y = scroll.scroll_offset.y
+        index = self.picker.index
+        if index < y:
+            scroll.scroll_to(y=index, animate=False)
+        elif index >= y + view:
+            scroll.scroll_to(y=index - view + 1, animate=False)
 
     def _recall_engine(self, path: str) -> None:
         engine = app_prefs.remembered_engine(path)
@@ -144,12 +163,16 @@ class FileEngineScreen(BaseScreen):
             self._confirm()
             return
         # Enter/click on a file: fill the path, move to the engine select.
+        # The ENGINE select deliberately does NOT commit — confirming happens
+        # only on the Confirm bar below (spec 2.1: one confirm gate).
         if event.picker is self.picker and event.option.value:
             self._path.input.value = str(event.option.value)
             self._recall_engine(str(event.option.value))
             self._engine.focus()
-        elif event.picker is self._engine and event.option.value:
-            self._confirm()
+        elif event.picker is self._engine:
+            # Engine chosen with Enter: hand focus to the Confirm bar, so a
+            # keyboard user lands one Enter away from committing.
+            self._confirm_bar.focus()
 
     def on_input_submitted(self, event) -> None:
         self._confirm()
