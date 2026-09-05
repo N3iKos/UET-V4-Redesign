@@ -23,7 +23,7 @@ import os
 from typing import Callable
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.widgets import Label
 
 from ... import config
@@ -34,7 +34,7 @@ from ..app import BaseScreen
 from ..theme import MUTED, OK
 from ..widgets.common import LabeledInput, Option, Picker
 
-FILE_BOX_HEIGHT = "50%"   # half the screen, per the file-screen spec
+FILE_BOX_MAX = 10   # adaptive box: full list up to 10 rows, past that it scrolls
 
 def engine_options() -> list[tuple[str, str]]:
     """(value, label) pairs; unverified profiles are marked so the user is told."""
@@ -76,36 +76,35 @@ class FileEngineScreen(BaseScreen):
         self._sort_translated = sort_translated_first
 
     def compose_body(self):
+        # Spec 2.1 layout, refined after a live look (user feedback): the Path
+        # input sits FIRST — it is the selection readout, so the clicked file
+        # fills the box directly above the list instead of the eye jumping
+        # across a tall empty panel. The file box below is adaptive: up to
+        # FILE_BOX_MAX files rendered in full, past that it scrolls — no
+        # half-screen of black void when the folder holds six files.
         yield Label(self._title, classes="title")
-        yield Label(f"Spreadsheet & Engine configuration for {os.getcwd()}", classes="muted")
-
-        with Horizontal(id="file-engine-split"):
-            # Kolom Kiri: Daftar File Spreadsheet
-            with Vertical(id="col-files"):
-                yield Label("Spreadsheet file (.xlsx / .csv)", classes="accent")
-                with VerticalScroll(id="file-scroll") as scroll:
-                    scroll.styles.height = 14
-                    scroll.styles.border = ("round", MUTED)
-                    self.picker = Picker()
-                    self.picker.styles.max_height = 10000
-                    yield self.picker
-
-            # Kolom Kanan: Path terpilih + Pilihan Engine
-            with Vertical(id="col-settings"):
-                yield Label("Selected Path", classes="accent")
-                self._path = LabeledInput("Target file path", value=self._existing,
-                                          placeholder="/path/to/file.xlsx or .csv")
-                yield self._path
-
-                yield Label("Engine Profile (Text Fitting)", classes="accent")
-                with VerticalScroll(id="engine-scroll") as escroll:
-                    escroll.styles.height = 8
-                    escroll.styles.border = ("round", MUTED)
-                    self._engine = Picker(click_activates=False)
-                    self._engine.styles.max_height = 10000
-                    yield self._engine
-                yield Label("Measures dialog window limits (wordwrap plugins may alter bounds).", classes="muted")
-
+        self._path = LabeledInput("Path", value=self._existing,
+                                  placeholder="/path/to/file.xlsx or .csv")
+        yield self._path
+        yield Label(f".xlsx / .csv files in {os.getcwd()}", classes="muted")
+        # Full list in an adaptive box: exactly as tall as the list when short,
+        # capped at FILE_BOX_MAX rows with native scrolling past that (mouse
+        # wheel + cursor-follow). max_visible would only CLIP the widget,
+        # hiding rows with no way to reach them.
+        with VerticalScroll(id="file-scroll") as scroll:
+            scroll.styles.border = ("round", MUTED)
+            self.picker = Picker()
+            # The global Picker rule clamps max-height to the container, which
+            # makes virtual_size == size: nothing to scroll, files past the
+            # fold unreachable. Inline styles beat CSS rules, and Textual CSS
+            # has no "none" for max-height — so a large numeric lift it is.
+            self.picker.styles.max_height = 10000
+            yield self.picker
+        yield Label("Engine (text fitting)", classes="muted")
+        self._engine = Picker(click_activates=False)   # click sets, never commits
+        yield self._engine
+        yield Label("Fitting measures the engine's default message window — "
+                    "wordwrap plugins make it inaccurate.", classes="muted")
         yield Label("", id="file-engine-error", classes="error")
 
     def compose_above_footer(self) -> ComposeResult:
@@ -136,6 +135,12 @@ class FileEngineScreen(BaseScreen):
             options.append(Option("No spreadsheet found here — type a path below", "",
                                   enabled=False, style=MUTED))
         self.picker.set_options(options)
+        # Adaptive height: the box is exactly as tall as its list when that is
+        # short (no black void under six files), and caps at FILE_BOX_MAX rows
+        # with native scrolling once the folder is bigger. +2 for the round
+        # border — Textual heights are border-box.
+        scroll = self.query_one("#file-scroll", VerticalScroll)
+        scroll.styles.height = min(len(options), FILE_BOX_MAX) + 2
         if self._existing:
             for i, opt in enumerate(options):
                 if opt.value == self._existing:
