@@ -21,18 +21,23 @@ class ParseRecoveryPipeline:
 
     GOOD_RATIO = config.PARSE_GOOD_RATIO
 
-    def recover(self, text: str, expected_row_nums: list[int]) -> dict[int, str]:
+    def recover(
+        self,
+        text: str,
+        expected_row_nums: list[int],
+        source_map: dict[int, str] | None = None,
+    ) -> dict[int, str]:
         n = len(expected_row_nums)
         if n == 0:
             return {}
 
         expected = set(expected_row_nums)
 
-        stage1 = self._fuzzy_remap_rows(self._parse_strict(text), expected)
+        stage1 = self._fuzzy_remap_rows(self._parse_strict(text, source_map), expected)
         if self._good(stage1, n):
             return stage1
 
-        stage2 = self._fuzzy_remap_rows(self._parse_loose(text, expected_row_nums), expected)
+        stage2 = self._fuzzy_remap_rows(self._parse_loose(text, expected_row_nums, source_map), expected)
         if self._good(stage2, n):
             return stage2
 
@@ -40,9 +45,14 @@ class ParseRecoveryPipeline:
         if self._good(merged, n):
             return merged
 
-        return self._parse_positional(text, expected_row_nums)
+        return self._parse_positional(text, expected_row_nums, source_map)
 
-    def recover_best_effort(self, text: str, expected_row_nums: list[int]) -> dict[int, str]:
+    def recover_best_effort(
+        self,
+        text: str,
+        expected_row_nums: list[int],
+        source_map: dict[int, str] | None = None,
+    ) -> dict[int, str]:
         """
         Everything the stages can find, with no good-enough gate.
 
@@ -57,8 +67,8 @@ class ParseRecoveryPipeline:
         if not expected_row_nums:
             return {}
         expected = set(expected_row_nums)
-        strict = self._fuzzy_remap_rows(self._parse_strict(text), expected)
-        loose = self._fuzzy_remap_rows(self._parse_loose(text, expected_row_nums), expected)
+        strict = self._fuzzy_remap_rows(self._parse_strict(text, source_map), expected)
+        loose = self._fuzzy_remap_rows(self._parse_loose(text, expected_row_nums, source_map), expected)
         return {**loose, **strict}          # strict format wins on conflict
 
     def missing_rows(self, parsed: dict[int, str], expected: list[int]) -> list[int]:
@@ -91,25 +101,28 @@ class ParseRecoveryPipeline:
 
     # ── Stages ────────────────────────────────────────────────────────────────
 
-    def _parse_strict(self, text: str) -> dict[int, str]:
+    def _parse_strict(self, text: str, source_map: dict[int, str] | None = None) -> dict[int, str]:
         result: dict[int, str] = {}
         for match in re.finditer(r"\[(\d+)\]\s*(.*?)(?=\n\s*\[\d+\]|\Z)", text, re.DOTALL):
-            value = self._clean(match.group(2))
+            rn = int(match.group(1))
+            source_text = (source_map or {}).get(rn, "")
+            value = self._clean(match.group(2), source_text=source_text)
             if value:
-                result[int(match.group(1))] = decode_placeholders(value)
+                result[rn] = decode_placeholders(value)
         return result
 
-    def _parse_loose(self, text: str, expected: list[int]) -> dict[int, str]:
+    def _parse_loose(self, text: str, expected: list[int], source_map: dict[int, str] | None = None) -> dict[int, str]:
         result: dict[int, str] = {}
         expected_set = set(expected)
         for match in re.finditer(r"^\s*(\d+)[.)]\s+(.*)", text, re.MULTILINE):
             rn = int(match.group(1))
-            value = self._clean(match.group(2))
+            source_text = (source_map or {}).get(rn, "")
+            value = self._clean(match.group(2), source_text=source_text)
             if rn in expected_set and value:
                 result[rn] = decode_placeholders(value)
         return result
 
-    def _parse_positional(self, text: str, expected: list[int]) -> dict[int, str]:
+    def _parse_positional(self, text: str, expected: list[int], source_map: dict[int, str] | None = None) -> dict[int, str]:
         """
         Last resort: map lines by position. Only ever allowed for a single
         row — using it on a batch is exactly how desync corruption happens.
@@ -123,15 +136,20 @@ class ParseRecoveryPipeline:
         result: dict[int, str] = {}
         for index, rn in enumerate(expected):
             if index < len(lines):
-                value = self._clean(lines[index])
+                source_text = (source_map or {}).get(rn, "")
+                value = self._clean(lines[index], source_text=source_text)
                 if value:
                     result[rn] = decode_placeholders(value)
         return result
 
-    def _clean(self, value: str) -> str:
+    def _clean(self, value: str, source_text: str = "") -> str:
         value = value.strip()
         value = re.sub(r"^(\[[\dN]+\]\s*)+", "", value).strip()
-        value = re.sub(r"^\d+[.)]\s+", "", value).strip()
+        # If the source text itself starts with a numbered bullet (e.g. "1. " or "2) "),
+        # preserve the number in the translation! Only strip if source has no leading number.
+        has_source_num = bool(re.match(r"^\d+[.)]\s+", (source_text or "").strip()))
+        if not has_source_num:
+            value = re.sub(r"^\d+[.)]\s+", "", value).strip()
         return value
 
     def _good(self, result: dict[int, str], n: int) -> bool:

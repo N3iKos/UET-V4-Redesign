@@ -1002,7 +1002,8 @@ class JudgeRunner:
             expected = task.row_numbers
             from ..parsing.recovery import ParseRecoveryPipeline
 
-            parsed = ParseRecoveryPipeline().recover(raw, expected)
+            batch_source = {rn: by_row.get(rn, ("", ""))[0] for rn in expected}
+            parsed = ParseRecoveryPipeline().recover(raw, expected, source_map=batch_source)
             results = {
                 row: text.strip() for row, text in parsed.items() if (text or "").strip()
             }
@@ -1010,7 +1011,8 @@ class JudgeRunner:
             return BatchResult(results=results, failed_rows=missing)
 
         def parse_solo(raw: str, row: int, task: BatchTask) -> str:
-            return parse_fixed_line(raw)
+            source, _ = by_row.get(row, ("", ""))
+            return parse_fixed_line(raw, source=source)
 
         def collect(task: BatchTask, result: BatchResult) -> None:
             for row, text in result.results.items():
@@ -1032,11 +1034,10 @@ class JudgeRunner:
                 if "fitting" in (criteria or self.criteria):
                     fail = self.revalidate_fix(row, text, by_row.get(row, ("", ""))[0])
                     if fail:
-                        fitting_retries[row] = (
-                            fitting_retries.get(row, MAX_FITTING_RETRIES) - 1,
-                            fail,
-                        )
-                        if fitting_retries[row][0] >= 0:
+                        prev_attempts = fitting_retries.get(row, (MAX_FITTING_RETRIES, ""))[0]
+                        retries_left = prev_attempts - 1
+                        fitting_retries[row] = (retries_left, fail)
+                        if retries_left >= 0:
                             retry_rows.add(row)
                             continue
                         staged.failed.append(row)
@@ -1240,7 +1241,7 @@ class JudgeRunner:
         content, error = self._one_request(prompt, label=f"fix row {row}")
         if error:
             return SingleFix(row=row, error=error)
-        text = parse_fixed_line(content or "")
+        text = parse_fixed_line(content or "", source=source)
         if not text:
             return SingleFix(
                 row=row, error="The model returned nothing usable for this row."

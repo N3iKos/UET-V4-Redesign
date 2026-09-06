@@ -94,3 +94,27 @@ def test_row_number_always_seen_when_flagged():
     result = parse_evaluation(_plain())
     assert 7 in result.rows_seen
     assert result.issues[7].row == 7
+
+
+def test_parse_fixed_line_preserves_source_number():
+    from translator.judge.parser import parse_fixed_line
+    # When source text starts with a number like "1. ", it must NOT be stripped!
+    res = parse_fixed_line("1. Tim Kelinci dapat dipanggil.", source="1. The Rabbit Team...")
+    assert res == "1. Tim Kelinci dapat dipanggil."
+
+
+def test_parse_fixed_line_strips_hallucinated_number():
+    from translator.judge.parser import parse_fixed_line
+    # When source text does NOT have a number, strip hallucinated bullet number
+    res = parse_fixed_line("1. Tim Kelinci dapat dipanggil.", source="The Rabbit Team...")
+    assert res == "Tim Kelinci dapat dipanggil."
+
+
+def test_recovery_pipeline_preserves_source_number():
+    from translator.parsing.recovery import ParseRecoveryPipeline
+    pipeline = ParseRecoveryPipeline()
+    reply = "[5364] 1. Tim Kelinci dapat dipanggil sekali sehari.\n[100] 2. Teks lain"
+    src_map = {5364: "1. The Rabbit Team...", 100: "No numbers here"}
+    recovered = pipeline.recover(reply, [5364, 100], source_map=src_map)
+    assert recovered[5364] == "1. Tim Kelinci dapat dipanggil sekali sehari."
+    assert recovered[100] == "Teks lain"

@@ -182,13 +182,15 @@ def parse_single(text: str, row: int, graded: bool = True) -> JudgeResult:
     return result
 
 
-def parse_fixed_line(text: str) -> str:
+def parse_fixed_line(text: str, source: str = "") -> str:
     """
     One repaired line, from a reply that may still carry its prefix.
 
     Same cleanup `recovery._clean` does: strip a leading `[N]` or `3.`, take the
     first non-empty line, and undo the placeholder encoding the prompt applied.
     A model that adds "Corrected:" is trimmed too.
+    If source text begins with a number (e.g. "1. "), preserve the number in
+    the corrected translation instead of stripping it.
     """
     from ..parsing.placeholders import decode_placeholders
 
@@ -196,12 +198,14 @@ def parse_fixed_line(text: str) -> str:
     if not body:
         return ""
     body = re.sub(r"^(corrected|output|result)\s*:\s*", "", body, flags=re.IGNORECASE)
+    has_source_num = bool(re.match(r"^\d+[.)]\s+", (source or "").strip()))
     for line in body.splitlines():
         candidate = line.strip()
         if not candidate:
             continue
         candidate = re.sub(r"^(\[\d+\]\s*)+", "", candidate).strip()
-        candidate = re.sub(r"^\d+[.)]\s+", "", candidate).strip()
+        if not has_source_num:
+            candidate = re.sub(r"^\d+[.)]\s+", "", candidate).strip()
         if candidate:
             return decode_placeholders(candidate)
     return ""

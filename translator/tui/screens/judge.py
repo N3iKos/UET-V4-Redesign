@@ -4167,6 +4167,9 @@ class JudgeRunScreen(BaseScreen):
                 kind="warn",
             )
         if not staged.texts:
+            self._fix_seen.clear()
+            self._fixed_live.clear()
+            self._paint_rail()
             # `unchanged` is a result, not a failure: the model declined to guess
             # rather than returning something wrong, and saying so is the whole
             # point of tracking it separately.

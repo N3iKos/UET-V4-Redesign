@@ -573,12 +573,11 @@ class ProcessingEngine:
             # re-asking the model"; translate parsing is purely local, so it
             # is accepted and ignored rather than wired to anything.
             expected = task.row_numbers
+            batch_source = {rn: source_map.get(rn, "") for rn in expected}
             if job.prompt_format == "json":
                 parsed = parse_json_response(raw, expected)
             else:
-                parsed = self._parser.recover(raw, expected)
-
-            batch_source = {rn: source_map.get(rn, "") for rn in expected}
+                parsed = self._parser.recover(raw, expected, source_map=batch_source)
             validated = validate_alignment(parsed, batch_source, mode=job.anti_desync)
             rejected = len(parsed) - len(validated)
             if rejected > 0:
