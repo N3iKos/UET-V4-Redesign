@@ -89,6 +89,15 @@ def _failover_hint(prefs: dict) -> str:
     return f"on — switch to Priority #1, #2... after {retries} failed retries"
 
 
+def _dedup_hint(prefs: dict) -> str:
+    mode = prefs.get("dedup_mode", "in_memory")
+    return {
+        "in_memory": "In-Memory — deduplicate active file, fastest (default)",
+        "persistent": "Persistent TM — cross-file SQLite cache (~/.config/.../tm.db)",
+        "disabled": "Disabled — translate every row independently",
+    }.get(mode, mode)
+
+
 class SettingsScreen(MenuScreen):
     breadcrumb = "Settings"
     title_text = "Settings"
@@ -105,6 +114,8 @@ class SettingsScreen(MenuScreen):
                    hint=f"{mode} — {MODE_HINTS.get(mode, '')}"),
             Option("  Translate batch continuity", "translate_chain",
                    hint=_translate_chain_hint(prefs)),
+            Option("  Deduplication & TM", "dedup_mode",
+                   hint=_dedup_hint(prefs)),
             Option("  Preferred rows/request", "preferred_rows",
                    hint=f"{prefs['preferred_rows_per_request']} rows — what Processing aims for"),
             Option("  Maximum rows/request", "max_rows_cap",
@@ -171,6 +182,11 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(JudgeChainModal(), self._judge_chain_done)
         elif option.value == "translate_chain":
             self.app.push_screen(TranslateChainModal(), self._translate_chain_done)
+        elif option.value == "dedup_mode":
+            self.app.push_screen(
+                DedupModeModal(app_prefs.dedup_mode()),
+                self._dedup_mode_done,
+            )
         elif option.value == "rows":
             self.app.push_screen(MaxRowsModal(), self._rows_done)
         elif option.value == "preferred_rows":
@@ -203,6 +219,13 @@ class SettingsScreen(MenuScreen):
         self.notify_status(
             f"New jobs default to {mode}. The wizard can still override it.", OK
         )
+
+    def _dedup_mode_done(self, mode: str | None) -> None:
+        if not mode:
+            return
+        stored = app_prefs.set_dedup_mode(mode)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        self.notify_status(f"Deduplication mode set to {stored}.", OK)
 
     def _grading_done(self, mode: str | None) -> None:
         if not mode:
@@ -433,6 +456,53 @@ class ProcessingModeModal(ModalScreen[str]):
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
         self.dismiss(event.option.value)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+DEDUP_HINTS = {
+    "in_memory": "deduplicate within active file only (fastest, saves 40–70% tokens, default)",
+    "persistent": "persistent SQLite Translation Memory cache across all files (~/.config/.../tm.db)",
+    "disabled": "process every row independently without deduplication",
+}
+
+
+class DedupModeModal(ModalScreen[str]):
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(self, current: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Deduplication & Translation Memory", classes="title")
+            yield Label(
+                "When files contain duplicate text lines, process unique rows once "
+                "and copy the result to all identical rows:",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option(
+                    name + ("   (current)" if name == self._current else ""),
+                    name,
+                    hint=DEDUP_HINTS.get(name, ""),
+                )
+                for name in app_prefs.DEDUP_MODES
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        for index, name in enumerate(app_prefs.DEDUP_MODES):
+            if name == self._current:
+                self.picker.index = index
+                break
+        self.picker.focus()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self.dismiss(str(event.option.value))
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)

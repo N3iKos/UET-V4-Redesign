@@ -35,6 +35,9 @@ GRADING_MODES = ("severity", "none")
 JUDGE_CRITERIA = ("mistranslation", "context", "placeholder", "style", "fitting")
 DEFAULT_JUDGE_CRITERIA = ["mistranslation", "context", "placeholder", "style"]
 
+# Deduplication / Translation Memory modes.
+DEDUP_MODES = ("in_memory", "persistent", "disabled")
+
 DEFAULTS: dict = {
     "processing_mode_default": config.DEFAULT_PROCESSING_MODE,
     "judge_grading_mode": config.DEFAULT_JUDGE_GRADING_MODE,
@@ -77,6 +80,11 @@ DEFAULTS: dict = {
     # If the user selects fitting or deselects others, the combination is
     # remembered for subsequent runs.
     "last_judge_criteria": list(DEFAULT_JUDGE_CRITERIA),
+    # Deduplication & Translation Memory mode:
+    #   in_memory   — deduplicate within the active file only (fast, no disk db)
+    #   persistent  — cross-file translation memory (SQLite ~/.config/.../tm.db)
+    #   disabled    — translate every row independently
+    "dedup_mode": "in_memory",
 }
 
 
@@ -148,6 +156,7 @@ def load_prefs() -> dict:
     prefs["failover_retry_threshold"] = _clamp_failover_retries(
         payload.get("failover_retry_threshold")
     )
+    prefs["dedup_mode"] = _clean_dedup_mode(payload.get("dedup_mode"))
     return prefs
 
 
@@ -210,6 +219,7 @@ def save_prefs(prefs: dict) -> None:
     current["failover_retry_threshold"] = _clamp_failover_retries(
         current.get("failover_retry_threshold")
     )
+    current["dedup_mode"] = _clean_dedup_mode(current.get("dedup_mode"))
     try:
         _write(current)
     except OSError:
@@ -459,6 +469,13 @@ def _clean_judge_criteria(value) -> list[str]:
     return clean or list(DEFAULT_JUDGE_CRITERIA)
 
 
+def _clean_dedup_mode(value) -> str:
+    """Validate deduplication mode; defaults to 'in_memory'."""
+    if isinstance(value, str) and value in DEDUP_MODES:
+        return value
+    return "in_memory"
+
+
 def _clamp_workers(value) -> int:
     """Worker count for a remembered Judge operation, clamped to 1–50."""
     try:
@@ -542,6 +559,19 @@ def set_last_judge_criteria(criteria: list[str]) -> list[str]:
     clean = _clean_judge_criteria(criteria)
     save_prefs({"last_judge_criteria": clean})
     return clean
+
+
+# ── Deduplication / Translation Memory ───────────────────────────────────────
+
+def dedup_mode() -> str:
+    """Active deduplication mode: 'in_memory' (default), 'persistent', or 'disabled'."""
+    return _clean_dedup_mode(load_prefs().get("dedup_mode"))
+
+
+def set_dedup_mode(mode: str) -> str:
+    cleaned = _clean_dedup_mode(mode)
+    save_prefs({"dedup_mode": cleaned})
+    return cleaned
 
 
 def _clamp_chain_window(value) -> int:

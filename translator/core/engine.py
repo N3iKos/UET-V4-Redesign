@@ -415,11 +415,41 @@ class ProcessingEngine:
         self._dst_col = dst_col
         self._source_symbols = collect_source_symbols([text for _, text in rows])
         source_map = dict(rows)
+        self._source_map = source_map
 
-        tasks = build_batches(rows, job.batch_size, is_repair=False, context_map=context_map)
+        from ..data.app_prefs import dedup_mode
+        current_dedup = dedup_mode()
+        self._dedup_mode = current_dedup
+
+        rows_to_batch = rows
+        if current_dedup == "persistent":
+            from .tm import lookup_tm_batch
+            all_texts = [text for _, text in rows if text.strip()]
+            tm_cache = lookup_tm_batch(job.src_lang, job.tgt_lang, all_texts)
+            if tm_cache:
+                tm_hits = {r: tm_cache[text] for r, text in rows if text in tm_cache}
+                if tm_hits:
+                    self._writer.flush(tm_hits, dst_col)
+                    rows_to_batch = [(r, text) for r, text in rows if text not in tm_cache]
+                    self._notice("info", f"Translation Memory: {len(tm_hits)} row(s) filled from persistent cache.")
+
+        if current_dedup in ("in_memory", "persistent") and rows_to_batch:
+            dedup_groups: dict[str, list[int]] = {}
+            for r, text in rows_to_batch:
+                dedup_groups.setdefault(text, []).append(r)
+            unique_rows = [(r_list[0], text) for text, r_list in dedup_groups.items()]
+            self._sibling_map = {r_list[0]: r_list for r_list in dedup_groups.values() if len(r_list) > 1}
+            dedup_saved = len(rows_to_batch) - len(unique_rows)
+            if dedup_saved > 0:
+                self._notice("info", f"Deduplication: {len(unique_rows)} unique row(s) to translate ({dedup_saved} duplicates skipped).")
+            rows_to_batch = unique_rows
+        else:
+            self._sibling_map = {}
+
+        tasks = build_batches(rows_to_batch, job.batch_size, is_repair=False, context_map=context_map)
         self._notice(
             "info",
-            f"Translate: {len(rows)} row(s) in {len(tasks)} batch(es), "
+            f"Translate: {len(rows)} row(s) ({len(rows_to_batch)} queued) in {len(tasks)} batch(es), "
             f"{job.processing_mode} x{job.n_workers}.",
         )
 
@@ -681,10 +711,31 @@ class ProcessingEngine:
     def _write_result(self, task: BatchTask, result: BatchResult) -> None:
         """Hand finished rows to the async writer. Never blocks on disk."""
         payload = dict(result.results)
+        if hasattr(self, "_sibling_map") and self._sibling_map:
+            for rep_row, trans_text in list(result.results.items()):
+                siblings = self._sibling_map.get(rep_row)
+                if siblings:
+                    for s_row in siblings:
+                        payload[s_row] = trans_text
+            for rep_row in result.failed_rows:
+                siblings = self._sibling_map.get(rep_row)
+                if siblings:
+                    for s_row in siblings:
+                        payload.setdefault(s_row, config.FAIL_MARKER)
+
         for row_num in result.failed_rows:
             payload.setdefault(row_num, config.FAIL_MARKER)
         if payload:
             self._writer.flush(payload, self._dst_col)
+        if getattr(self, "_dedup_mode", "in_memory") == "persistent" and result.results:
+            from .tm import store_tm_batch
+            source_map = getattr(self, "_source_map", {})
+            pairs = [
+                (source_map.get(r, ""), t)
+                for r, t in result.results.items()
+                if source_map.get(r) and t != config.FAIL_MARKER
+            ]
+            store_tm_batch(self._job.src_lang, self._job.tgt_lang, pairs)
         if self._on_result_hook is not None:
             self._on_result_hook(task, result)
         if self._job.debug_log:

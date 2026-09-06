@@ -84,7 +84,9 @@ def test_persistent_prose_marks_rows_unevaluated():
     assert client.calls == 4
     assert report.summary.unevaluated == 2
     assert report.summary.evaluated == 0
-    assert not report.issues
+    # Unevaluated rows are flagged as unjudged problems so they can be filtered and re-judged
+    assert set(report.issues.keys()) == {1, 2}
+    assert all("unjudged" in report.issues[r].error_types for r in (1, 2))
     assert all(section.unparsed for section in report.sections)
 
 

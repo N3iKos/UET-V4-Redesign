@@ -464,6 +464,23 @@ class JudgeRunner:
             else:
                 askable.append((row, source, translation))
 
+        from ..data.app_prefs import dedup_mode
+        current_dedup = dedup_mode()
+        if current_dedup in ("in_memory", "persistent") and askable:
+            pair_groups: dict[tuple[str, str], list[int]] = {}
+            for r, s, t in askable:
+                pair_groups.setdefault(((s or "").strip(), (t or "").strip()), []).append(r)
+            unique_askable = []
+            self._judge_siblings: dict[int, list[int]] = {}
+            for (s, t), r_list in pair_groups.items():
+                rep_r = r_list[0]
+                unique_askable.append((rep_r, s, t))
+                if len(r_list) > 1:
+                    self._judge_siblings[rep_r] = r_list[1:]
+            askable = unique_askable
+        else:
+            self._judge_siblings = {}
+
         sections = estimator.split_sections(askable, max_tokens=self._max_tokens, max_rows=self._max_rows)
         return EvaluationPlan(
             rows=rows,
@@ -555,6 +572,24 @@ class JudgeRunner:
 
         if plan.sections:
             self._run_evaluation(plan, contexts, report)
+
+        # Expand deduplicated findings to identical duplicate sibling rows
+        if hasattr(self, "_judge_siblings") and self._judge_siblings:
+            for rep_row, siblings in self._judge_siblings.items():
+                if rep_row in report.issues:
+                    issue = report.issues[rep_row]
+                    for s_row in siblings:
+                        if s_row not in report.issues:
+                            s_issue = RowIssue(
+                                row=s_row,
+                                error_types=list(issue.error_types),
+                                comment=issue.comment,
+                                severity=issue.severity,
+                            )
+                            report.issues[s_row] = s_issue
+                            self._emit_row(s_row, s_issue)
+                if rep_row in self._rows_seen:
+                    self._rows_seen.update(siblings)
 
         report.summary = self._summarise(plan, report)
         report.unparsed_sections = sum(
@@ -757,6 +792,11 @@ class JudgeRunner:
                     unevaluated.add(row)
                 elif row not in self._rows_seen:
                     unevaluated.add(row)
+
+        if hasattr(self, "_judge_siblings") and self._judge_siblings:
+            for rep_row, siblings in self._judge_siblings.items():
+                if rep_row in unevaluated:
+                    unevaluated.update(siblings)
 
         for row in unevaluated:
             if row not in report.issues:
