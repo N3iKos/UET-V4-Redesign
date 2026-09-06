@@ -97,7 +97,9 @@ from ...data.presets import (
     is_builtin,
     load_user_presets,
     save_user_preset,
+    update_user_preset,
 )
+from .wizard import ConfirmPresetChangeModal, SaveNewPresetModal
 from ...io.excel_io import ExcelReader
 from ...judge import estimator
 from ...judge.models import (
@@ -880,11 +882,6 @@ class JudgeStyleScreen(JudgeWizardScreen):
     """
     The languages and the style the translation was *supposed* to have.
 
-    Judge needs both for the same reason a translator does: "is this too formal"
-    has no answer until something says what formality was asked for, and
-    "mistranslated from what into what" is easier to judge when both languages
-    are named rather than inferred from the characters.
-
     Same preset list as the translate wizard — the built-ins, whatever the user
     has saved, `+ New custom prompt` — because a file translated with
     `game-H-ID` should be reviewed against `game-H-ID`, and making that a
@@ -902,77 +899,64 @@ class JudgeStyleScreen(JudgeWizardScreen):
     NEW = "__new__"
     NONE = "__none__"
 
-    BINDINGS = [Binding("d", "delete", "delete", show=False)]
+    BINDINGS = [
+        Binding("d", "delete", "delete", show=False),
+        Binding("e", "edit_style", "edit", show=False),
+    ]
 
     def compose_body(self) -> ComposeResult:
         yield Label("Languages and style", classes="title")
-        yield Label(
-            "What the translation was asked to be — the yardstick the review "
-            "measures against.",
-            classes="hint",
-        )
-        yield Label("")
         self._src = LabeledInput(
             "Source language",
             value=self.draft.get("src_lang", ""),
             default="auto",
-            hint="auto = let the model work it out from the text",
+            hint="auto = let model detect",
         )
         self._tgt = LabeledInput(
             "Target language",
             value=self.draft.get("tgt_lang", ""),
             default="Indonesian",
         )
-        yield self._src
-        yield self._tgt
-        yield Label("")
+        with Horizontal(id="lang-row"):
+            with Vertical():
+                yield self._src
+            with Vertical():
+                yield self._tgt
         yield Label("Style the translation should match", classes="muted")
-        self.picker = Picker()
-        yield self.picker
-        yield Label("")
-        yield Static("", id="judge-style-preview", classes="panel")
-        self._custom = LabeledInput(
-            "Custom prompt",
-            hint="The register the translation should be in: tone, what to keep "
-                 "verbatim, what to leave alone.",
+        with VerticalScroll(id="style-scroll", can_focus=False) as scroll:
+            scroll.styles.border = ("round", MUTED)
+            self.picker = Picker(click_activates=False)
+            self.picker.styles.max_height = 10000
+            yield self.picker
+        self._prompt_edit = LabeledTextArea(
+            "Style yardstick (press 'e' or click below to edit, Enter for newline)",
+            placeholder="No style prompt — model infers register from text and judges consistency, fitness and naturalness objectively.",
+            min_lines=3,
+            max_lines=5,
         )
-        self._custom.display = False
-        yield self._custom
-        self._name = LabeledInput(
-            "Save as preset",
-            hint="Name it to keep it for next time, or leave empty to use it just this once.",
-        )
-        self._name.display = False
-        yield self._name
+        yield self._prompt_edit
 
     def compose_above_footer(self) -> ComposeResult:
-        # A button, not a radio group: one click commits (see JudgeCriteriaScreen).
-        self._confirm = Picker(
-            [Option("Confirm and next", "next", style=OK)], id="confirm-bar"
+        self._confirm_bar = Picker(
+            [
+                Option("Confirm and next", "confirm", style=OK),
+                Option("Edit prompt in place (e)", "edit"),
+            ],
+            id="confirm-bar",
         )
-        yield self._confirm
+        yield self._confirm_bar
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        if getattr(self, "_custom", None) is not None and self._custom.display:
-            return [("⏎", "next / save"), ("esc", "back to list")]
-        keys = [("↑↓", "move"), ("tab", "next field"), ("⏎", "confirm")]
+        keys = [("tab", "next field"), ("↑↓", "style"), ("e", "edit prompt"), ("⏎", "confirm")]
         if getattr(self, "_saved", None):
             keys.append(("d", "delete saved"))
         return keys + [("←", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
+        self._src.value = self.draft.get("src_lang", "")
+        self._tgt.value = self.draft.get("tgt_lang", "")
         self._reload()
         self._src.focus_input()
-
-    def _commit(self) -> None:
-        """Languages are required before the style choice means anything."""
-        if not self._tgt.value.strip():
-            self.notify_status("Target language is required.", ERROR)
-            self._tgt.focus_input()
-            return
-        self.draft["src_lang"] = self._src.value
-        self.draft["tgt_lang"] = self._tgt.value
-        self.app.push_screen(JudgePacingScreen())
 
     def _reload(self, keep_index: bool = False) -> None:
         self._saved = load_user_presets()
@@ -991,6 +975,11 @@ class JudgeStyleScreen(JudgeWizardScreen):
         ]
         options.append(Option("+ New custom prompt", self.NEW, style=ACCENT))
         self.picker.set_options(options, keep_index=keep_index)
+        try:
+            scroll = self.query_one("#style-scroll", VerticalScroll)
+            scroll.styles.height = min(len(options), 10) + 2
+        except Exception:
+            pass
 
         if not keep_index:
             self._preselect(options)
@@ -999,14 +988,6 @@ class JudgeStyleScreen(JudgeWizardScreen):
         self._show_prompt()
 
     def _preselect(self, options: list[Option]) -> None:
-        """
-        Land on the style this file was translated with, when that is known.
-
-        The post-run door carries the finished job's own style prompt, so a review
-        of a `game-H-ID` file starts on `game-H-ID` rather than on whatever
-        happens to be first. Matched by key when there is one and by prompt text
-        otherwise, because a job only remembers the text.
-        """
         wanted_key = (self.draft.get("style_key") or "").strip()
         wanted_prompt = (self.draft.get("style_prompt") or "").strip()
         for index, option in enumerate(options):
@@ -1020,8 +1001,6 @@ class JudgeStyleScreen(JudgeWizardScreen):
                     self.picker.index = index
                     return
         elif self.draft.get("from_job"):
-            # The job it came from had no style either; say so rather than
-            # silently proposing the first preset as though it did.
             for index, option in enumerate(options):
                 if option.value == self.NONE:
                     self.picker.index = index
@@ -1031,44 +1010,31 @@ class JudgeStyleScreen(JudgeWizardScreen):
         return next((p for p in PRESETS + self._saved if p["key"] == key), None)
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
-        self._show_prompt()
+        if event.picker is self.picker:
+            self._show_prompt()
+            self._keep_style_cursor_visible()
+
+    def _keep_style_cursor_visible(self) -> None:
+        try:
+            scroll = self.query_one("#style-scroll", VerticalScroll)
+            view = max(1, scroll.size.height - 1)
+            y = scroll.scroll_offset.y
+            index = self.picker.index
+            if index < y:
+                scroll.scroll_to(y=index, animate=False)
+            elif index >= y + view:
+                scroll.scroll_to(y=index - view + 1, animate=False)
+        except Exception:
+            pass
 
     def _show_prompt(self) -> None:
         option = self.picker.current
-        if not option or option.value == self.NONE:
-            self.query_one("#judge-style-preview", Static).update(
-                "[dim]No style prompt — model infers register from text and judges "
-                "consistency, fitness and naturalness objectively.[/]"
-            )
+        if not option or option.value == self.NONE or option.value == self.NEW:
+            self._prompt_edit.value = ""
             return
         preset = self._find(option.value)
-        self.query_one("#judge-style-preview", Static).update(
-            escape_markup(preset["prompt"]) if preset
-            else "[dim]You will type your own prompt.[/]"
-        )
-
-    def on_picker_selected(self, event: Picker.Selected) -> None:
-        if event.picker is getattr(self, "_confirm", None):
-            # The footer's confirm commits whatever the list is on, so the step
-            # can be finished from the language fields without walking back.
-            self._accept_current()
-            return
-        if event.option.value == self.NONE:
-            self.draft["style_key"] = ""
-            self.draft["style_prompt"] = ""
-            self._commit()
-            return
-        if event.option.value == self.NEW:
-            self._custom.display = True
-            self._custom.focus_input()
-            self.refresh_keys()
-            return
-        preset = self._find(event.option.value)
-        if preset is None:
-            return
-        self.draft["style_key"] = event.option.value
-        self.draft["style_prompt"] = preset["prompt"]
-        self._commit()
+        if preset:
+            self._prompt_edit.value = preset["prompt"]
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input is self._src.input:
@@ -1077,52 +1043,124 @@ class JudgeStyleScreen(JudgeWizardScreen):
         if event.input is self._tgt.input:
             self.picker.focus()
             return
-        if event.input is self._custom.input:
-            if not self._custom.value.strip():
-                self.notify_status("Type a prompt, or press Esc to go back.", WARN)
-                return
-            self._name.display = True
-            self._name.focus_input()
-            return
-        self._accept_custom()
 
-    def _accept_current(self) -> None:
-        """Commit whichever style the list is currently on."""
-        if self._custom.display:
-            self._accept_custom()
+    def on_paste_area_submitted(self, event: PasteArea.Submitted) -> None:
+        event.area.insert("\n")
+
+    def action_edit_style(self) -> None:
+        self._prompt_edit.focus_input()
+        self.refresh_keys()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        if event.picker is getattr(self, "_confirm_bar", None):
+            if event.option.value == "confirm":
+                self._confirm()
+            elif event.option.value == "edit":
+                self.action_edit_style()
             return
+        if event.picker is self.picker:
+            if event.option.value == self.NEW:
+                self._prompt_edit.value = ""
+                self._prompt_edit.focus_input()
+                return
+            self._show_prompt()
+            self._confirm_bar.focus()
+
+    def _confirm(self) -> None:
+        if not self._tgt.value.strip():
+            self.notify_status("Target language is required.", ERROR)
+            self._tgt.focus_input()
+            return
+        self.draft["src_lang"] = self._src.value
+        self.draft["tgt_lang"] = self._tgt.value
+
+        prompt = self._prompt_edit.value.strip()
         option = self.picker.current
-        if option is None or option.value == self.NONE:
+        is_none = (option is None or option.value == self.NONE)
+        is_new = (option and option.value == self.NEW)
+        preset = self._find(option.value) if (option and not is_none and not is_new) else None
+
+        if is_none and not prompt:
             self.draft["style_key"] = ""
             self.draft["style_prompt"] = ""
-            self._commit()
+            self.app.push_screen(JudgePacingScreen())
             return
-        if option.value == self.NEW:
-            self._custom.display = True
-            self._custom.focus_input()
-            self.refresh_keys()
-            return
-        preset = self._find(option.value)
-        if preset is None:
-            return
-        self.draft["style_key"] = option.value
-        self.draft["style_prompt"] = preset["prompt"]
-        self._commit()
 
-    def _accept_custom(self) -> None:
-        prompt = self._custom.value.strip()
-        name = self._name.value.strip()
-        if name:
-            try:
-                saved = save_user_preset(name, prompt)
-            except OSError as exc:
-                # Stay put rather than move on quietly: they asked for it to be
-                # kept, and the next screen would take the message with it.
-                self.notify_status(f"Could not save the preset: {exc}", ERROR)
-                return
-            self.draft["style_key"] = saved["key"]
+        self._pending_prompt = prompt
+
+        if is_new or (is_none and prompt):
+            self.app.push_screen(
+                SaveNewPresetModal(),
+                self._handle_new_preset_modal,
+            )
+            return
+
+        if preset:
+            original = (preset.get("prompt") or "").strip()
+            if prompt != original:
+                if is_builtin(option.value):
+                    self.app.push_screen(
+                        SaveNewPresetModal(default_name=f"{preset['label']} (Custom)"),
+                        self._handle_new_preset_modal,
+                    )
+                    return
+                else:
+                    self.app.push_screen(
+                        ConfirmPresetChangeModal(preset["label"]),
+                        self._handle_change_preset_modal,
+                    )
+                    return
+
+        self.draft["style_key"] = option.value if option else ""
         self.draft["style_prompt"] = prompt
-        self._commit()
+        self.app.push_screen(JudgePacingScreen())
+
+    def _handle_new_preset_modal(self, result: tuple[bool, str] | None) -> None:
+        if result is None:
+            self._prompt_edit.focus_input()
+            return
+        save_it, name = result
+        prompt = getattr(self, "_pending_prompt", "") or self._prompt_edit.value.strip()
+        if save_it:
+            try:
+                new_preset = save_user_preset(name, prompt)
+                self._reload()
+                for idx, opt in enumerate(self.picker.options):
+                    if opt.value == new_preset["key"]:
+                        self.picker.index = idx
+                        break
+                self._keep_style_cursor_visible()
+                self._show_prompt()
+                self.notify_status(f"Saved preset '{name}'. Select and confirm to proceed.", OK)
+                self.picker.focus()
+            except Exception as exc:
+                self.notify_status(f"Could not save preset: {exc}", ERROR)
+        else:
+            self.draft["style_key"] = ""
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(JudgePacingScreen())
+
+    def _handle_change_preset_modal(self, choice: str | None) -> None:
+        if choice is None:
+            self._prompt_edit.focus_input()
+            return
+        prompt = getattr(self, "_pending_prompt", "") or self._prompt_edit.value.strip()
+        option = self.picker.current
+        preset = self._find(option.value) if option else None
+        if choice == "save" and preset:
+            try:
+                update_user_preset(preset["key"], prompt)
+                self._reload(keep_index=True)
+                self.notify_status(f"Updated preset '{preset['label']}'.", OK)
+            except Exception as exc:
+                self.notify_status(f"Could not update preset: {exc}", ERROR)
+            self.draft["style_key"] = preset["key"]
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(JudgePacingScreen())
+        elif choice == "once":
+            self.draft["style_key"] = preset["key"] if preset else ""
+            self.draft["style_prompt"] = prompt
+            self.app.push_screen(JudgePacingScreen())
 
     def action_delete(self) -> None:
         option = self.picker.current
@@ -1141,15 +1179,6 @@ class JudgeStyleScreen(JudgeWizardScreen):
         self.notify_status(f"Deleted {preset['label'] if preset else 'preset'}.", WARN)
 
     def action_cancel(self) -> None:
-        if self._custom.display:
-            self._custom.display = False
-            self._name.display = False
-            self._custom.input.value = ""
-            self._name.input.value = ""
-            self.picker.focus()
-            self.notify_status("")
-            self.refresh_keys()
-            return
         super().action_cancel()
 
 
