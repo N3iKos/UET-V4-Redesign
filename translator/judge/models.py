@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 # detects itself, before any model is asked (FR-105 / business rule 2).
 CRITERIA: tuple[str, ...] = ("mistranslation", "context", "placeholder", "style", "fitting")
 DEFAULT_CRITERIA: tuple[str, ...] = ("mistranslation", "context", "placeholder", "style")
-ERROR_TYPES: tuple[str, ...] = CRITERIA + ("empty", "failed", "other")
+ERROR_TYPES: tuple[str, ...] = CRITERIA + ("empty", "failed", "unjudged", "other")
 
 CRITERION_LABELS: dict[str, str] = {
     "mistranslation": "Mistranslation — meaning drifted from the source",
@@ -36,9 +36,10 @@ CRITERION_LABELS: dict[str, str] = {
 
 ERROR_TYPE_LABELS: dict[str, str] = {
     **{key: key for key in CRITERIA},
-    "empty":  "empty",
-    "failed": "translate failed",
-    "other":  "other",
+    "empty":     "empty",
+    "failed":    "translate failed",
+    "unjudged":  "unjudged",
+    "other":     "other",
 }
 
 # How bad a flagged row is, graded on what a reader would experience rather than

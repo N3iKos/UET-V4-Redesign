@@ -1991,6 +1991,7 @@ class FilterBar(Widget):
             "all": MUTED,
             "problems": WARN,
             "fixed": OK,
+            "unjudged": WARN,
         }.get(key)
         if base is None and key.startswith("sev:"):
             base = _SEVERITY_STYLES.get(key[4:], WARN)
@@ -2364,6 +2365,11 @@ class JudgeRunScreen(BaseScreen):
             # The provider gave out mid-run: the first offer is to pick up where
             # it stopped, not to review a report that is not finished (bug #4).
             keys.append(("R", f"retry {len(self._unfinished_rows())} unfinished"))
+        elif self._filter not in ("all", "problems", "fixed", "settled", "rejudged"):
+            visible = self._visible_problems()
+            if visible:
+                scope = self._filter[4:] if self._filter.startswith("sev:") else self._filter
+                keys.append(("R", f"re-judge {len(visible)} {scope}"))
         # `f` fixes everything the filter is showing. A single row is fixed by
         # opening it (Enter / click) and choosing there.
         if self._report.problem_rows:
@@ -3183,15 +3189,20 @@ class JudgeRunScreen(BaseScreen):
 
     def action_retry_unfinished(self) -> None:
         """
-        Pick up a paused run from the rows it never reached (bug #4).
-
-        Only meaningful after the provider gave out mid-evaluation: the finished
-        rows stay exactly as they are, and this re-runs the evaluation over just
-        the unfinished ones, folding the fresh verdicts into the report already
-        on screen. Nothing already reviewed is re-sent.
+        Re-judge rows in the current filter, or pick up a paused run (bug #4).
         """
         if self._busy_batch or self._busy_row:
             return
+        if self._filter not in ("all", "problems", "fixed", "settled", "rejudged"):
+            visible = self._visible_problems()
+            if visible:
+                rows = sorted(visible)
+                self._with_rejudge_model(
+                    lambda slot, batch, workers: self._begin_rejudge_filtered(
+                        rows, slot, rows_per_request=batch, workers=workers
+                    )
+                )
+                return
         rows = self._unfinished_rows()
         if not rows:
             self.notify_status("Nothing is unfinished — the run completed.", MUTED)
@@ -3206,6 +3217,24 @@ class JudgeRunScreen(BaseScreen):
             f"Retrying {len(rows)} unfinished row(s)…", ACCENT
         )
         self._retry_unfinished(list(rows))
+
+    def _begin_rejudge_filtered(
+        self, rows: list[int], slot: tuple[str, str, str],
+        rows_per_request: int | None = None, workers: int | None = None,
+    ) -> None:
+        self._busy_batch = True
+        self._rejudging = True
+        self._rejudge_slot = slot
+        self._rejudge_rows = list(rows)
+        self._rejudge_seen = set()
+        self._rejudge_flagged = []
+        self._begin_op("Rejudge", slot)
+        self.refresh_keys()
+        self.notify_status(
+            f"Re-judging {len(rows)} row(s) from '{self._filter}' filter…",
+            ACCENT,
+        )
+        self._rejudge_many(list(rows), slot, workers=workers)
 
     @work(thread=True)
     def _retry_unfinished(self, rows: list[int]) -> None:
@@ -3375,6 +3404,11 @@ class JudgeRunScreen(BaseScreen):
             return None
         if key == "problems":
             return sorted(set(report.problem_rows))
+        if key == "unjudged":
+            return sorted(
+                row for row, issue in report.issues.items()
+                if "unjudged" in issue.error_types
+            )
         if key == "fixed":
             return sorted(self._before)
         if key == "settled":

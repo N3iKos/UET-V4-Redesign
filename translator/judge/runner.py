@@ -758,9 +758,18 @@ class JudgeRunner:
                 elif row not in self._rows_seen:
                     unevaluated.add(row)
 
+        for row in unevaluated:
+            if row not in report.issues:
+                report.issues[row] = RowIssue(
+                    row=row,
+                    error_types=["unjudged"],
+                    severity="moderate",
+                    comment="Request timed out or failed to evaluate. Re-judge to retry.",
+                )
+
         total = len(plan.rows)
         evaluated = total - len(unevaluated)
-        problems = [row for row in report.issues if row not in unevaluated]
+        problems = list(report.issues.keys())
 
         distribution: dict[str, int] = {}
         severity_counts: dict[str, int] = {}
