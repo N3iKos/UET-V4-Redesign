@@ -343,20 +343,30 @@ class JudgeRunner:
         chosen = [name for name in source if name in CRITERIA]
         if not self._target.has_context and "context" in chosen:
             chosen.remove("context")
-        if self._profile is None and "fitting" in chosen:
-            # Fitting without a profile is a criterion about nothing: the
-            # machine that feeds it has no window to measure against (spec 3.2).
-            chosen.remove("fitting")
         return chosen or ["mistranslation"]
 
     def _fitting_map(self, rows: list[tuple[int, str, str]]) -> dict[int, str]:
-        """Per-row FITTING prompt line — machine-measured, only for flagged rows."""
-        from ..fitting.audit import audit_rows, fitting_line
-        if self._profile is None:
-            return {}
-        return {
-            f.row: fitting_line(f) for f in audit_rows(rows, self._profile)
-        }
+        """Per-row FITTING prompt line — machine-measured, for flagged/verbose rows."""
+        if self._profile is not None:
+            from ..fitting.audit import audit_rows, fitting_line
+            return {
+                f.row: fitting_line(f) for f in audit_rows(rows, self._profile)
+            }
+        # General mode (no dialog window): calculate source vs translation conciseness
+        out: dict[int, str] = {}
+        for row, source, translation in rows:
+            src = (source or "").strip()
+            tgt = (translation or "").strip()
+            if not src or not tgt:
+                continue
+            ratio = len(tgt) / max(len(src), 1)
+            # Highlight lines with significant text expansion (>1.4x) for conciseness review
+            if ratio >= 1.4:
+                out[row] = (
+                    f"source {len(src)} chars · translation {len(tgt)} chars "
+                    f"({ratio:.1f}x length) · CONCISENESS"
+                )
+        return out
 
     def revalidate_fix(self, row: int, fixed_text: str, source: str) -> str | None:
         """
@@ -370,6 +380,9 @@ class JudgeRunner:
         from ..fitting.measure import detect_newline_tag
         from ..fitting.wrap import wrap_metrics
         if self._profile is None:
+            # In General mode, flag only if the fix is excessively verbose compared to source
+            if len(fixed_text or "") > max(len(source or "") * 2.5, 80):
+                return "excessive-length"
             return None
         metrics = wrap_metrics(fixed_text or "", self._profile)
         if not metrics.max_ok:

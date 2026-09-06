@@ -117,3 +117,25 @@ class TestRemember:
         prefs = app_prefs.load_prefs()
         assert "request_timeout" in prefs
         assert prefs["request_timeout"] == app_prefs.request_timeout()
+
+
+class TestRememberedJudgeCriteria:
+    def test_default_is_four_criteria(self):
+        # Default starts with 4 core criteria
+        assert app_prefs.last_judge_criteria() == ["mistranslation", "context", "placeholder", "style"]
+
+    def test_remember_five_criteria(self):
+        app_prefs.set_last_judge_criteria(["mistranslation", "context", "placeholder", "style", "fitting"])
+        assert len(app_prefs.last_judge_criteria()) == 5
+        assert "fitting" in app_prefs.last_judge_criteria()
+
+    def test_remember_three_criteria(self):
+        app_prefs.set_last_judge_criteria(["mistranslation", "style", "fitting"])
+        assert app_prefs.last_judge_criteria() == ["mistranslation", "style", "fitting"]
+
+    def test_invalid_criteria_filtered_and_fallback(self):
+        # Unknown criteria dropped
+        assert app_prefs.set_last_judge_criteria(["mistranslation", "bogus"]) == ["mistranslation"]
+        # Empty criteria falls back to default 4
+        assert app_prefs.set_last_judge_criteria([]) == ["mistranslation", "context", "placeholder", "style"]
+

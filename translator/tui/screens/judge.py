@@ -733,8 +733,8 @@ class JudgeModelScreen(JudgeWizardScreen):
         return [("↑↓", "move"), ("←→", "column"), ("⏎", "confirm"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
-        # Judging on everything is the default; the Criteria step narrows it.
-        self.draft.setdefault("criteria", list(CRITERIA))
+        # Default criteria comes from remembered preferences (or initial 4).
+        self.draft.setdefault("criteria", app_prefs.last_judge_criteria())
         self.draft.setdefault("style_prompt", self.draft.get("style_prompt", ""))
         self._picker.load(self.app.registry)
 
@@ -842,26 +842,20 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
                 ("←", "back"), ("esc", "cancel")]
 
     def on_screen_ready(self) -> None:
-        from ...fitting.profiles import get_profile
-        has_profile = get_profile(self.draft.get("fitting_engine", "general") or "general") is not None
-        visible_criteria = [c for c in CRITERIA if c != "fitting" or has_profile]
-        chosen = set(self.draft.get("criteria") or visible_criteria)
+        chosen = set(self.draft.get("criteria") or app_prefs.last_judge_criteria())
         self.picker.set_options([
             Option(CRITERION_LABELS[name], name, selected=name in chosen)
-            for name in visible_criteria
+            for name in CRITERIA
         ])
         self.picker.focus()
         self._note()
 
     def _note(self) -> None:
-        # Both caveats stated up front, because both change what the score means.
+        # Notes for special criteria
         self.query_one("#judge-criteria-note", Static).update(
-            "The context criterion needs a context column; without one it is "
-            "dropped from the prompt automatically.\n"
-            "Style is judged objectively: with no style prompt for this file, the "
-            "model infers the register from the text and reports only "
-            "inconsistency, wrong register for the kind of line, or wording that "
-            "reads as translated — never its own preference."
+            "Context needs a context column; without one it is dropped automatically.\n"
+            "Style judges internal consistency and naturalness when no style prompt is given.\n"
+            "Fitting checks dialog window bounds, or natural source conciseness in General mode."
         )
 
     def on_picker_toggled(self, event: Picker.Toggled) -> None:
@@ -875,6 +869,7 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
                 "cannot continue",
             )
             return
+        app_prefs.set_last_judge_criteria(list(chosen))
         self.draft["criteria"] = list(chosen)
         self.app.push_screen(JudgeStyleScreen())
 

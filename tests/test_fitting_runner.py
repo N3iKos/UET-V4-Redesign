@@ -21,9 +21,13 @@ def _runner(tmp_path, engine="rpgm-mv-mz"):
         fitting_profile=engine,
     )
 
-def test_general_profile_disables_fitting(tmp_path):
+def test_general_profile_supports_fitting(tmp_path):
     r = _runner(tmp_path, engine="general")
-    assert "fitting" not in r.criteria
+    assert "fitting" in r.criteria
+    # In general mode, verbose lines get a conciseness note
+    f_map = r._fitting_map([(1, "cat", "kucing yang sangat besar sekali dan luar biasa panjang")])
+    assert 1 in f_map
+    assert "CONCISENESS" in f_map[1]
 
 def test_mv_profile_keeps_fitting(tmp_path):
     r = _runner(tmp_path, engine="rpgm-mv-mz")

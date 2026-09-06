@@ -31,6 +31,10 @@ PROCESSING_MODES = ("sequential", "parallel", "wave")
 # imported from judge.models so this module stays leaf-level (config only).
 GRADING_MODES = ("severity", "none")
 
+# Valid criteria keys for Judge runs.
+JUDGE_CRITERIA = ("mistranslation", "context", "placeholder", "style", "fitting")
+DEFAULT_JUDGE_CRITERIA = ["mistranslation", "context", "placeholder", "style"]
+
 DEFAULTS: dict = {
     "processing_mode_default": config.DEFAULT_PROCESSING_MODE,
     "judge_grading_mode": config.DEFAULT_JUDGE_GRADING_MODE,
@@ -69,6 +73,10 @@ DEFAULTS: dict = {
     # absolute path so the same dump always recalls its engine; LRU-capped so
     # an old project folder cannot grow the prefs file forever.
     "engine_per_file": {},
+    # Remembered criteria for Judge runs (defaults to the 4 core criteria).
+    # If the user selects fitting or deselects others, the combination is
+    # remembered for subsequent runs.
+    "last_judge_criteria": list(DEFAULT_JUDGE_CRITERIA),
 }
 
 
@@ -120,6 +128,9 @@ def load_prefs() -> dict:
     )
     prefs["engine_per_file"] = _clean_engine_per_file(
         payload.get("engine_per_file")
+    )
+    prefs["last_judge_criteria"] = _clean_judge_criteria(
+        payload.get("last_judge_criteria")
     )
     prefs["judge_chain_context"] = bool(payload.get("judge_chain_context", False))
     prefs["judge_chain_window"] = _clamp_chain_window(
@@ -179,6 +190,9 @@ def save_prefs(prefs: dict) -> None:
     )
     current["engine_per_file"] = _clean_engine_per_file(
         current.get("engine_per_file")
+    )
+    current["last_judge_criteria"] = _clean_judge_criteria(
+        current.get("last_judge_criteria")
     )
     current["judge_chain_context"] = bool(current.get("judge_chain_context", False))
     current["judge_chain_window"] = _clamp_chain_window(
@@ -436,6 +450,15 @@ def _clean_engine_per_file(value) -> dict:
     return out
 
 
+def _clean_judge_criteria(value) -> list[str]:
+    """Keep only valid criteria keys in a non-empty list, default to core 4."""
+    if not isinstance(value, (list, tuple)):
+        return list(DEFAULT_JUDGE_CRITERIA)
+    allowed = set(JUDGE_CRITERIA)
+    clean = [str(x) for x in value if str(x) in allowed]
+    return clean or list(DEFAULT_JUDGE_CRITERIA)
+
+
 def _clamp_workers(value) -> int:
     """Worker count for a remembered Judge operation, clamped to 1–50."""
     try:
@@ -505,6 +528,20 @@ def remember_engine(path: str, engine: str) -> None:
     while len(store) > 50:
         store.pop(next(iter(store)))
     save_prefs({"engine_per_file": store})
+
+
+# ── Remembered Judge Criteria ─────────────────────────────────────────────
+
+def last_judge_criteria() -> list[str]:
+    """The remembered combination of criteria for Judge, or the default 4."""
+    return list(load_prefs().get("last_judge_criteria", DEFAULT_JUDGE_CRITERIA))
+
+
+def set_last_judge_criteria(criteria: list[str]) -> list[str]:
+    """Store the chosen criteria combination for subsequent Judge runs."""
+    clean = _clean_judge_criteria(criteria)
+    save_prefs({"last_judge_criteria": clean})
+    return clean
 
 
 def _clamp_chain_window(value) -> int:

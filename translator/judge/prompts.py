@@ -283,21 +283,15 @@ _CRITERION_RULES: dict[str, str] = {
         "under review"
     ),
     "fitting": (
-        "fitting — the line does not fit the game dialog window. The FITTING "
-        "data printed with a row is measured mechanically and is ground "
-        "truth: never re-estimate it, never argue with it.\n"
-        "    Rows marked OVERFLOW or SINKING are already flagged by that "
-        "measurement — your job for them is only the repair advice, not the "
-        "verdict. Rows marked LONG are much wider than their own source "
-        "beyond normal expansion; you may flag them, and your comment MUST "
-        "quote the measured ratio.\n"
-        "    Do NOT flag a line merely because the source itself is long: "
-        "compare against the row's own source width only. In the FIX: "
-        "shorten the line naturally (never by dropping facts, names, numbers "
-        "or clauses — tighten the wording, do not cut the content), OR insert "
-        "the exact line-break tag printed with the row at a natural phrase "
-        "boundary. Never invent a tag the row does not show, never split a "
-        "control code, never add a line beyond the window's line count"
+        "fitting — the line does not fit the dialog window or lacks natural conciseness. "
+        "When FITTING data is printed with a row, it is measured mechanically: "
+        "rows marked OVERFLOW or SINKING must be reported. Rows marked LONG or CONCISENESS are notably longer/wider "
+        "than their source beyond normal translation expansion; report lines that are bloated, padded, or overly wordy, "
+        "and quote the ratio.\n"
+        "    The goal is natural conciseness: the translation should stay reasonably close in length to the original "
+        "without unnecessary bloat, while flowing naturally in the target language. In the FIX: shorten the line naturally "
+        "(never by dropping facts, names, numbers or core meaning — tighten phrasing and grammar, do not cut content), or "
+        "insert the proven line-break tag if one is shown. Keep phrasing flowing and natural, not stiff or truncated."
     ),
 }
 
