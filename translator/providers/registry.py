@@ -296,8 +296,17 @@ class ProviderRegistry:
         if any(c.name.strip().lower() == name.lower() for c in provider.connections):
             raise RegistryError(f"A connection named {name!r} already exists.")
 
+        inherited_models: list[ModelEntry] = []
+        source_conn = next((c for c in provider.connections if c.models), None)
+        if source_conn:
+            for m in source_conn.models:
+                inherited_models.append(ModelEntry.from_dict(m.to_dict()))
+
         connection = Connection(
-            name=name, api_key=(api_key or "").strip() or None, is_valid=True
+            name=name,
+            api_key=(api_key or "").strip() or None,
+            is_valid=True,
+            models=inherited_models,
         )
         provider.connections.append(connection)
         self.save()

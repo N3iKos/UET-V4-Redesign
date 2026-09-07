@@ -229,6 +229,11 @@ class MainMenuScreen(MenuScreen):
         super().on_screen_ready()
         self.query_one("#menu-summary", Label).update(self.app.registry_summary())
 
+    def on_screen_resumed(self) -> None:
+        self.set_header()
+        self.query_one("#menu-summary", Label).update(self.app.registry_summary())
+        self.picker.set_options(self.build_options(), keep_index=True)
+
     def handle_choice(self, option: Option) -> None:
         # Imported here, not at module scope: every screen module imports
         # BaseScreen from this one, so a top-level import would be circular.

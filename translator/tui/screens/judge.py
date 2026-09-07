@@ -740,6 +740,9 @@ class JudgeModelScreen(JudgeWizardScreen):
         self.draft.setdefault("style_prompt", self.draft.get("style_prompt", ""))
         self._picker.load(self.app.registry)
 
+    def on_screen_resumed(self) -> None:
+        self._picker.load(self.app.registry)
+
     def action_focus_next_col(self) -> None:
         self._picker.action_focus_next_col()
 

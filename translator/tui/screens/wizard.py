@@ -191,6 +191,9 @@ class ModelSelectScreen(WizardScreen):
         self.app.draft.setdefault("mode", "full")
         self._picker.load(self.app.registry)
 
+    def on_screen_resumed(self) -> None:
+        self._picker.load(self.app.registry)
+
     def compose_body(self) -> ComposeResult:
         yield Label("Select a model", classes="title")
         self._picker = ModelPicker(id="translate-model-picker")
