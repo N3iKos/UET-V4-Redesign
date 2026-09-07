@@ -628,6 +628,34 @@ class ColumnsScreen(WizardScreen):
             repair_col=repair_col, start_row=start, num_rows=num_rows,
             op_mode="translate_context" if ctx_col else "translate",
         )
+
+        from ...data.app_prefs import dedup_mode
+        from ...core.dedup_file import prepare_unique_file
+
+        if dedup_mode() != "disabled":
+            try:
+                unique_src, map_file, total_r, unique_r = prepare_unique_file(
+                    src_path=self.draft["src_path"],
+                    src_col=src_col,
+                    dst_col=dst_col,
+                    start_row=start,
+                )
+                if map_file and unique_src != self.draft["src_path"]:
+                    self.draft["full_src_path"] = self.draft["src_path"]
+                    self.draft["full_out_path"] = self.draft["out_path"]
+                    self.draft["src_path"] = unique_src
+                    self.draft["out_path"] = translated_path(unique_src)
+                    self.draft["map_path"] = map_file
+                    self.draft["num_rows"] = unique_r
+                    saved_r = total_r - unique_r
+                    self.notify_status(
+                        f"Deduplication: {unique_r:,} unique rows "
+                        f"({saved_r:,} duplicates skipped — {saved_r / max(1, total_r) * 100:.1f}% savings).",
+                        OK,
+                    )
+            except Exception:
+                pass
+
         self.app.push_screen(LanguageStyleScreen())
 
 

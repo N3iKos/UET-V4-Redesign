@@ -36,6 +36,23 @@ def _get_cache_dir(src_path: str) -> str:
         return fallback
 
 
+def find_existing_unique_file(src_path: str) -> tuple[str, str, int, int] | None:
+    """Check if an up-to-date unique file and map JSON already exist in cache."""
+    cache_dir = _get_cache_dir(src_path)
+    stem, ext = os.path.splitext(os.path.basename(src_path))
+    unique_file = os.path.join(cache_dir, f"{stem}.unique{ext}")
+    map_file = os.path.join(cache_dir, f"{stem}.map.json")
+    if os.path.exists(unique_file) and os.path.exists(map_file):
+        try:
+            if os.path.getmtime(unique_file) >= os.path.getmtime(src_path):
+                with open(map_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return unique_file, map_file, data["total_rows"], data["unique_rows"]
+        except Exception:
+            pass
+    return None
+
+
 def prepare_unique_file(
     src_path: str, src_col: int, dst_col: int, start_row: int = 2
 ) -> tuple[str, str, int, int]:
@@ -50,6 +67,10 @@ def prepare_unique_file(
     If no duplicates exist, returns (src_path, "", total_rows, total_rows).
     """
     src_path = os.path.abspath(src_path)
+    cached = find_existing_unique_file(src_path)
+    if cached is not None:
+        return cached
+
     is_csv_file = csv_io.is_csv(src_path)
     src_idx = src_col - 1
     start_idx = start_row - 1
