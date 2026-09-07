@@ -140,6 +140,14 @@ class ProcessingEngine:
         """
         return self._planned_rows
 
+    @property
+    def unique_planned(self) -> int:
+        return getattr(self, "_unique_planned", 0) or getattr(self, "_planned_rows", 0) or 0
+
+    @property
+    def file_total_rows(self) -> int:
+        return getattr(self, "_file_total_rows", 0) or getattr(self, "_planned_rows", 0) or 0
+
     def _output_path(self) -> str:
         """
         Where results are actually being written.
@@ -443,8 +451,12 @@ class ProcessingEngine:
             if dedup_saved > 0:
                 self._notice("info", f"Deduplication: {len(unique_rows)} unique row(s) to translate ({dedup_saved} duplicates skipped).")
             rows_to_batch = unique_rows
+            self._unique_planned = len(unique_rows)
+            self._file_total_rows = total
         else:
             self._sibling_map = {}
+            self._unique_planned = len(rows_to_batch)
+            self._file_total_rows = total
 
         tasks = build_batches(rows_to_batch, job.batch_size, is_repair=False, context_map=context_map)
         self._notice(

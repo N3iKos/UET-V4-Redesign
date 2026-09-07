@@ -150,6 +150,7 @@ class RunScreen(BaseScreen):
         self._error_tally: dict[str, int] = {}
         self._switches: list[str] = []
         self._done_rows = 0
+        self._done_unique_rows = 0
         self._stats = ProcessStats(total=job.num_rows)
         # The denominator for the progress bar. `job.num_rows` is the *range* the
         # wizard asked for, which is only the same thing as the work queue on a
@@ -352,6 +353,7 @@ class RunScreen(BaseScreen):
         self._stats.ok += extra_ok
         self._stats.failed += extra_failed
         self._done_rows += (len(task.rows) + extra_ok + extra_failed)
+        self._done_unique_rows += len(task.rows)
 
         if self._engine is not None:
             self._stats.tokens_consumed = self._engine._pool.total_tokens_consumed()
@@ -459,8 +461,18 @@ class RunScreen(BaseScreen):
         """
         self._tick = tick
         stats = self._stats
-        total = max(1, self._total_rows())
-        done = min(total, max(self._done_rows, stats.ok + stats.failed))
+
+        unique_total = getattr(self._engine, "unique_planned", 0) if self._engine is not None else 0
+        file_total = getattr(self._engine, "file_total_rows", 0) or max(0, self.job.num_rows)
+        is_dedup = bool(unique_total and file_total and file_total > unique_total)
+
+        if is_dedup:
+            total = unique_total
+            done = min(total, max(getattr(self, "_done_unique_rows", 0), 0))
+        else:
+            total = max(1, self._total_rows())
+            done = min(total, max(self._done_rows, stats.ok + stats.failed))
+
         pct = min(100, int(done / total * 100))
         elapsed = time.time() - self._started
         eta = ""
@@ -474,21 +486,28 @@ class RunScreen(BaseScreen):
 
         lines = [
             f"[bold {ACCENT}]Progress[/]",
-            f"{done:,} / {total:,} rows",
-            f"[{ACCENT}]{bar}[/]  {pct}%",
-            f"{self._fmt_short(elapsed)} elapsed{eta}",
-            "",
-            f"[bold {ACCENT}]Rows[/]",
-            f"[{OK}]ok[/]        {stats.ok:>8,}",
-            f"[{ERROR}]failed[/]    {stats.failed:>8,}",
-            f"[{MUTED}]skipped[/]   {stats.skipped:>8,}",
-            f"[{MUTED}]repaired[/]  {stats.repaired:>8,}",
-            "",
-            f"[bold {ACCENT}]Model[/]",
-            escape_markup(self.job.model_id[:32]),
-            f"[{MUTED}]{escape_markup(self.job.processing_mode)}"
-            f" ×{self.job.n_workers} · tokens {stats.tokens_consumed:,}[/]",
         ]
+        if is_dedup:
+            lines.append(f"{done:,} / {total:,} unique rows")
+            lines.append(f"[{ACCENT}]{bar}[/]  {pct}%")
+            lines.append(f"[{MUTED}]{file_total:,} in file · {file_total - total:,} duplicates skipped[/]")
+        else:
+            lines.append(f"{done:,} / {total:,} rows")
+            lines.append(f"[{ACCENT}]{bar}[/]  {pct}%")
+        lines.append(f"{self._fmt_short(elapsed)} elapsed{eta}")
+        lines.append("")
+        lines.append(f"[bold {ACCENT}]Rows[/]")
+        lines.append(f"[{OK}]ok[/]        {stats.ok:>8,}")
+        lines.append(f"[{ERROR}]failed[/]    {stats.failed:>8,}")
+        lines.append(f"[{MUTED}]skipped[/]   {stats.skipped:>8,}")
+        lines.append(f"[{MUTED}]repaired[/]  {stats.repaired:>8,}")
+        lines.append("")
+        lines.append(f"[bold {ACCENT}]Model[/]")
+        lines.append(escape_markup(self.job.model_id[:32]))
+        lines.append(
+            f"[{MUTED}]{escape_markup(self.job.processing_mode)}"
+            f" ×{self.job.n_workers} · tokens {stats.tokens_consumed:,}[/]"
+        )
 
         self._paint_activity(tick)
         self._paint_foot(stats)

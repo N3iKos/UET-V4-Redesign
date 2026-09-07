@@ -1657,7 +1657,17 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
             + (f" · context {ExcelReader.col_letter(draft['ctx_col'])}"
                if draft.get("ctx_col") else "")
             + f", rows {draft['start_row']}–"
-              f"{draft['start_row'] + draft['num_rows'] - 1} ({draft['num_rows']:,})",
+              f"{draft['start_row'] + draft['num_rows'] - 1} ({draft['num_rows']:,} total)",
+        ]
+        if plan.duplicate_count > 0:
+            lines.append(
+                f"[{MUTED}]Evaluation[/]   [{OK}]{plan.unique_rows:,} unique pairs to evaluate[/] "
+                f"({plan.duplicate_count:,} duplicates skipped — "
+                f"{plan.duplicate_count / max(1, plan.total_rows) * 100:.1f}% token savings)"
+            )
+        else:
+            lines.append(f"[{MUTED}]Evaluation[/]   {plan.unique_rows:,} rows to evaluate")
+        lines += [
             f"[{MUTED}]Model[/]       {escape_markup(model_name)}",
             f"[{MUTED}]Languages[/]   "
             f"{escape_markup(draft.get('src_lang') or 'auto')} → "
@@ -2397,7 +2407,7 @@ class JudgeRunScreen(BaseScreen):
     def on_screen_ready(self) -> None:
         self._app = self.app
         self.app.on_shutdown_hook = self._stop.set
-        self._expected_rows = self._count_rows()
+        self._expected_rows, self._unique_rows_count, self._file_total_count = self._count_rows()
         # (source, translation) per row, read once with the count. The live grid
         # needs the source text for a row the moment its verdict lands, and
         # reading the sheet per row — or per repaint — would be absurd.
@@ -2414,20 +2424,18 @@ class JudgeRunScreen(BaseScreen):
         self._paint_rail()
         self._evaluate()
 
-    def _count_rows(self) -> list:
+    def _count_rows(self) -> tuple[list, int, int]:
         """
         The rows this evaluation will review, read once.
-
-        Only the length is used — it is the denominator of the live progress
-        figure — but reading it here keeps that figure off the repaint path,
-        where it would cost a sheet read eight times a second.
+        Returns (rows, unique_rows_to_evaluate, total_rows_in_file).
         """
         try:
             runner = JudgeRunner(target=self._target, criteria=self._criteria)
             rows, _contexts = runner.load_rows()
-            return rows
+            plan = runner.plan(rows)
+            return rows, plan.unique_rows, plan.total_rows
         except Exception:
-            return []
+            return [], 0, 0
 
     def _columns(self) -> list[Column]:
         """
@@ -2739,23 +2747,29 @@ class JudgeRunScreen(BaseScreen):
 
     def _live_review_lines(self) -> list[str]:
         """The evaluation as it happens: how far along, and what it has flagged."""
-        total = len(self._plan_rows())
+        unique_total = getattr(self, "_unique_rows_count", 0) or len(self._plan_rows())
+        file_total = getattr(self, "_file_total_count", 0) or len(self._plan_rows())
         done = len(self._reviewed_rows)
+        pct = 0 if unique_total <= 0 else min(100, int(done / unique_total * 100))
         lines = [f"[bold {ACCENT}]{self._state_label()}[/]"]
-        if total:
-            lines.append(self._bar(done, total))
-            lines.append(f"{done:,} / {total:,} rows")
+        if unique_total:
+            lines.append(self._bar(done, unique_total))
+            if file_total > unique_total:
+                lines.append(f"{done:,} / {unique_total:,} unique rows ({pct}%)")
+                lines.append(
+                    f"[{MUTED}]{file_total:,} in file · "
+                    f"{file_total - unique_total:,} duplicates skipped[/]"
+                )
+            else:
+                lines.append(f"{done:,} / {unique_total:,} rows ({pct}%)")
         else:
             lines.append(f"{done:,} rows")
         if self._sections_total:
-            # The request figure alongside the row one: they answer different
-            # questions — how much of the file is done, and how many calls are
-            # left — and a row count alone hides a run stuck on one slow request.
             lines.append(
                 f"[{MUTED}]request {min(self._sections_done + 1, self._sections_total)}"
                 f" of {self._sections_total}[/]"
             )
-        lines.append(self._timing_line(done, total))
+        lines.append(self._timing_line(done, unique_total))
         lines.append("")
         lines.append(f"[bold {ACCENT}]Flagged so far[/]  {len(self._flagged_live):,}")
         if not self._flagged_live:

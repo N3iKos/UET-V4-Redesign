@@ -133,10 +133,22 @@ class EvaluationPlan:
     max_tokens: int = config.MAX_TOKENS_PER_REQUEST
     rechain: bool = False
     rechain_neighbours: dict[int, tuple[str, str]] = field(default_factory=dict)
+    unique_count: int = 0
 
     @property
     def total_rows(self) -> int:
         return len(self.rows)
+
+    @property
+    def unique_rows(self) -> int:
+        if self.unique_count:
+            return self.unique_count
+        counted = sum(len(s) for s in self.sections) + len(self.prejudged)
+        return counted or len(self.rows)
+
+    @property
+    def duplicate_count(self) -> int:
+        return max(0, self.total_rows - self.unique_rows)
 
     @property
     def request_count(self) -> int:
@@ -456,6 +468,7 @@ class JudgeRunner:
             prejudged=prejudged,
             estimated_tokens=estimator.estimate_sections(sections),
             max_tokens=self._max_tokens,
+            unique_count=len(askable) + len(prejudged),
         )
 
     def rechain_plan(self, rows: list[tuple[int, str, str]]) -> EvaluationPlan:

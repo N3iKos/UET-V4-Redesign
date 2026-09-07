@@ -1131,28 +1131,52 @@ class PreviewScreen(WizardMenuScreen):
 
         workers = max(1, draft["n_workers"])
         bound = preset.limited_by(draft["batch_size"])
+
+        # Check deduplication to provide accurate unique rows and realistic estimates
+        from ...data.app_prefs import dedup_mode
+        current_dedup = dedup_mode()
+        unique_to_translate = draft["num_rows"]
+        dup_saved = 0
+        total_source_count = draft["num_rows"]
+        if current_dedup != "disabled":
+            try:
+                src_entries = ExcelReader.load_column(
+                    draft["src_path"], draft["src_col"], draft["start_row"], draft["num_rows"]
+                )
+                non_empty = [t for _, t in src_entries if (t or "").strip()]
+                if non_empty:
+                    total_source_count = len(non_empty)
+                    unique_count = len(set(non_empty))
+                    dup_saved = total_source_count - unique_count
+                    if dup_saved > 0:
+                        unique_to_translate = unique_count
+            except Exception:
+                pass
+
+        batches_count = max(1, -(-unique_to_translate // draft["batch_size"]))
         if preset.unlimited:
             limits_line = (
                 f"{preset.tokens_per_request(draft['batch_size']):,} tok/request · "
                 f"no rate limit — paced by {workers} worker(s) only"
             )
             estimate_line = (
-                f"~{-(-draft['num_rows'] // draft['batch_size'])} batches · "
-                f"no limit to estimate against"
+                f"~{batches_count} batches"
+                + (f" (based on {unique_to_translate:,} unique rows)" if dup_saved else "")
+                + " · no limit to estimate against"
             )
         else:
             rows_per_min = max(
                 1,
                 preset.sustainable_rows_per_minute(draft["batch_size"]) * workers,
             )
-            minutes = max(1, round(draft["num_rows"] / rows_per_min))
+            minutes = max(1, round(unique_to_translate / rows_per_min))
             limits_line = (
                 f"{preset.tokens_per_request(draft['batch_size']):,} tok/request · "
                 f"{bound}-bound · ~{rows_per_min:,} rows/min sustained"
             )
             estimate_line = (
-                f"~{minutes} min · "
-                f"~{-(-draft['num_rows'] // draft['batch_size'])} batches"
+                f"~{minutes} min · ~{batches_count} batches"
+                + (f" (based on {unique_to_translate:,} unique rows)" if dup_saved else "")
             )
         rate_line = (
             "no rate limit" if preset.unlimited
@@ -1162,7 +1186,14 @@ class PreviewScreen(WizardMenuScreen):
         lines = [
             f"[{MUTED}]Source[/]      {os.path.basename(draft['src_path'])}   "
             f"{src_letter} → {dst_letter}, rows {draft['start_row']}–{end_row} "
-            f"({draft['num_rows']})",
+            f"({draft['num_rows']:,} total)",
+        ]
+        if dup_saved > 0:
+            lines.append(
+                f"[{MUTED}]Deduplication[/] [{OK}]{unique_to_translate:,} unique rows to translate[/] "
+                f"({dup_saved:,} duplicates skipped — {dup_saved / max(1, total_source_count) * 100:.1f}% token savings)"
+            )
+        lines += [
             f"[{MUTED}]Saves to[/]    [{OK}]{os.path.basename(draft['out_path'])}[/]"
             f"   [{MUTED}]source file is never modified[/]",
             f"[{MUTED}]Provider[/]    {escape_markup(provider_line)}",
