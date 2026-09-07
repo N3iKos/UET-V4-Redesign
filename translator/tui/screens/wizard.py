@@ -313,13 +313,12 @@ class ReasoningScreen(WizardMenuScreen):
             target.queue_note(note, MUTED)
         self.app.push_screen(target)
 
-    def _file_engine_accepted(self, path: str, engine: str) -> None:
+    def _file_engine_accepted(self, path: str) -> None:
         if path != self.draft.get("src_path"):
             for key in ("src_col", "dst_col", "ctx_col", "repair_col"):
                 self.draft.pop(key, None)
         self.draft["src_path"] = path
         self.draft["out_path"] = translated_path(path)
-        self.draft["fitting_engine"] = engine
 
     @staticmethod
     def _quick_level(model) -> str:
@@ -1225,7 +1224,6 @@ class PreviewScreen(WizardMenuScreen):
             debug_log=draft.get("debug_log", False),
             raw_log=draft.get("raw_log", False),
             mode=draft.get("mode", "full"),
-            fitting_engine=draft.get("fitting_engine", "general"),
         )
         job.wave_delay = preset.wave_delay
         job.batch_delay = preset.delay_per_request
@@ -1267,7 +1265,7 @@ class _TranslateEditScreen(WizardMenuScreen):
         target = {
             "model": ModelSelectScreen,
             "file": lambda: FileEngineScreen(
-                on_accept=lambda p, e: self.draft.update(src_path=p, out_path=translated_path(p), fitting_engine=e),
+                on_accept=lambda p: self.draft.update(src_path=p, out_path=translated_path(p)),
                 next_screen=lambda: ColumnsScreen(),
                 existing_path=self.draft.get("src_path", ""),
             ),

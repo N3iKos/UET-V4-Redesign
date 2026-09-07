@@ -207,8 +207,6 @@ class MainMenuScreen(MenuScreen):
                    hint="review a translated file, comment on bad rows, fix them"),
             Option("Playground", "playground",
                    hint="compare models on your own lines, judge them, or chat"),
-            Option("Text Fitting Audit", "audit",
-                   hint="check a translated file against the game's dialog window"),
             Option("", "_gap", enabled=False),
             Option("CONFIGURE", "_configure", enabled=False, style=ACCENT),
             Option("Providers & Models", "providers",
@@ -240,7 +238,6 @@ class MainMenuScreen(MenuScreen):
         from .screens.providers import ProviderListScreen
         from .screens.settings import SettingsScreen
         from .screens.wizard import ModelSelectScreen
-        from .screens.audit import AuditScreen
 
         if option.value in ("translate", "playground", "judge"):
             if not self.app.registry.providers:
@@ -271,8 +268,6 @@ class MainMenuScreen(MenuScreen):
                 )
                 return
             self.app.push_screen(ComboListScreen())
-        elif option.value == "audit":
-            self.app.push_screen(AuditScreen())
         elif option.value == "settings":
             self.app.push_screen(SettingsScreen())
         else:

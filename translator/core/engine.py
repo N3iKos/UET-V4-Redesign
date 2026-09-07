@@ -453,22 +453,6 @@ class ProcessingEngine:
             f"{job.processing_mode} x{job.n_workers}.",
         )
 
-        def _fitting_budget() -> str:
-            """
-            The dialog-window budget line for the prompt, "" when fitting is off.
-
-            Computed once per call rather than cached on the engine: the profile
-            lookup is a dict hit, and keeping it local mirrors the batch_context
-            read above — settings-level knobs stay inside the prompt builder.
-            """
-            from ..fitting.profiles import get_profile
-
-            profile = get_profile(getattr(job, "fitting_engine", "general") or "general")
-            if profile is None:
-                return ""
-            return (f"{profile.max_lines} lines x "
-                    f"{profile.window_cols * profile.safe_margin:.1f} em")
-
         def prompt_builder(task: BatchTask) -> str:
             context_rows = None
             if context_map and job.op_mode == "translate_context":
@@ -492,7 +476,6 @@ class ProcessingEngine:
                 custom_placeholders=job.custom_placeholders,
                 prompt_format=job.prompt_format,
                 batch_context=batch_context,
-                fitting_budget=_fitting_budget(),
             )
 
         def solo_prompt_builder(row_num: int, task: BatchTask) -> str:
@@ -504,7 +487,6 @@ class ProcessingEngine:
                 context=(task.context_map or {}).get(row_num, ""),
                 global_context=job.global_context,
                 custom_placeholders=job.custom_placeholders,
-                fitting_budget=_fitting_budget(),
             )
 
         scheduler = self._make_scheduler(

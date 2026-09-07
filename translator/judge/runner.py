@@ -184,7 +184,6 @@ class JudgeRunner:
         on_fix: Callable[[int, str, bool], None] | None = None,
         on_section: Callable[[int, int, list[int], bool], None] | None = None,
         stop_event: threading.Event | None = None,
-        fitting_profile: str = "general",
     ) -> None:
         self._target = target
         self._job = job
@@ -219,9 +218,6 @@ class JudgeRunner:
         # asks for it explicitly — and Settings supplies the default when it does
         # not (FR-104 / the Judge pacing step).
         self._max_rows = int(max_rows) if max_rows else _saved_max_rows()
-        self._fitting_profile = fitting_profile or "general"
-        from ..fitting.profiles import get_profile as _get_profile
-        self._profile = _get_profile(self._fitting_profile)
         self._client = None
         self._tokens_used = 0
         # Rows a valid reply has actually given a verdict for, across every
@@ -346,13 +342,7 @@ class JudgeRunner:
         return chosen or ["mistranslation"]
 
     def _fitting_map(self, rows: list[tuple[int, str, str]]) -> dict[int, str]:
-        """Per-row FITTING prompt line — machine-measured, for flagged/verbose rows."""
-        if self._profile is not None:
-            from ..fitting.audit import audit_rows, fitting_line
-            return {
-                f.row: fitting_line(f) for f in audit_rows(rows, self._profile)
-            }
-        # General mode (no dialog window): calculate source vs translation conciseness
+        """Per-row FITTING prompt line — calculate source vs translation conciseness."""
         out: dict[int, str] = {}
         for row, source, translation in rows:
             src = (source or "").strip()
@@ -369,31 +359,9 @@ class JudgeRunner:
         return out
 
     def revalidate_fix(self, row: int, fixed_text: str, source: str) -> str | None:
-        """
-        Post-fix gate (spec 3.5): a fix is a promise about the window.
-
-        Re-measures the fixed text and checks that every token in it existed
-        in the source (models sometimes invent a plausible-looking [br] for
-        an engine that has none). Returns None when the fix is clean, or the
-        failure kind for the caller to feed back into the retry.
-        """
-        from ..fitting.measure import detect_newline_tag
-        from ..fitting.wrap import wrap_metrics
-        if self._profile is None:
-            # In General mode, flag only if the fix is excessively verbose compared to source
-            if len(fixed_text or "") > max(len(source or "") * 2.5, 80):
-                return "excessive-length"
-            return None
-        metrics = wrap_metrics(fixed_text or "", self._profile)
-        if not metrics.max_ok:
-            return "sinking"
-        if metrics.overflow_lines:
-            return "overflow"
-        src_tag = detect_newline_tag(source or "")
-        allowed = {src_tag} if src_tag else set()
-        fix_tag = detect_newline_tag(fixed_text or "")
-        if fix_tag is not None and fix_tag not in allowed:
-            return "invented-token"
+        """Post-fix gate: check if the fix is excessively verbose compared to source."""
+        if len(fixed_text or "") > max(len(source or "") * 2.5, 80):
+            return "excessive-length"
         return None
 
     def load_rows(self) -> tuple[list[tuple[int, str, str]], dict[int, str]]:

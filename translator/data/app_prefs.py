@@ -72,10 +72,6 @@ DEFAULTS: dict = {
     # name on different connections stay separate. Values:
     # {"remember": bool, "max_rows": int, "workers": int}
     "judge_model_prefs": {},
-    # Engine profile chosen per file (FileEngineScreen). Keyed by resolved
-    # absolute path so the same dump always recalls its engine; LRU-capped so
-    # an old project folder cannot grow the prefs file forever.
-    "engine_per_file": {},
     # Remembered criteria for Judge runs (defaults to the 4 core criteria).
     # If the user selects fitting or deselects others, the combination is
     # remembered for subsequent runs.
@@ -133,9 +129,6 @@ def load_prefs() -> dict:
     )
     prefs["judge_model_prefs"] = _clean_judge_model_prefs(
         payload.get("judge_model_prefs")
-    )
-    prefs["engine_per_file"] = _clean_engine_per_file(
-        payload.get("engine_per_file")
     )
     prefs["last_judge_criteria"] = _clean_judge_criteria(
         payload.get("last_judge_criteria")
@@ -196,9 +189,6 @@ def save_prefs(prefs: dict) -> None:
     )
     current["judge_model_prefs"] = _clean_judge_model_prefs(
         current.get("judge_model_prefs")
-    )
-    current["engine_per_file"] = _clean_engine_per_file(
-        current.get("engine_per_file")
     )
     current["last_judge_criteria"] = _clean_judge_criteria(
         current.get("last_judge_criteria")
@@ -439,27 +429,6 @@ def _clean_judge_model_prefs(value) -> dict:
     return clean
 
 
-def _clean_engine_per_file(value) -> dict:
-    """
-    Engine-per-file memory: keep only real engine names, drop everything else.
-
-    Validated against fitting.profiles.ENGINE_ORDER rather than a local copy
-    because the engine list is the fitting module's data — a duplicate here
-    would silently accept an engine the FileEngineScreen can never show. The
-    import is local (function body) so this module stays importable as a leaf
-    even if fitting ever grows heavier imports.
-    """
-    from ..fitting.profiles import ENGINE_ORDER
-    ok = set(ENGINE_ORDER)
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, str] = {}
-    for path, engine in value.items():
-        if isinstance(path, str) and isinstance(engine, str) and engine in ok:
-            out[path] = engine
-    return out
-
-
 def _clean_judge_criteria(value) -> list[str]:
     """Keep only valid criteria keys in a non-empty list, default to core 4."""
     if not isinstance(value, (list, tuple)):
@@ -515,36 +484,6 @@ def set_failover_retry_threshold(value: int) -> int:
     clamped = _clamp_failover_retries(value)
     save_prefs({"failover_retry_threshold": clamped})
     return clamped
-
-
-# ── Fitting engine memory ────────────────────────────────────────────────
-
-def remembered_engine(path: str) -> str:
-    """The engine chosen for this file before, "general" when never chosen."""
-    return load_prefs()["engine_per_file"].get(os.path.abspath(path), "general")
-
-def remember_engine(path: str, engine: str) -> None:
-    """
-    Store the file's engine, most-recently-used last, capped at 50 entries.
-
-    Re-choosing an engine moves the file to the back (pop-then-set), so the
-    eviction order is "least recently chosen", and the cap keeps a year of
-    project folders from growing the prefs file without bound.
-    """
-    from ..fitting.profiles import ENGINE_ORDER
-    if engine not in ENGINE_ORDER:
-        return
-    key = os.path.abspath(path)
-    # A COPY, not the loaded dict itself: load_prefs falls back to DEFAULTS on
-    # a read error, and mutating that fallback in place would pollute the
-    # module-level defaults for the rest of the process (stale entries
-    # resurrecting in later saves).
-    store = dict(load_prefs()["engine_per_file"])
-    store.pop(key, None)
-    store[key] = engine
-    while len(store) > 50:
-        store.pop(next(iter(store)))
-    save_prefs({"engine_per_file": store})
 
 
 # ── Remembered Judge Criteria ─────────────────────────────────────────────

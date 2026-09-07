@@ -765,13 +765,12 @@ class JudgeModelScreen(JudgeWizardScreen):
             sort_translated_first=True,
         ))
 
-    def _file_engine_accepted(self, path: str, engine: str) -> None:
+    def _file_engine_accepted(self, path: str) -> None:
         if path != self.draft.get("path"):
             # A different file invalidates the columns picked for the old one.
             for key in ("src_col", "dst_col", "ctx_col"):
                 self.draft.pop(key, None)
         self.draft["path"] = path
-        self.draft["fitting_engine"] = engine
 
 
 def _reasoning_note(model) -> str:
@@ -1624,7 +1623,6 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
                 target=target,
                 criteria=self._criteria(),
                 max_rows=self._rows_cap(),
-                fitting_profile=self.draft.get("fitting_engine", "general"),
             )
             plan = runner.plan()
         except Exception as exc:
@@ -1796,7 +1794,6 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
                 "debug_log": draft.get("debug_log", False),
                 "raw_log": draft.get("raw_log", False),
             },
-            fitting_profile=draft.get("fitting_engine", "general"),
         ))
 
 
@@ -2111,14 +2108,12 @@ class JudgeRunScreen(BaseScreen):
         workers: int | None = None,
         preset=None,
         processing: dict | None = None,
-        fitting_profile: str = "general",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._target = target
         self._model_slot = model_slot
         self._criteria = list(criteria)
-        self._fitting_profile = fitting_profile or "general"
         # What Full mode's pacing step chose. All three are None in Quick, where
         # the model's own preset and the saved row cap are used instead.
         self._max_rows = int(max_rows) if max_rows else None
@@ -3057,7 +3052,6 @@ class JudgeRunScreen(BaseScreen):
             on_fix=on_fix,
             on_section=on_section,
             stop_event=self._stop,
-            fitting_profile=self._fitting_profile,
         )
 
     @work(thread=True)

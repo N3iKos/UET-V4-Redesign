@@ -42,7 +42,6 @@ def build_translate_prompt(
     custom_placeholders: str = "",
     prompt_format: str = "plain",
     batch_context: bool = False,
-    fitting_budget: str = "",
 ) -> str:
     """
     One batch prompt. `batch_context` (Settings, default off) tells the model
@@ -67,20 +66,6 @@ def build_translate_prompt(
     ph_note = ""
     if custom_placeholders.strip():
         ph_note = f"\nAdditional placeholders to preserve exactly: {custom_placeholders.strip()}"
-
-    fit_note = ""
-    if fitting_budget.strip():
-        # Soft on purpose (spec 2.4): a hard constraint makes a model trade
-        # meaning for width, and the judge pass is where a genuinely
-        # unfixable line gets a human verdict. The line also forbids the
-        # model from inserting breaks itself — reflowing is the fix loop's job.
-        fit_note = (
-            f"\n- Text fitting: the game's dialog window fits {fitting_budget.strip()}. "
-            f"AIM to fit, but NEVER sacrifice meaning or drop content to fit — "
-            f"if both are impossible, keep the meaning; a later review pass "
-            f"will flag it.\n"
-            f"- Do NOT insert line breaks yourself; keep each translation as one line.\n"
-        )
 
     lang_note = ""
     if src_lang and src_lang.lower() not in ("auto", "detect", ""):
@@ -122,7 +107,6 @@ def build_translate_prompt(
         f"{lang_note}"
         f"- Format codes (%s %d %f %02d), brace tokens ({{0}} {{name}}), "
         f"tags ([tag] <tag>) — copy as-is\n"
-        f"{fit_note}"
     )
 
     if prompt_format == "json":
@@ -160,7 +144,6 @@ def build_translate_solo_prompt(
     context: str = "",
     global_context: str = "",
     custom_placeholders: str = "",
-    fitting_budget: str = "",
 ) -> str:
     encoded_text = encode_placeholders(text)
 
@@ -173,14 +156,6 @@ def build_translate_solo_prompt(
     ph_note = ""
     if custom_placeholders.strip():
         ph_note = f"Preserve these placeholders exactly: {custom_placeholders.strip()}\n"
-
-    fit_note = ""
-    if fitting_budget.strip():
-        fit_note = (
-            f"Text fitting: the game's dialog window fits {fitting_budget.strip()}. "
-            f"Aim to fit, but NEVER sacrifice meaning or drop content to fit.\n"
-            f"Do NOT insert line breaks yourself.\n"
-        )
 
     lang_note = ""
     if src_lang and src_lang.lower() not in ("auto", "detect", ""):
@@ -198,7 +173,6 @@ def build_translate_solo_prompt(
         f"Style: {style_prompt}\n"
         f"{ctx}{ph_note}"
         f"{lang_note}"
-        f"{fit_note}"
         "Copy [BR][XX] engine tokens, format codes (%s %d %f), and brace tokens "
         "({0} {name}) exactly as-is.\n"
         "Do NOT add punctuation that does not exist in the source.\n"
