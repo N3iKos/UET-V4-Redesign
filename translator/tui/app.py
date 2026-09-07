@@ -111,6 +111,17 @@ class BaseScreen(Screen):
     def on_screen_ready(self) -> None:
         """Called once after mount — focus a widget, kick off a load, etc."""
 
+    def on_screen_suspend(self, event: events.ScreenSuspend) -> None:
+        self._suspended = True
+
+    def on_screen_resume(self, event: events.ScreenResume) -> None:
+        if getattr(self, "_suspended", False):
+            self._suspended = False
+            self.on_screen_resumed()
+
+    def on_screen_resumed(self) -> None:
+        """Called when a child screen is popped and this screen becomes active again."""
+
     # ── Shared helpers ────────────────────────────────────────────────────────
 
     def refresh_keys(self) -> None:

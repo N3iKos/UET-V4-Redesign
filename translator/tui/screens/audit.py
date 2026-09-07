@@ -59,6 +59,7 @@ class AuditScreen(BaseScreen):
         super().__init__(**kwargs)
         self._path = ""
         self._engine = "general"
+        self._picking = False
         self._dst_col: int | None = None   # the column the findings audited
         self.grid = CompareGrid(id="audit-grid")
 
@@ -74,7 +75,15 @@ class AuditScreen(BaseScreen):
             return
         self._pick()
 
+    def on_screen_resumed(self) -> None:
+        # If the user pressed Back / Esc on the file-picker screen without
+        # choosing a file, don't leave them stranded on an empty audit screen —
+        # return them cleanly back to the menu (UX fix).
+        if self._picking and not self._path:
+            self.app.pop_screen()
+
     def _pick(self) -> None:
+        self._picking = True
         from .file_engine import FileEngineScreen
         self.app.push_screen(FileEngineScreen(
             title="Audit a spreadsheet",
