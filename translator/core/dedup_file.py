@@ -147,5 +147,81 @@ def prepare_unique_file(
 def sync_unique_to_full(
     map_file_path: str, unique_out_path: str, full_out_path: str, dst_col: int
 ) -> int:
-    """Stub for Task 2."""
-    return 0
+    """
+    Reads unique translations from unique_out_path, loads mapping from map_file_path,
+    and updates all corresponding sibling rows in full_out_path at dst_col (1-based index).
+    Returns the total number of cells updated in full_out_path.
+    """
+    if not map_file_path or not os.path.exists(map_file_path) or not os.path.exists(unique_out_path):
+        return 0
+
+    try:
+        with open(map_file_path, "r", encoding="utf-8") as f:
+            map_data = json.load(f)
+    except Exception:
+        return 0
+
+    rep_to_full: dict[str, list[int]] = map_data.get("rep_to_full", {})
+    if not rep_to_full:
+        return 0
+
+    start_row = map_data.get("start_row", 2)
+    dst_idx = dst_col - 1
+
+    # Load translations from unique file
+    is_csv_unique = csv_io.is_csv(unique_out_path)
+    if is_csv_unique:
+        fmt_u = csv_io.sniff(unique_out_path)
+        u_rows = csv_io.read_rows(unique_out_path, fmt_u)
+    else:
+        wb_u = excel_io.load_workbook(unique_out_path)
+        ws_u = wb_u.active
+        u_rows = [
+            [str(cell.value) if cell.value is not None else "" for cell in row]
+            for row in ws_u.iter_rows()
+        ]
+
+    translations_by_unique_row: dict[int, str] = {}
+    for offset, row in enumerate(u_rows[start_row - 1:]):
+        u_sheet_row = start_row + offset
+        if len(row) > dst_idx:
+            val = row[dst_idx].strip()
+            if val:
+                translations_by_unique_row[u_sheet_row] = val
+
+    if not translations_by_unique_row:
+        return 0
+
+    # Build writes map for full file: full_sheet_row -> text
+    payload_to_write: dict[int, str] = {}
+    for u_row, full_rows_list in rep_to_full.items():
+        u_row_int = int(u_row)
+        if u_row_int in translations_by_unique_row:
+            text_to_sync = translations_by_unique_row[u_row_int]
+            for full_row_num in full_rows_list:
+                payload_to_write[full_row_num] = text_to_sync
+
+    if not payload_to_write:
+        return 0
+
+    # Write into full_out_path
+    is_csv_full = csv_io.is_csv(full_out_path)
+    if is_csv_full:
+        fmt_f = csv_io.sniff(full_out_path)
+        full_rows = csv_io.read_rows(full_out_path, fmt_f)
+        for full_row_num, text in payload_to_write.items():
+            f_idx = full_row_num - 1
+            if 0 <= f_idx < len(full_rows):
+                while len(full_rows[f_idx]) <= dst_idx:
+                    full_rows[f_idx].append("")
+                full_rows[f_idx][dst_idx] = text
+        csv_io.write_rows(full_out_path, full_rows, fmt_f)
+    else:
+        import openpyxl
+        wb_f = openpyxl.load_workbook(full_out_path)
+        ws_f = wb_f.active
+        for full_row_num, text in payload_to_write.items():
+            ws_f.cell(row=full_row_num, column=dst_col, value=text)
+        wb_f.save(full_out_path)
+
+    return len(payload_to_write)

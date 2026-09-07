@@ -89,3 +89,53 @@ def test_prepare_unique_file_without_duplicates(tmp_path):
     assert unique_rows == 3
     assert active_path == src_csv
     assert map_path == ""
+
+
+def test_sync_unique_to_full(tmp_path):
+    src_csv = str(tmp_path / "Dialog.csv")
+    full_out_csv = str(tmp_path / "Dialog_Translated.csv")
+    _create_sample_csv(src_csv)
+    _create_sample_csv(full_out_csv)
+
+    active_path, map_path, total_rows, unique_rows = prepare_unique_file(
+        src_path=src_csv, src_col=5, dst_col=6, start_row=2
+    )
+
+    # Simulate translating the unique working file
+    # unique file has 3 unique data rows:
+    # row 2 ("Hello") -> "Halo"
+    # row 3 ("Yes") -> "Ya"
+    # row 4 ("Attack") -> "Serang"
+    unique_out_csv = active_path  # simulate in-place or separate output
+    fmt = sniff(active_path)
+    u_rows = read_rows(active_path, fmt)
+    u_rows[1][5] = "Halo"
+    u_rows[2][5] = "Ya"
+    u_rows[3][5] = "Serang"
+    write_rows(unique_out_csv, u_rows, fmt)
+
+    # Sync back to full file
+    updated_count = sync_unique_to_full(
+        map_file_path=map_path,
+        unique_out_path=unique_out_csv,
+        full_out_path=full_out_csv,
+        dst_col=6,
+    )
+
+    assert updated_count == 6
+
+    # Verify every row in full target file
+    full_rows = read_rows(full_out_csv, sniff(full_out_csv))
+    assert full_rows[1][5] == "Halo"    # row 2
+    assert full_rows[2][5] == "Ya"      # row 3
+    assert full_rows[3][5] == "Halo"    # row 4 (duplicate of Hello)
+    assert full_rows[4][5] == "Serang"  # row 5 (Attack)
+    assert full_rows[5][5] == "Halo"    # row 6 (duplicate of Hello)
+    assert full_rows[6][5] == "Ya"      # row 7 (duplicate of Yes)
+
+    # Verify other columns untouched
+    assert full_rows[3][0] == "3"
+    assert full_rows[3][4] == "Hello"
+    assert full_rows[5][0] == "5"
+    assert full_rows[5][4] == "Hello"
+
