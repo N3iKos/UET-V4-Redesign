@@ -18,9 +18,9 @@ from translator.judge.runner import JudgeRunner, JudgeTarget
 
 
 def test_dedup_prefs():
-    assert app_prefs.dedup_mode() in ("in_memory", "persistent", "disabled")
-    app_prefs.set_dedup_mode("in_memory")
-    assert app_prefs.dedup_mode() == "in_memory"
+    assert app_prefs.dedup_mode() in ("unique_file", "persistent", "disabled")
+    app_prefs.set_dedup_mode("unique_file")
+    assert app_prefs.dedup_mode() == "unique_file"
 
 
 def test_judge_plan_deduplication():
@@ -35,8 +35,8 @@ def test_judge_plan_deduplication():
     target = JudgeTarget(path="dummy.csv", src_col=1, dst_col=2)
     runner = JudgeRunner(target)
 
-    # In-memory deduplication active
-    app_prefs.set_dedup_mode("in_memory")
+    # Deduplication active
+    app_prefs.set_dedup_mode("unique_file")
     plan = runner.plan(rows)
 
     # Total rows in plan should still be 5
@@ -68,7 +68,7 @@ def test_judge_dedup_disabled():
     assert len(batched_rows) == 2
     assert getattr(runner, "_judge_siblings", {}) == {}
 
-    app_prefs.set_dedup_mode("in_memory")
+    app_prefs.set_dedup_mode("unique_file")
 
 
 def test_engine_sibling_expansion(tmp_path):

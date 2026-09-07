@@ -36,7 +36,7 @@ JUDGE_CRITERIA = ("mistranslation", "context", "placeholder", "style", "fitting"
 DEFAULT_JUDGE_CRITERIA = ["mistranslation", "context", "placeholder", "style"]
 
 # Deduplication / Translation Memory modes.
-DEDUP_MODES = ("in_memory", "persistent", "disabled")
+DEDUP_MODES = ("unique_file", "persistent", "disabled")
 
 DEFAULTS: dict = {
     "processing_mode_default": config.DEFAULT_PROCESSING_MODE,
@@ -77,10 +77,10 @@ DEFAULTS: dict = {
     # remembered for subsequent runs.
     "last_judge_criteria": list(DEFAULT_JUDGE_CRITERIA),
     # Deduplication & Translation Memory mode:
-    #   in_memory   — deduplicate within the active file only (fast, no disk db)
+    #   unique_file — extract unique rows to working file & sync back (fast, clean review, default)
     #   persistent  — cross-file translation memory (SQLite ~/.config/.../tm.db)
     #   disabled    — translate every row independently
-    "dedup_mode": "in_memory",
+    "dedup_mode": "unique_file",
 }
 
 
@@ -439,10 +439,10 @@ def _clean_judge_criteria(value) -> list[str]:
 
 
 def _clean_dedup_mode(value) -> str:
-    """Validate deduplication mode; defaults to 'in_memory'."""
+    """Validate deduplication mode; defaults to 'unique_file'."""
     if isinstance(value, str) and value in DEDUP_MODES:
         return value
-    return "in_memory"
+    return "unique_file"
 
 
 def _clamp_workers(value) -> int:
@@ -503,7 +503,7 @@ def set_last_judge_criteria(criteria: list[str]) -> list[str]:
 # ── Deduplication / Translation Memory ───────────────────────────────────────
 
 def dedup_mode() -> str:
-    """Active deduplication mode: 'in_memory' (default), 'persistent', or 'disabled'."""
+    """Active deduplication mode: 'unique_file' (default), 'persistent', or 'disabled'."""
     return _clean_dedup_mode(load_prefs().get("dedup_mode"))
 
 

@@ -90,9 +90,9 @@ def _failover_hint(prefs: dict) -> str:
 
 
 def _dedup_hint(prefs: dict) -> str:
-    mode = prefs.get("dedup_mode", "in_memory")
+    mode = prefs.get("dedup_mode", "unique_file")
     return {
-        "in_memory": "In-Memory — deduplicate active file, fastest (default)",
+        "unique_file": "Unique File — extract unique rows to working file & sync back (default)",
         "persistent": "Persistent TM — cross-file SQLite cache (~/.config/.../tm.db)",
         "disabled": "Disabled — translate every row independently",
     }.get(mode, mode)
@@ -462,8 +462,8 @@ class ProcessingModeModal(ModalScreen[str]):
 
 
 DEDUP_HINTS = {
-    "in_memory": "deduplicate within active file only (fastest, saves 40–70% tokens, default)",
-    "persistent": "persistent SQLite Translation Memory cache across all files (~/.config/.../tm.db)",
+    "unique_file": "extract unique rows to working file & sync back (fast, clean review, default)",
+    "persistent": "unique file + persistent SQLite Translation Memory cache (~/.config/.../tm.db)",
     "disabled": "process every row independently without deduplication",
 }
 

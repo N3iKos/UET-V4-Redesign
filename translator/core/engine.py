@@ -441,7 +441,7 @@ class ProcessingEngine:
                     rows_to_batch = [(r, text) for r, text in rows if text not in tm_cache]
                     self._notice("info", f"Translation Memory: {len(tm_hits)} row(s) filled from persistent cache.")
 
-        if current_dedup in ("in_memory", "persistent") and rows_to_batch:
+        if current_dedup in ("unique_file", "persistent") and rows_to_batch:
             dedup_groups: dict[str, list[int]] = {}
             for r, text in rows_to_batch:
                 dedup_groups.setdefault(text, []).append(r)

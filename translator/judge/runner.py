@@ -446,7 +446,7 @@ class JudgeRunner:
 
         from ..data.app_prefs import dedup_mode
         current_dedup = dedup_mode()
-        if current_dedup in ("in_memory", "persistent") and askable:
+        if current_dedup in ("unique_file", "persistent") and askable:
             pair_groups: dict[tuple[str, str], list[int]] = {}
             for r, s, t in askable:
                 pair_groups.setdefault(((s or "").strip(), (t or "").strip()), []).append(r)
