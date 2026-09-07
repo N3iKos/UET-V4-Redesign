@@ -128,6 +128,17 @@ class AuditScreen(BaseScreen):
         return [(r, s, targets.get(r, "")) for r, s in sources if (s or "").strip()]
 
     def _show_findings(self, findings: list[Finding], profile: EngineProfile, rows) -> None:
+        if not rows:
+            self.notify_status("No rows found in this file.", WARN)
+            return
+        has_translations = any((t or "").strip() for _r, _s, t in rows)
+        if not has_translations:
+            self.notify_status(
+                "Target column is completely empty — nothing is translated yet. "
+                "Audit checks translated text; run Translate first or audit a *_Translated file.",
+                WARN,
+            )
+            return
         src_map = {r: s for r, s, _t in rows}
         tgt_map = {r: t for r, _s, t in rows}
         grid_rows = [(f.row, src_map.get(f.row, "")) for f in findings]
@@ -144,7 +155,10 @@ class AuditScreen(BaseScreen):
             self.grid.set_notes(findings_notes(findings),
                                 {f.row: styles.get(f.severity, MUTED) for f in findings})
             self.grid.set_row_styles({f.row: styles.get(f.severity, MUTED) for f in findings})
-        self.notify_status(f"{len(findings)} row(s) do not fit the dialog window.", OK)
+        if findings:
+            self.notify_status(f"{len(findings)} row(s) do not fit the dialog window.", OK)
+        else:
+            self.notify_status("All translated rows fit within the dialog window! No overflow detected.", OK)
 
     def action_rerun(self) -> None:
         self._run()

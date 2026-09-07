@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .measure import detect_newline_tag
+from .measure import detect_newline_tag, measure_lines
 from .profiles import EngineProfile
 from .wrap import WrapMetrics, wrap_metrics
 
@@ -36,6 +36,7 @@ class Finding:
 
 def audit_rows(rows: list[tuple[int, str, str]], profile: EngineProfile) -> list[Finding]:
     findings: list[Finding] = []
+    budget = profile.window_cols * profile.safe_margin
     for row, source, translation in rows:
         if not (translation or "").strip():
             continue
@@ -47,12 +48,15 @@ def audit_rows(rows: list[tuple[int, str, str]], profile: EngineProfile) -> list
             continue
         sw = wrap_metrics(source or "", profile)
         tw = wrap_metrics(translation, profile)
+        current_widths = measure_lines(translation, profile)
+        has_horizontal_overflow = any(w > budget for w in current_widths) or bool(tw.overflow_lines)
+
         base = max(sw.max_width, 1.0)
         ratio = tw.max_width / base
         kinds: list[str] = []
-        if not tw.max_ok:
+        if not tw.max_ok or len(current_widths) > profile.max_lines:
             kinds.append("sinking")
-        if tw.overflow_lines:
+        if has_horizontal_overflow:
             kinds.append("overflow")
         if ratio > profile.ratio_threshold:
             kinds.append("ratio")
