@@ -3918,8 +3918,19 @@ class JudgeRunScreen(BaseScreen):
             self._force_abort()
             self._run_state = "cancelled"
             self.notify_status(
-                "Force-cancelling — aborting the request in flight…", ERROR,
+                "Force-cancelling — aborting immediately…", ERROR,
             )
+            def _force_unlock_judge() -> None:
+                if self._busy_batch or self._busy_row:
+                    self._busy_batch = False
+                    self._busy_row = 0
+                    self.indicator.stop()
+                    self._fix_seen.clear()
+                    self._fixed_live.clear()
+                    self._paint_rail()
+                    self.refresh_keys()
+                    self.notify_status("Operation cancelled.", ERROR)
+            self.set_timer(1.0, _force_unlock_judge)
             self.refresh_keys()
             return
 

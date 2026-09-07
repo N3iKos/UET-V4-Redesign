@@ -343,7 +343,16 @@ class RunScreen(BaseScreen):
             elif row_num in failed:
                 self.feed.resolve(row_num, config.FAIL_MARKER, "failed")
                 self._stats.failed += 1
-        self._done_rows += len(task.rows)
+
+        # Sibling rows completed via deduplication: count them so progress
+        # bar and stats accurately reflect the actual rows filled in the file.
+        task_row_nums = {rn for rn, _ in task.rows}
+        extra_ok = sum(1 for rn in result.results if rn not in task_row_nums and result.results[rn] != config.FAIL_MARKER)
+        extra_failed = sum(1 for rn in result.failed_rows if rn not in task_row_nums)
+        self._stats.ok += extra_ok
+        self._stats.failed += extra_failed
+        self._done_rows += (len(task.rows) + extra_ok + extra_failed)
+
         if self._engine is not None:
             self._stats.tokens_consumed = self._engine._pool.total_tokens_consumed()
         self._scroll_feed()
@@ -596,8 +605,12 @@ class RunScreen(BaseScreen):
             except Exception:
                 pass
             self.notify_status(
-                "Force-stopping — aborting the request in flight…", ERROR,
+                "Force-stopping — aborting immediately…", ERROR,
             )
+            def _force_finish_if_needed() -> None:
+                if not self._finished:
+                    self._job_finished(self._stats)
+            self.set_timer(1.0, _force_finish_if_needed)
             return
 
         self._cancel_requested_at = now

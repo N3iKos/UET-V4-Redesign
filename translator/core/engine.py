@@ -699,11 +699,14 @@ class ProcessingEngine:
                 if siblings:
                     for s_row in siblings:
                         payload[s_row] = trans_text
-            for rep_row in result.failed_rows:
+                        result.results[s_row] = trans_text
+            for rep_row in list(result.failed_rows):
                 siblings = self._sibling_map.get(rep_row)
                 if siblings:
                     for s_row in siblings:
                         payload.setdefault(s_row, config.FAIL_MARKER)
+                        if s_row not in result.failed_rows:
+                            result.failed_rows.append(s_row)
 
         for row_num in result.failed_rows:
             payload.setdefault(row_num, config.FAIL_MARKER)

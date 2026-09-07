@@ -1072,14 +1072,13 @@ class ParallelStrategy(ExecutionStrategy):
             task_queue.put(None)
         # Wedged workers are daemons and cannot be joined in finite time; their
         # batches were reassigned, so the run's results are complete without
-        # them. Join with a generous timeout and move on. After a force-cancel
-        # the join is short instead: the acquires and reads the stop event now
-        # interrupts mean a stuck worker is a rarity, and making the user stare
-        # at "Force-cancelling…" for another 120s per wedged worker is the bug
-        # this guard exists for. Their results are discarded either way.
-        join_timeout = 5.0 if scheduler._stop.is_set() else 120.0
+        # them. Use an overall deadline (0.5s on force-cancel, 120s normal) so
+        # 20 workers do not pile up 20 * 5s = 100s of freeze time.
+        join_timeout = 0.5 if scheduler._stop.is_set() else 120.0
+        deadline = time.monotonic() + join_timeout
         for thread in threads:
-            thread.join(timeout=join_timeout)
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
 
     def _worker_loop(
         self,
@@ -1245,9 +1244,8 @@ class WaveStrategy(ExecutionStrategy):
             for thread in threads:
                 thread.start()
             # Lockstep with a deadline: wait for every worker, but no longer
-            # than the stuck limit past the first join — a worker that is
-            # still running then is wedged, not slow.
-            deadline = time.time() + limit
+            # than the stuck limit past the first join — or 0.5s when stopping.
+            deadline = time.time() + (0.5 if scheduler._stop.is_set() else limit)
             stuck: dict[int, threading.Thread] = {}
             for wid, thread in zip((wid for wid, _t in wave), threads):
                 remaining = max(0.0, deadline - time.time())
