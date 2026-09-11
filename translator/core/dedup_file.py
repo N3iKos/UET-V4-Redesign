@@ -1,248 +1,257 @@
-"""
-core/dedup_file.py — Unique Working File Architecture for Deduplication & TM.
-
-Extracts unique source rows from a spreadsheet into a working file in `.uet_cache/`
-and provides atomic broadcast synchronization from the unique working file back
-into the full target spreadsheet.
-"""
-
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
-from typing import Any
+import tempfile
+from pathlib import Path
 
-from .. import config
-from ..io import csv_io
-from ..io import excel_io
+from ..io.excel_io import load_workbook, translated_path
+
+MAP_VERSION = 2
+
+PREFIX_TAG_PATTERN = re.compile(r"^(\\[a-zA-Z]+\[\d+\])(.*)$", re.DOTALL)
 
 
-def _get_cache_dir(src_path: str) -> str:
-    parent = os.path.dirname(os.path.abspath(src_path))
-    cache_dir = os.path.join(parent, ".uet_cache")
+def _extract_prefix_tag(text: str) -> tuple[str, str]:
+    if not text or not isinstance(text, str):
+        return "", text if text is not None else ""
+    match = PREFIX_TAG_PATTERN.match(text)
+    if match:
+        return match.group(1), match.group(2)
+    return "", text
+
+
+def _source_fingerprint(path: str, src_col: int, start_row: int, num_rows: int) -> str:
+    digest = hashlib.sha256()
+    workbook = load_workbook(path, data_only=False, read_only=True)
     try:
-        os.makedirs(cache_dir, exist_ok=True)
-        # Test write permission
-        test_file = os.path.join(cache_dir, ".test_write")
-        with open(test_file, "w") as f:
-            f.write("ok")
-        os.remove(test_file)
-        return cache_dir
-    except (OSError, PermissionError):
-        # Fallback to user config directory
-        fallback = os.path.join(config.CONFIG_DIR, "cache")
-        os.makedirs(fallback, exist_ok=True)
+        sheet = workbook.active
+        last = sheet.max_row or 0
+        if num_rows > 0:
+            last = min(last, start_row + num_rows - 1)
+        digest.update(f"{src_col}:{start_row}:{last}".encode())
+        for row in range(start_row, last + 1):
+            value = sheet.cell(row, src_col).value
+            digest.update(b"\0")
+            digest.update((str(value) if value is not None else "").encode("utf-8"))
+    finally:
+        workbook.close()
+    return digest.hexdigest()
+
+
+def _cache_dir(source: Path) -> Path:
+    local = source.parent / ".uet_cache"
+    try:
+        local.mkdir(exist_ok=True)
+        probe = local / f".{os.getpid()}.probe"
+        probe.touch()
+        probe.unlink()
+        return local
+    except OSError:
+        fallback = Path.home() / ".config" / "excel-translator-v4" / "cache"
+        fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
 
-def find_existing_unique_file(src_path: str) -> tuple[str, str, int, int] | None:
-    """Check if an up-to-date unique file and map JSON already exist in cache."""
-    cache_dir = _get_cache_dir(src_path)
-    stem, ext = os.path.splitext(os.path.basename(src_path))
-    unique_file = os.path.join(cache_dir, f"{stem}.unique{ext}")
-    map_file = os.path.join(cache_dir, f"{stem}.map.json")
-    if os.path.exists(unique_file) and os.path.exists(map_file):
+def _atomic_save_workbook(workbook, path: Path) -> None:
+    suffix = path.suffix or ".tmp"
+    fd, temporary = tempfile.mkstemp(prefix=path.stem + ".", suffix=suffix, dir=path.parent)
+    os.close(fd)
+    try:
+        workbook.save(temporary)
+        os.replace(temporary, path)
+    except Exception:
         try:
-            if os.path.getmtime(unique_file) >= os.path.getmtime(src_path):
-                with open(map_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return unique_file, map_file, data["total_rows"], data["unique_rows"]
-        except Exception:
+            os.remove(temporary)
+        except OSError:
             pass
-    return None
+        raise
+
+
+def _atomic_json(payload: dict, path: Path) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def prepare_unique_file(
-    src_path: str, src_col: int, dst_col: int, start_row: int = 2
+    src_path: str,
+    src_col: int,
+    dst_col: int,
+    start_row: int = 2,
+    num_rows: int = 0,
+    full_out_path: str = "",
 ) -> tuple[str, str, int, int]:
-    """
-    Inspects src_path. If duplicate source texts exist, creates:
-      - .uet_cache/<stem>.unique.<ext> (containing only unique rows)
-      - .uet_cache/<stem>.map.json (mapping unique row numbers -> all original row numbers)
-
-    Returns:
-      (active_file_path, map_file_path, total_rows, unique_rows)
-
-    If no duplicates exist, returns (src_path, "", total_rows, total_rows).
-    """
-    src_path = os.path.abspath(src_path)
-    cached = find_existing_unique_file(src_path)
-    if cached is not None:
-        return cached
-
-    is_csv_file = csv_io.is_csv(src_path)
-    src_idx = src_col - 1
-    start_idx = start_row - 1
-
-    if is_csv_file:
-        fmt = csv_io.sniff(src_path)
-        all_rows = csv_io.read_rows(src_path, fmt)
-    else:
-        wb = excel_io.load_workbook(src_path)
-        ws = wb.active
-        all_rows = [
-            [str(cell.value) if cell.value is not None else "" for cell in row]
-            for row in ws.iter_rows()
-        ]
-
-    if not all_rows or len(all_rows) <= start_idx:
-        return src_path, "", 0, 0
-
-    header_rows = all_rows[:start_idx]
-    data_rows = all_rows[start_idx:]
-    total_rows = len(data_rows)
-
-    # Group rows by source text
-    groups: dict[str, list[int]] = {}
-    row_data_map: dict[int, list[str]] = {}
-
-    for offset, row in enumerate(data_rows):
-        sheet_row = start_row + offset
-        row_data_map[sheet_row] = list(row)
-        src_val = row[src_idx] if len(row) > src_idx else ""
-        text = src_val.strip()
-        groups.setdefault(text, []).append(sheet_row)
-
-    # If every non-empty row is already unique, no deduplication needed
-    has_duplicates = any(len(sheet_rows) > 1 for text, sheet_rows in groups.items() if text)
-    if not has_duplicates:
-        return src_path, "", total_rows, total_rows
-
-    cache_dir = _get_cache_dir(src_path)
-    stem, ext = os.path.splitext(os.path.basename(src_path))
-    unique_file_path = os.path.join(cache_dir, f"{stem}.unique{ext}")
-    map_file_path = os.path.join(cache_dir, f"{stem}.map.json")
-
-    unique_data_rows: list[list[str]] = []
-    rep_to_full: dict[str, list[int]] = {}
-
-    # Build unique data rows in order of first appearance
-    curr_unique_sheet_row = start_row
-    for text, full_sheet_rows in groups.items():
-        if not text:
-            # Empty rows: keep each empty row as an individual row
-            for empty_row_num in full_sheet_rows:
-                unique_data_rows.append(row_data_map[empty_row_num])
-                rep_to_full[str(curr_unique_sheet_row)] = [empty_row_num]
-                curr_unique_sheet_row += 1
-        else:
-            rep_sheet_row = full_sheet_rows[0]
-            unique_data_rows.append(row_data_map[rep_sheet_row])
-            rep_to_full[str(curr_unique_sheet_row)] = full_sheet_rows
-            curr_unique_sheet_row += 1
-
-    final_unique_rows = header_rows + unique_data_rows
-    unique_rows_count = len(unique_data_rows)
-
-    # Write unique file
-    if is_csv_file:
-        csv_io.write_rows(unique_file_path, final_unique_rows, fmt)
-    else:
-        import openpyxl
-        out_wb = openpyxl.Workbook()
-        out_ws = out_wb.active
-        for r_idx, row in enumerate(final_unique_rows, start=1):
-            for c_idx, val in enumerate(row, start=1):
-                out_ws.cell(row=r_idx, column=c_idx, value=val)
-        out_wb.save(unique_file_path)
-
-    # Write map JSON
-    map_payload = {
-        "version": 1,
-        "original_file": src_path,
-        "unique_file": unique_file_path,
-        "src_col": src_col,
-        "dst_col": dst_col,
-        "start_row": start_row,
-        "total_rows": total_rows,
-        "unique_rows": unique_rows_count,
-        "rep_to_full": rep_to_full,
-    }
-    with open(map_file_path, "w", encoding="utf-8") as f:
-        json.dump(map_payload, f, indent=2)
-
-    return unique_file_path, map_file_path, total_rows, unique_rows_count
-
-
-def sync_unique_to_full(
-    map_file_path: str, unique_out_path: str, full_out_path: str, dst_col: int
-) -> int:
-    """
-    Reads unique translations from unique_out_path, loads mapping from map_file_path,
-    and updates all corresponding sibling rows in full_out_path at dst_col (1-based index).
-    Returns the total number of cells updated in full_out_path.
-    """
-    if not map_file_path or not os.path.exists(map_file_path) or not os.path.exists(unique_out_path):
-        return 0
-
+    source = Path(src_path).resolve()
+    if not source.exists():
+        raise FileNotFoundError(src_path)
+    fingerprint = _source_fingerprint(str(source), src_col, start_row, num_rows)
+    workbook = load_workbook(str(source), data_only=False)
     try:
-        with open(map_file_path, "r", encoding="utf-8") as f:
-            map_data = json.load(f)
-    except Exception:
-        return 0
+        sheet = workbook.active
+        last = sheet.max_row or 0
+        if num_rows > 0:
+            last = min(last, start_row + num_rows - 1)
+        groups: dict[str, list[int]] = {}
+        representatives: list[int] = []
+        row_tags: dict[str, str] = {}
+        for row in range(start_row, last + 1):
+            value = sheet.cell(row=row, column=src_col).value
+            text = str(value).strip() if value is not None else ""
+            if not text:
+                continue
+            tag, clean_text = _extract_prefix_tag(text)
+            row_tags[str(row)] = tag
+            group_key = clean_text if clean_text else text
+            if group_key not in groups:
+                groups[group_key] = []
+                representatives.append(row)
+            groups[group_key].append(row)
+        total = sum(len(rows) for rows in groups.values())
+        unique_count = len(representatives)
+        if total == unique_count:
+            return str(source), "", total, total
 
-    rep_to_full: dict[str, list[int]] = map_data.get("rep_to_full", {})
-    if not rep_to_full:
-        return 0
+        cache = _cache_dir(source)
+        key = fingerprint[:12]
+        unique_path = cache / f"{source.stem}.{key}.unique{source.suffix}"
+        map_path = cache / f"{source.stem}.{key}.map.json"
+        output_source = Path(full_out_path).resolve() if full_out_path and Path(full_out_path).exists() else None
+        output_book = load_workbook(str(output_source), data_only=False) if output_source else None
+        try:
+            unique_book = load_workbook(str(source), data_only=False)
+            unique_sheet = unique_book.active
+            if output_book:
+                output_sheet = output_book.active
+                for representative in representatives:
+                    completed = ""
+                    rep_text = str(sheet.cell(representative, src_col).value).strip()
+                    _, rep_clean = _extract_prefix_tag(rep_text)
+                    group_key = rep_clean if rep_clean else rep_text
+                    for sibling in groups[group_key]:
+                        value = output_sheet.cell(sibling, dst_col).value
+                        if value is not None and str(value).strip():
+                            completed = value
+                            break
+                    if completed != "":
+                        unique_sheet.cell(representative, dst_col, completed)
+            kept_rows = list(range(1, start_row)) + representatives
+            if hasattr(unique_sheet, "_rows"):
+                unique_sheet._rows = [unique_sheet._rows[row - 1] for row in kept_rows]
+            else:
+                delete = [row for row in range(start_row, (unique_sheet.max_row or 0) + 1) if row not in representatives]
+                for row in reversed(delete):
+                    unique_sheet.delete_rows(row)
+            _atomic_save_workbook(unique_book, unique_path)
+        finally:
+            if output_book:
+                output_book.close()
 
-    start_row = map_data.get("start_row", 2)
-    dst_idx = dst_col - 1
+        rep_to_full = {}
+        for index, row in enumerate(representatives):
+            rep_text = str(sheet.cell(row, src_col).value).strip()
+            _, rep_clean = _extract_prefix_tag(rep_text)
+            group_key = rep_clean if rep_clean else rep_text
+            rep_to_full[str(start_row + index)] = groups[group_key]
 
-    # Load translations from unique file
-    is_csv_unique = csv_io.is_csv(unique_out_path)
-    if is_csv_unique:
-        fmt_u = csv_io.sniff(unique_out_path)
-        u_rows = csv_io.read_rows(unique_out_path, fmt_u)
+        payload = {
+            "version": MAP_VERSION,
+            "original_file": str(source),
+            "source_fingerprint": fingerprint,
+            "unique_file": str(unique_path.resolve()),
+            "src_col": src_col,
+            "dst_col": dst_col,
+            "start_row": start_row,
+            "num_rows": num_rows,
+            "total_rows": total,
+            "unique_rows": unique_count,
+            "representatives": representatives,
+            "row_tags": row_tags,
+            "source_texts": [str(sheet.cell(row, src_col).value).strip() for row in representatives],
+            "rep_to_full": rep_to_full,
+        }
+        _atomic_json(payload, map_path)
+        return str(unique_path.resolve()), str(map_path.resolve()), total, unique_count
+    finally:
+        workbook.close()
+
+
+def validate_mapping(map_file_path: str, unique_path: str = "") -> dict:
+    with open(map_file_path, encoding="utf-8") as handle:
+        mapping = json.load(handle)
+    required = {"version", "original_file", "source_fingerprint", "unique_file", "src_col", "dst_col", "rep_to_full", "source_texts"}
+    if not isinstance(mapping, dict) or not required.issubset(mapping) or mapping["version"] not in (1, 2):
+        raise ValueError("Invalid deduplication mapping")
+    original = mapping["original_file"]
+    if not os.path.exists(original) or _source_fingerprint(
+        original, int(mapping["src_col"]), int(mapping["start_row"]),
+        int(mapping.get("num_rows", 0)),
+    ) != mapping["source_fingerprint"]:
+        raise ValueError("Stale deduplication mapping")
+    if unique_path and os.path.abspath(unique_path) != os.path.abspath(mapping["unique_file"]):
+        translated = translated_path(mapping["unique_file"])
+        if os.path.abspath(unique_path) != os.path.abspath(translated):
+            raise ValueError("Unique file does not match mapping")
+    return mapping
+
+
+def sync_unique_to_full(map_file_path: str, unique_out_path: str, full_out_path: str, dst_col: int) -> int:
+    mapping = validate_mapping(map_file_path, unique_out_path)
+    if int(dst_col) != int(mapping["dst_col"]):
+        raise ValueError("Destination column does not match mapping")
+    row_tags: dict[str, str] = mapping.get("row_tags", {})
+    unique_book = load_workbook(unique_out_path, data_only=False)
+    try:
+        unique_sheet = unique_book.active
+        texts = mapping["source_texts"]
+        rows = list(mapping["rep_to_full"].items())
+        if len(rows) != len(texts):
+            raise ValueError("Invalid deduplication mapping rows")
+        translations: list[tuple[list[int], object]] = []
+        for index, (unique_row, siblings) in enumerate(rows):
+            source = unique_sheet.cell(int(unique_row), int(mapping["src_col"])).value
+            if (str(source).strip() if source is not None else "") != texts[index]:
+                raise ValueError("Unique file order does not match mapping")
+            translations.append(([int(row) for row in siblings], unique_sheet.cell(int(unique_row), dst_col).value))
+    finally:
+        unique_book.close()
+
+    original = mapping["original_file"]
+    destination = Path(full_out_path).resolve()
+    if destination.exists():
+        base = destination
     else:
-        wb_u = excel_io.load_workbook(unique_out_path)
-        ws_u = wb_u.active
-        u_rows = [
-            [str(cell.value) if cell.value is not None else "" for cell in row]
-            for row in ws_u.iter_rows()
-        ]
-
-    translations_by_unique_row: dict[int, str] = {}
-    for offset, row in enumerate(u_rows[start_row - 1:]):
-        u_sheet_row = start_row + offset
-        if len(row) > dst_idx:
-            val = row[dst_idx].strip()
-            if val:
-                translations_by_unique_row[u_sheet_row] = val
-
-    if not translations_by_unique_row:
-        return 0
-
-    # Build writes map for full file: full_sheet_row -> text
-    payload_to_write: dict[int, str] = {}
-    for u_row, full_rows_list in rep_to_full.items():
-        u_row_int = int(u_row)
-        if u_row_int in translations_by_unique_row:
-            text_to_sync = translations_by_unique_row[u_row_int]
-            for full_row_num in full_rows_list:
-                payload_to_write[full_row_num] = text_to_sync
-
-    if not payload_to_write:
-        return 0
-
-    # Write into full_out_path
-    is_csv_full = csv_io.is_csv(full_out_path)
-    if is_csv_full:
-        fmt_f = csv_io.sniff(full_out_path)
-        full_rows = csv_io.read_rows(full_out_path, fmt_f)
-        for full_row_num, text in payload_to_write.items():
-            f_idx = full_row_num - 1
-            if 0 <= f_idx < len(full_rows):
-                while len(full_rows[f_idx]) <= dst_idx:
-                    full_rows[f_idx].append("")
-                full_rows[f_idx][dst_idx] = text
-        csv_io.write_rows(full_out_path, full_rows, fmt_f)
-    else:
-        import openpyxl
-        wb_f = openpyxl.load_workbook(full_out_path)
-        ws_f = wb_f.active
-        for full_row_num, text in payload_to_write.items():
-            ws_f.cell(row=full_row_num, column=dst_col, value=text)
-        wb_f.save(full_out_path)
-
-    return len(payload_to_write)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        base = Path(original)
+    workbook = load_workbook(str(base), data_only=False)
+    updated = 0
+    try:
+        sheet = workbook.active
+        for siblings, value in translations:
+            if value is None or not str(value).strip():
+                continue
+            val_str = str(value)
+            _, val_clean = _extract_prefix_tag(val_str)
+            for row in siblings:
+                row_tag = row_tags.get(str(row), "")
+                if row_tag:
+                    final_val = f"{row_tag}{val_clean}"
+                else:
+                    final_val = value
+                sheet.cell(row, dst_col, final_val)
+                updated += 1
+        _atomic_save_workbook(workbook, destination)
+    finally:
+        workbook.close()
+    return updated
