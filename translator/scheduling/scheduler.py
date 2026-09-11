@@ -253,7 +253,7 @@ class Scheduler:
             self._failover_targets = build_failover_targets(registry, current_model_id=job.model_id)
         else:
             self._failover_targets = []
-        self._failover_threshold = app_prefs.failover_retry_threshold() if app_prefs.priority_failover_enabled() else None
+        self._failover_threshold = app_prefs.failover_retry_threshold() if (app_prefs.priority_failover_enabled() and self._failover_targets) else None
 
         self._workers: dict[int, WorkerStatus] = {}
         self._workers_lock = threading.Lock()
@@ -276,6 +276,9 @@ class Scheduler:
         # watchdog to decide who has overstayed.
         self._in_flight: dict[int, tuple[BatchTask, float]] = {}
         self._in_flight_lock = threading.Lock()
+        # When each worker started the request it is on — so a `done`/`failed`
+        # status can carry the real duration instead of dropping to 0.0s.
+        self._request_started: dict[int, float] = {}
 
     # ── In-flight tracking (watchdog) ──────────────────────────────────────────
 
@@ -519,8 +522,11 @@ class Scheduler:
             wave_index=self._pool.wave_index,
             reasoning_active=False,
             started_at=time.time(),
+            elapsed=0.0,
             message="",
         )
+        request_started = time.time()
+        self._request_started[worker_id] = request_started
         self._note_in_flight(worker_id, task)
         if self._on_batch_start is not None:
             self._on_batch_start(task, worker_id)
@@ -597,6 +603,8 @@ class Scheduler:
             worker_id,
             phase="done",
             message=f"{ok_rows}/{task.size} rows in {outcome.latency:.1f}s",
+            started_at=0.0,
+            elapsed=max(0.0, time.time() - self._request_started.pop(worker_id, request_started)),
         )
         self._emit_event(
             "batch_done",
@@ -625,6 +633,21 @@ class Scheduler:
     ) -> None:
         """Mini-batch retry, then per-row solo retry for anything still absent."""
         label = f"batch {task.batch_num}/{task.total_batches}"
+        self._recover_missing_inner(
+            worker_id, task, missing, result, executor, stats, label,
+        )
+
+    def _recover_missing_inner(
+        self,
+        worker_id: int,
+        task: BatchTask,
+        missing: list[int],
+        result: BatchResult,
+        executor: RetryExecutor,
+        stats: StatsAccumulator,
+        label: str,
+    ) -> None:
+        self._set_status(worker_id, phase="retry", message=f"{len(missing)} missing -> mini retry", started_at=time.time())
         self._emit_event(
             "retry", f"{len(missing)} row(s) missing -> mini-batch retry",
             task.batch_num, worker_id=worker_id,
@@ -676,6 +699,7 @@ class Scheduler:
             result.failed_rows = still_missing
             return
 
+        self._set_status(worker_id, phase="retry", message=f"{len(still_missing)} missing -> solo retry", started_at=time.time())
         self._emit_event(
             "retry", f"{len(still_missing)} row(s) -> solo retry",
             task.batch_num, worker_id=worker_id,
@@ -732,7 +756,11 @@ class Scheduler:
         if self._on_result is not None:
             with self._result_lock:
                 self._on_result(task, BatchResult(failed_rows=list(task.row_numbers)))
-        self._set_status(worker_id, phase="failed", message=error)
+        self._set_status(
+            worker_id, phase="failed", message=error,
+            started_at=0.0,
+            elapsed=max(0.0, time.time() - self._request_started.pop(worker_id, time.time())),
+        )
         # `announce=False` when the caller will emit its own single aborted
         # event: a per-batch `batch_failed` on top of that is the duplicate the
         # UI must not receive.
@@ -854,7 +882,12 @@ class Scheduler:
             try:
                 if task.generation != generation:
                     return
-                phase = "generating" if kind == "request" else "parsing"
+                if kind == "retry":
+                    phase = "retry"
+                elif kind == "request":
+                    phase = "generating"
+                else:
+                    phase = "parsing"
                 self._set_status(worker_id, phase=phase, started_at=time.time())
             except Exception:
                 pass
@@ -868,6 +901,7 @@ class Scheduler:
             if event.connection:
                 self._set_status(worker_id, connection=event.connection)
             if event.kind in ("rate_limit", "cooldown", "server_error", "error"):
+                self._set_status(worker_id, phase="retry", message=event.message or event.label, started_at=time.time())
                 self._emit_event(
                     "retry",
                     f"{event.kind.replace('_', ' ')}: {event.message or event.label}",
