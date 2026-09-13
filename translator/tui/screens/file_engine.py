@@ -39,6 +39,8 @@ class FileEngineScreen(BaseScreen):
     def __init__(self, *, title="Select a spreadsheet",
                  confirm_label="Confirm and next",
                  on_accept: Callable[[str], None],
+                 on_accept_multiple: Callable[[list[str]], None] | None = None,
+                 max_files: int = 4,
                  next_screen: Callable[[], BaseScreen] | None,
                  existing_path: str = "",
                  sort_translated_first: bool = False,
@@ -47,9 +49,54 @@ class FileEngineScreen(BaseScreen):
         self._title = title
         self._confirm_label = confirm_label
         self._on_accept = on_accept
+        self._on_accept_multiple = on_accept_multiple
+        self._max_files = max_files
         self._next = next_screen
         self._existing = existing_path
         self._sort_translated = sort_translated_first
+        self.selected_files: list[str] = [existing_path] if existing_path and os.path.isfile(existing_path) else []
+
+    def toggle_selection(self, path: str) -> None:
+        """Toggle a file in or out of multi-selection up to max_files."""
+        canon = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
+        if not canon or not os.path.isfile(canon):
+            return
+        # Compare canonical paths
+        existing_matches = [p for p in self.selected_files if os.path.abspath(p) == canon]
+        if existing_matches:
+            for p in existing_matches:
+                self.selected_files.remove(p)
+        else:
+            if len(self.selected_files) < self._max_files:
+                self.selected_files.append(canon)
+        self._update_selection_display()
+
+    def confirm_selection(self) -> bool:
+        """Confirm selected files or the manual path."""
+        valid_paths = [p for p in self.selected_files if os.path.isfile(p)]
+        if not valid_paths:
+            raw = (getattr(self, "_path", None) and self._path.input.value or "").strip().strip('"')
+            path = os.path.abspath(os.path.expanduser(raw))
+            if os.path.isfile(path):
+                valid_paths = [path]
+        if not valid_paths:
+            return False
+        if self._on_accept_multiple is not None:
+            self._on_accept_multiple(valid_paths)
+        self._on_accept(valid_paths[0])
+        return True
+
+    def _update_selection_display(self) -> None:
+        if not hasattr(self, "_path") or self._path is None:
+            return
+        count = len(self.selected_files)
+        if count == 0:
+            pass
+        elif count == 1:
+            self._path.input.value = self.selected_files[0]
+        else:
+            names = ", ".join(os.path.basename(p) for p in self.selected_files)
+            self._path.input.value = f"[{count}/{self._max_files} files] {names}"
 
     def compose_body(self) -> ComposeResult:
         yield Label(self._title, classes="title")
@@ -130,12 +177,32 @@ class FileEngineScreen(BaseScreen):
     def on_input_submitted(self, event) -> None:
         self._confirm()
 
+    def on_key(self, event) -> None:
+        if event.key == "space":
+            opt = self.picker.selected_option
+            if opt and opt.value:
+                self.toggle_selection(str(opt.value))
+                event.stop()
+
     def _confirm(self) -> None:
+        if self.selected_files:
+            if not self.confirm_selection():
+                error = self.query_one("#file-error", Label)
+                error.update("Selected files are not valid")
+                return
+            if self._next is None:
+                self.app.pop_screen()
+            else:
+                self.app.push_screen(self._next())
+            return
+
         raw = (self._path.input.value or "").strip().strip('"')
         path = os.path.expanduser(raw)
         error = self.query_one("#file-error", Label)
 
         def accept(path_: str) -> None:
+            if self._on_accept_multiple is not None:
+                self._on_accept_multiple([path_])
             self._on_accept(path_)
 
         if not resolve_accept(path, accept):
@@ -147,8 +214,8 @@ class FileEngineScreen(BaseScreen):
             self.app.push_screen(self._next())
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        return [("↑↓", "move"), ("⏎", "select"), ("tab", "next field"),
-                ("←", "back"), ("esc", "cancel")]
+        return [("↑↓", "move"), ("space", "toggle (up to 4)"), ("⏎", "confirm"),
+                ("tab", "next field"), ("←", "back"), ("esc", "cancel")]
 
 
 FileSelectScreen = FileEngineScreen

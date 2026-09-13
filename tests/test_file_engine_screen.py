@@ -25,3 +25,34 @@ def test_resolve_accept_passes_back_path(tmp_path):
     ok = resolve_accept(str(f), lambda p: seen.append(p))
     assert ok is True
     assert seen == [str(f)]
+
+
+def test_file_engine_multiple_selection(tmp_path):
+    f1 = tmp_path / "f1.csv"
+    f2 = tmp_path / "f2.csv"
+    f3 = tmp_path / "f3.csv"
+    f1.write_text("a,b\n1,2\n", encoding="utf-8")
+    f2.write_text("a,b\n3,4\n", encoding="utf-8")
+    f3.write_text("a,b\n5,6\n", encoding="utf-8")
+
+    from translator.tui.screens.file_engine import FileEngineScreen
+    selected = []
+    screen = FileEngineScreen(
+        on_accept=lambda p: None,
+        on_accept_multiple=lambda paths: selected.extend(paths),
+        max_files=4,
+        next_screen=None,
+    )
+    assert hasattr(screen, "toggle_selection")
+    screen.toggle_selection(str(f1))
+    screen.toggle_selection(str(f2))
+    assert screen.selected_files == [str(f1), str(f2)]
+    # Toggling an already selected file unselects it
+    screen.toggle_selection(str(f2))
+    assert screen.selected_files == [str(f1)]
+    screen.toggle_selection(str(f2))
+    screen.toggle_selection(str(f3))
+    assert screen.selected_files == [str(f1), str(f2), str(f3)]
+    screen.confirm_selection()
+    assert selected == [str(f1), str(f2), str(f3)]
+
