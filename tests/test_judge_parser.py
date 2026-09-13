@@ -172,3 +172,26 @@ def test_unescaped_double_quotes_in_comment_recovered():
     assert 8 in result.issues
 
 
+def test_unescaped_game_code_backslashes_recovered():
+    # Model returns unescaped game engine tags \N[1], \V[2], \TRN[123] inside JSON string
+    raw = r'{"lines": [{"row": 15, "comment": "WHAT: SOURCE says \'\N[1] and \V[2] and \TRN[3]\' but TRANSLATION says \'foo\'"}]}'
+    result = parse_evaluation(raw)
+    assert not result.unparsed
+    assert 15 in result.issues
+    assert r"\N[1]" in result.issues[15].comment or "\\N[1]" in result.issues[15].comment
+
+
+def test_multiple_json_self_correction_recovered():
+    # Model wrote an initial finding, reconsidered in prose, and outputted {"lines": []} at the end
+    raw = (
+        '{"lines": [{"row": 378, "comment": "WHAT: bad"}]}\n\n'
+        "Wait, looking closer at the source, the translation is actually faithful.\n"
+        "I find no actual errors.\n\n"
+        '{"lines": []}'
+    )
+    result = parse_evaluation(raw)
+    assert not result.unparsed
+    assert not result.issues
+
+
+

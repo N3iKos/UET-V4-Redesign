@@ -243,6 +243,15 @@ def _is_natural_acceptance(text: str) -> bool:
     return any(re.search(pat, clean) for pat in pass_patterns)
 
 
+def _repair_invalid_escapes(s: str) -> str:
+    """
+    If a backslash is preceded by an even number of backslashes (or none)
+    and followed by a character that is NOT a valid JSON escape (not one of " \\ / b f n r t u),
+    escape that backslash. (Handles \\N, \\V, \\C, \\TRN, \\!, \\., etc. from RPG Maker/game engines).
+    """
+    return re.sub(r'(?<!\\)((?:\\\\)*)\\(?![\\"/bfnrtu])', r'\1\\\\', s)
+
+
 def _clean_body(body: str) -> str:
     """Strip reasoning/think blocks before extracting JSON."""
     cleaned = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", body, flags=re.DOTALL)
@@ -402,8 +411,15 @@ def _loads_lenient(candidate: str) -> dict | list | None:
     if data is not None:
         return data
 
+    # Auto-escape unescaped backslashes from game engine tags (\N[1], \V[2], \TRN[...])
+    escapes_fixed = _repair_invalid_escapes(text)
+    if escapes_fixed != text:
+        data = _loads(_strip_trailing_commas(escapes_fixed))
+        if data is not None:
+            return data
+
     # Repair unescaped double quotes inside comment fields
-    quoted_fixed = _fix_unescaped_comment_quotes(text)
+    quoted_fixed = _fix_unescaped_comment_quotes(escapes_fixed)
     if quoted_fixed != text:
         data = _loads(_strip_trailing_commas(quoted_fixed))
         if data is not None:
@@ -411,7 +427,7 @@ def _loads_lenient(candidate: str) -> dict | list | None:
 
     # Model-produced JSON with single quotes instead of double quotes, or a
     # Python-ish dict (`True`/`False`/`None`).
-    unquoted = re.sub(r"'", '"', text)
+    unquoted = re.sub(r"'", '"', escapes_fixed)
     unquoted = unquoted.replace("True", "true").replace("False", "false")
     unquoted = unquoted.replace("None", "null")
     data = _loads(_strip_trailing_commas(unquoted))
@@ -423,7 +439,7 @@ def _loads_lenient(candidate: str) -> dict | list | None:
     # answer with one object per row.
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > 1:
-        parsed = [_loads(line) for line in lines]
+        parsed = [_loads(_repair_invalid_escapes(line)) for line in lines]
         if parsed and all(item is not None for item in parsed):
             return {"lines": parsed}
     return None
@@ -439,6 +455,17 @@ def _candidates(body: str):
     fenced = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
     if fenced:
         yield fenced.group(1).strip()
+
+    # Self-correction / multiple JSON blocks: try the final JSON block starting from the last '{"lines"' or '{"'
+    last_brace = body.rfind("}")
+    if last_brace != -1:
+        last_lines = body.rfind('{"lines"')
+        if last_lines != -1 and last_lines < last_brace:
+            yield body[last_lines:last_brace + 1]
+        last_obj = body.rfind('{"')
+        if last_obj != -1 and last_obj < last_brace and last_obj != last_lines:
+            yield body[last_obj:last_brace + 1]
+
     start, end = body.find("{"), body.rfind("}")
     if 0 <= start < end:
         yield body[start:end + 1]

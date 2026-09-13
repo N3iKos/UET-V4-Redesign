@@ -103,7 +103,9 @@ class ParseRecoveryPipeline:
 
     def _parse_strict(self, text: str, source_map: dict[int, str] | None = None) -> dict[int, str]:
         result: dict[int, str] = {}
-        for match in re.finditer(r"\[(\d+)\]\s*(.*?)(?=\n\s*\[\d+\]|\Z)", text, re.DOTALL):
+        # Matches [N], **[N]**, [Row N], [Line N], with optional :, -, or markdown wrappers
+        pattern = r"(?:^|\n)\s*\*{0,2}\[(?:Row\s+|Line\s+)?(\d+)\]\*{0,2}[:\-]?\s*(.*?)(?=\n\s*\*{0,2}\[(?:Row\s+|Line\s+)?\d+\]|\Z)"
+        for match in re.finditer(pattern, text, re.DOTALL):
             rn = int(match.group(1))
             source_text = (source_map or {}).get(rn, "")
             value = self._clean(match.group(2), source_text=source_text)
@@ -114,10 +116,13 @@ class ParseRecoveryPipeline:
     def _parse_loose(self, text: str, expected: list[int], source_map: dict[int, str] | None = None) -> dict[int, str]:
         result: dict[int, str] = {}
         expected_set = set(expected)
-        for match in re.finditer(r"^\s*(\d+)[.)]\s+(.*)", text, re.MULTILINE):
+        # Matches 1., 1), 1:, 1 -, (1), **1.**, Row 1:, Line 1:
+        pattern = r"^\s*(?:\*{0,2}|\(?)(?:\[|\b)(?:Row\s+|Line\s+)?(\d+)(?:\]|\)|\.|\:|\-|\*{0,2}\:?)\s*(.*)"
+        for match in re.finditer(pattern, text, re.MULTILINE):
             rn = int(match.group(1))
             source_text = (source_map or {}).get(rn, "")
-            value = self._clean(match.group(2), source_text=source_text)
+            raw_val = re.sub(r"^[\]:\-\*]+\s*", "", match.group(2))
+            value = self._clean(raw_val, source_text=source_text)
             if rn in expected_set and value:
                 result[rn] = decode_placeholders(value)
         return result
@@ -145,6 +150,8 @@ class ParseRecoveryPipeline:
     def _clean(self, value: str, source_text: str = "") -> str:
         value = value.strip()
         value = re.sub(r"^(\[[\dN]+\]\s*)+", "", value).strip()
+        # Clean leading markdown bold, colon, or dashes like ": ", "- ", "** "
+        value = re.sub(r"^(?:\*{1,2}|[:\-])\s*", "", value).strip()
         # If the source text itself starts with a numbered bullet (e.g. "1. " or "2) "),
         # preserve the number in the translation! Only strip if source has no leading number.
         has_source_num = bool(re.match(r"^\d+[.)]\s+", (source_text or "").strip()))

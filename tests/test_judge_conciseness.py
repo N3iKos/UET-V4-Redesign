@@ -48,3 +48,57 @@ def test_revalidate_detects_excessive_length(tmp_path):
     r = _runner(tmp_path)
     overlong = "teks perbaikan ini luar biasa panjang sekali dan sangat bertele-tele melebihi sumber aslinya sampai ratusan karakter panjangnya"
     assert r.revalidate_fix(1, overlong, "cat") == "excessive-length"
+
+
+def test_fix_all_fitting_retry_does_not_crash_on_profile(tmp_path):
+    # Tests that when a fitting retry occurs in fix_all, it does not crash on self._profile
+    csv_file = tmp_path / "x.csv"
+    csv_file.write_text("id,source,trans\n1,cat,kucing\n", encoding="utf-8")
+
+    class DummyClient:
+        def __init__(self):
+            self.calls = 0
+        def generate(self, model, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                # Return excessively long text to trigger fitting rejection
+                return type("R", (), {"content": "[2] " + "a" * 200, "tokens": 10})()
+            # Second call returns concise text
+            return type("R", (), {"content": "[2] short text", "tokens": 10})()
+
+    target = JudgeTarget(path=str(csv_file), src_col=2, dst_col=3, start_row=2)
+    runner = JudgeRunner(
+        target,
+        criteria=["fitting"],
+        client_factory=lambda: DummyClient(),
+    )
+    # Run fix_all with row 2
+    staged = runner.fix_all(
+        rows=[2],
+        comments={2: "WHAT: long · WHY: bad · FIX: shorten"},
+        criteria=["fitting"],
+    )
+    assert 2 in staged.texts
+    assert staged.texts[2] == "short text"
+
+
+def test_staged_fix_cache_autosaves_and_loads(tmp_path):
+    csv_file = tmp_path / "test_cache.csv"
+    csv_file.write_text("id,source,trans\n1,dog,anjing\n", encoding="utf-8")
+
+    class DummyClient:
+        def generate(self, model, prompt, **kwargs):
+            return type("R", (), {"content": "[2] anjing setia", "tokens": 10})()
+
+    target = JudgeTarget(path=str(csv_file), src_col=2, dst_col=3, start_row=2)
+    runner = JudgeRunner(target, client_factory=lambda: DummyClient())
+    staged = runner.fix_all(rows=[2], comments={2: "note"})
+    assert 2 in staged.texts
+
+    # Verify autosave cache was created
+    loaded = runner.load_staged_cache()
+    assert loaded is not None
+    assert loaded.texts.get(2) == "anjing setia"
+
+
+

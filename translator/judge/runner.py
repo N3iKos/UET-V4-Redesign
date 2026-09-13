@@ -899,6 +899,57 @@ class JudgeRunner:
         if not result.unparsed:
             self._rows_seen.update(result.rows_seen)
 
+    def _staged_cache_path(self) -> str:
+        base_dir = os.path.dirname(self._target.full_path or self._target.path) or "."
+        cache_dir = os.path.join(base_dir, ".uet_cache")
+        base_name = os.path.splitext(os.path.basename(self._target.full_path or self._target.path))[0]
+        return os.path.join(cache_dir, f"{base_name}_staged_fix.json")
+
+    def _save_staged_cache(self, staged: StagedFix) -> None:
+        try:
+            path = self._staged_cache_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {
+                "target": self._target.path,
+                "timestamp": datetime.now().isoformat(),
+                "texts": staged.texts,
+                "unchanged": staged.unchanged,
+                "failed": staged.failed,
+                "errors": staged.errors,
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                import json
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+
+    def load_staged_cache(self) -> StagedFix | None:
+        try:
+            path = self._staged_cache_path()
+            if not os.path.exists(path):
+                return None
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            staged = StagedFix()
+            staged.texts = {int(k): v for k, v in data.get("texts", {}).items()}
+            staged.unchanged = [int(x) for x in data.get("unchanged", [])]
+            staged.failed = [int(x) for x in data.get("failed", [])]
+            staged.errors = list(data.get("errors", []))
+            return staged
+        except Exception:
+            return None
+
+    def _clear_staged_cache(self) -> None:
+        try:
+            path = self._staged_cache_path()
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
     # ── Fix All (staged) ──────────────────────────────────────────────────────
 
     def fix_all(
@@ -1061,6 +1112,8 @@ class JudgeRunner:
                 row for row in result.failed_rows
                 if row not in staged.texts and row not in staged.unchanged
             )
+            # Autosave staged fixes to disk cache in real-time so large runs (e.g. 80k rows) never lose work
+            self._save_staged_cache(staged)
             # Counted per request, not per repaired row: a batch where the model
             # left every line alone produces no `_emit_fix` at all, and a bar fed
             # only by those would sit at 0% through a run that is working
@@ -1107,8 +1160,8 @@ class JudgeRunner:
                 retry_notes[row] = (
                     f"{notes.get(row, '')} "
                     f"[FITTING RETRY {round_num}/{MAX_FITTING_RETRIES}: the previous fix "
-                    f"failed the window check ({fail_kind}) — compress the line so it "
-                    f"fits {self._profile.max_lines} lines x {self._profile.window_cols} em, "
+                    f"failed length validation ({fail_kind}) — compress the line so it "
+                    f"matches the original length, "
                     f"or insert the source's line-break tag at a natural pause]"
                 ).strip()
                 retry_tasks.append(BatchTask(
@@ -1172,6 +1225,7 @@ class JudgeRunner:
         self.write_log(
             f"Fix All staged: {len(staged.texts)} fixed, {len(staged.unchanged)} unchanged, {len(staged.failed)} failed"
         )
+        self._save_staged_cache(staged)
         return staged
 
     def apply_fix(
@@ -1217,6 +1271,7 @@ class JudgeRunner:
                 self._target.map_path, writer.active_path,
                 self._target.full_path, self._target.dst_col,
             )
+        self._clear_staged_cache()
         return len(payload)
 
     # ── Single row ────────────────────────────────────────────────────────────

@@ -177,7 +177,7 @@ def validate_alignment(
         if src_tokens and not set(re.findall(r"\[BR\]\[\w+\]", trans)):
             is_valid = False
 
-        if src.count("!") >= 2 and trans.count("!") == 0:
+        if strict_quotes and src.count("!") >= 2 and trans.count("!") == 0:
             is_valid = False
 
         if strict_quotes:
@@ -189,11 +189,13 @@ def validate_alignment(
         if is_valid:
             validated[rn] = trans
 
-    # Two consecutive rejects means the batch is structurally suspect.
+    # Structural shift streak threshold: in auto mode, require at least 3 consecutive
+    # rejects before rejecting the whole batch, preventing spurious retries on natural line adaptations.
     failure_streak = 0
+    max_streak = 2 if strict_quotes else 3
     for rn in sorted_rows:
         failure_streak = 0 if rn in validated else failure_streak + 1
-        if failure_streak >= 2:
+        if failure_streak >= max_streak:
             return {}
 
     return validated
