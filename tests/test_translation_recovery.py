@@ -16,19 +16,16 @@ from translator.parsing.alignment import validate_alignment
 
 
 def test_game_engine_tags_encoded_and_decoded():
-    # Common RPG Maker / game control codes with backslash
+    # RPG Maker control symbols that could be stripped as punctuation
     samples = [
-        r"Hello \N[1], your score is \V[20]!",
-        r"\C[3]Notice:\C[0] Gold is \G and \TRN[999] done",
         r"Wait\. and stop\| and finish\^ with \$ gold",
         r"Font bigger\{ and smaller\}",
+        r"Clear dialog\@ and pause\!",
     ]
     for orig in samples:
         encoded = encode_placeholders(orig)
-        # Encoded must NOT contain raw unescaped backslash before game tags
-        assert r"\N[1]" not in encoded
-        assert r"\V[20]" not in encoded
-        assert r"\TRN[999]" not in encoded
+        assert r"\." not in encoded
+        assert r"\|" not in encoded
         # Decoded must restore original byte-for-byte
         decoded = decode_placeholders(encoded)
         assert decoded == orig

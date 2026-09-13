@@ -57,11 +57,6 @@ def encode_placeholders(text: str) -> str:
     """'Hello\\@World' -> 'Hello[BR][AT]World'."""
     if not text:
         return ""
-    # Protect dynamic game tags with brackets: \N[1], \V[20], \C[3], \TRN[999], etc.
-    text = re.sub(r"\\([A-Za-z]+\[[^\]\r\n]+\])", r"[BR][TAG:\1]", text)
-    # Standalone game flags like \G (gold)
-    text = re.sub(r"\\([Gg])(?![A-Za-z])", r"[BR][TAG:\1]", text)
-
     for original, token in _GAME_SYMBOLS_MAP:
         text = text.replace(original, token)
     for original, token in _ENCODE_MAP:
@@ -77,8 +72,6 @@ def decode_placeholders(text: str) -> str:
         text = text.replace(token, original)
     for token, original in _DECODE_SYMBOLS_MAP:
         text = text.replace(token, original)
-    # Restore dynamic game tags
-    text = re.sub(r"\[BR\]\[TAG:([^\]]+)\]", r"\\\1", text)
     return text
 
 

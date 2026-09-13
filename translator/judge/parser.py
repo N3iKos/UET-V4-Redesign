@@ -135,9 +135,11 @@ def parse_evaluation(text: str, graded: bool = True) -> JudgeResult:
         # It counts as seen so a section that failed once and recovered can
         # still mark its recovered rows as evaluated rather than unevaluated.
         result.rows_seen.add(row)
-        comment = str(
+        raw_comment = str(
             entry.get("comment") or entry.get("note") or entry.get("reason") or ""
         ).strip()
+        from ..parsing.placeholders import decode_placeholders
+        comment = decode_placeholders(raw_comment)
         types = entry.get("error_types", entry.get("error_type", entry.get("types")))
         result.issues[row] = RowIssue(
             row=row,
