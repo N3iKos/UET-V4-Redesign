@@ -103,13 +103,16 @@ class WorkerLedger:
     when painting is throttled); the panel is fed from `statuses()`.
     """
 
-    HOLD_SECONDS = 1.0
+    HOLD_SECONDS = 2.5
 
     def __init__(self) -> None:
         # worker_id -> latest real status from the scheduler.
         self._real: dict[int, object] = {}
         # worker_id -> (held snapshot, monotonic deadline).
         self._hold: dict[int, tuple[object, float]] = {}
+        # worker_id -> (mark, seconds) of the last finished request, so the
+        # outcome stays visible after the hold expires and a new batch begins.
+        self._last_result: dict[int, tuple[str, int]] = {}
 
     def note(self, status) -> None:
         wid = getattr(status, "worker_id", 0)
@@ -118,22 +121,40 @@ class WorkerLedger:
         if phase in _HOLD_PHASES:
             snapshot = self._freeze(status, wid)
             self._hold[wid] = (snapshot, now + self.HOLD_SECONDS)
-        self._real[wid] = status
+            self._real[wid] = snapshot
+            if phase in ("done", "failed", "retry"):
+                try:
+                    secs = int(getattr(snapshot, "elapsed", 0.0) or 0.0)
+                except Exception:
+                    secs = 0
+                self._last_result[wid] = ("✓" if phase == "done" else "✗", secs)
+        else:
+            mark = self._last_result.get(wid)
+            if mark and phase in _ACTIVITY_PHASES:
+                try:
+                    status.last_result_mark = mark[0]
+                    status.last_result_secs = mark[1]
+                except Exception:
+                    pass
+            self._real[wid] = status
 
     def _freeze(self, status, wid: int):
         """
         A copy of the terminal status with a sensible frozen duration.
 
-        A `done`/`failed` phase carries no live clock, so on its own it would
+        A `done`/`failed`/`retry` phase carries no live clock, so on its own it would
         read `0.0s`. The elapsed time of the request that just ended is far more
         useful, so it is carried over from the previous running snapshot.
         """
         held = copy.copy(status)
         prev = self._real.get(wid)
-        if getattr(status, "phase", "") in ("done", "failed"):
-            started = getattr(prev, "started_at", 0.0) if prev else 0.0
-            if started:
-                held.elapsed = max(0.0, time.monotonic() - started)
+        if getattr(status, "phase", "") in ("done", "failed", "retry"):
+            if getattr(status, "elapsed", 0.0):
+                held.elapsed = float(status.elapsed)
+            else:
+                started = getattr(prev, "started_at", 0.0) if prev else 0.0
+                if started:
+                    held.elapsed = max(0.0, time.time() - started)
         return held
 
     def statuses(self) -> list:
@@ -158,6 +179,20 @@ class WorkerLedger:
     def clear(self) -> None:
         self._real.clear()
         self._hold.clear()
+        self._last_result.clear()
+
+    def reset_all_idle(self) -> None:
+        self._hold.clear()
+        self._last_result.clear()
+        for wid, status in list(self._real.items()):
+            idle = copy.copy(status)
+            idle.phase = "idle"
+            idle.busy = False
+            idle.current_row = 0
+            idle.rows = 0
+            idle.batch_num = 0
+            idle.elapsed = 0.0
+            self._real[wid] = idle
 
 
 
@@ -244,7 +279,15 @@ def worker_line(status, tick: int = 0, connection_width: int = 11) -> Text:
     line.append(f"b{batch:<4}", style=MUTED)
     line.append(f"{icon} ", style=style)
     line.append(pad_cells(phase_text(status), 8), style=style)
-    line.append(f"{seconds:>5.1f}s", style=MUTED)
+    if seconds < 60:
+        sec_str = f"{int(seconds)}s"
+    else:
+        sec_str = f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+    line.append(f"{sec_str:>5}", style=MUTED)
+    last_mark = getattr(status, "last_result_mark", "")
+    if last_mark and phase_label(status) in ("generating", "think", "parsing", "retry"):
+        last_secs = getattr(status, "last_result_secs", 0) or 0
+        line.append(f" {last_mark}{last_secs}s", style=OK if last_mark == "✓" else ERROR)
     return line
 
 
@@ -426,7 +469,7 @@ class ActivityPanel(Widget):
 
     def _build(self) -> list[Text]:
         width = max(24, self.size.width or 34)
-        connection_width = max(6, min(14, width - 22))
+        connection_width = max(5, min(12, width - 24))
 
         lines: list[Text] = []
         self._rows = []

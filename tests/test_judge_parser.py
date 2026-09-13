@@ -118,3 +118,57 @@ def test_recovery_pipeline_preserves_source_number():
     recovered = pipeline.recover(reply, [5364, 100], source_map=src_map)
     assert recovered[5364] == "1. Tim Kelinci dapat dipanggil sekali sehari."
     assert recovered[100] == "Teks lain"
+
+
+def test_literal_newlines_in_comment_parsed():
+    # LLMs frequently emit literal unescaped newlines in JSON strings
+    raw = '{\n  "lines": [\n    {\n      "row": 12,\n      "error_types": ["style"],\n      "comment": "WHAT: foo\\nWHY: bar\\nFIX: baz"\n    }\n  ]\n}'
+    # Replace the escaped \\n with actual unescaped literal newline
+    raw_with_literal_newlines = '{\n  "lines": [\n    {\n      "row": 12,\n      "error_types": ["style"],\n      "comment": "WHAT: foo\nWHY: bar\nFIX: baz"\n    }\n  ]\n}'
+    result = parse_evaluation(raw_with_literal_newlines)
+    assert not result.unparsed
+    assert 12 in result.issues
+    assert "WHAT: foo" in result.issues[12].comment
+
+
+def test_think_tag_with_curly_braces_stripped():
+    raw = (
+        "<think>\n"
+        "Let's look at row 1. The placeholder {name} is preserved.\n"
+        "Row 2 has issues: {test}.\n"
+        "</think>\n"
+        '{"lines": [{"row": 2, "error_types": ["mistranslation"], "comment": "wrong meaning"}]}'
+    )
+    result = parse_evaluation(raw)
+    assert not result.unparsed
+    assert 2 in result.issues
+
+
+def test_natural_language_acceptance():
+    phrases = [
+        "All lines are acceptable. No issues found.",
+        "Semua baris sudah akurat dan tidak ada kesalahan.",
+        "Every line is acceptable.",
+        "No translation errors detected in this batch.",
+    ]
+    for phrase in phrases:
+        result = parse_evaluation(phrase)
+        assert not result.unparsed, f"Failed for phrase: {phrase}"
+        assert not result.issues
+
+
+def test_truncated_json_recovered():
+    # Truncated before closing brackets
+    raw = '{"lines": [{"row": 10, "error_types": ["placeholder"], "comment": "missing tag"'
+    result = parse_evaluation(raw)
+    assert not result.unparsed
+    assert 10 in result.issues
+
+
+def test_unescaped_double_quotes_in_comment_recovered():
+    raw = '{"lines": [{"row": 8, "comment": "SOURCE says "black cat" but TRANSLATION says "kucing merah"", "severity": "critical"}]}'
+    result = parse_evaluation(raw)
+    assert not result.unparsed
+    assert 8 in result.issues
+
+

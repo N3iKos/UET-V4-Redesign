@@ -628,34 +628,30 @@ class ColumnsScreen(WizardScreen):
             repair_col=repair_col, start_row=start, num_rows=num_rows,
             op_mode="translate_context" if ctx_col else "translate",
         )
-
-        from ...data.app_prefs import dedup_mode
-        from ...core.dedup_file import prepare_unique_file
-
-        if dedup_mode() != "disabled":
+        if app_prefs.dedup_mode() != "disabled":
+            from ...core.dedup_file import prepare_unique_file
+            full_src = self.draft["src_path"]
+            full_out = self.draft["out_path"]
             try:
-                unique_src, map_file, total_r, unique_r = prepare_unique_file(
-                    src_path=self.draft["src_path"],
-                    src_col=src_col,
-                    dst_col=dst_col,
-                    start_row=start,
+                unique, mapping, total_rows, unique_rows = prepare_unique_file(
+                    full_src, src_col, dst_col, start, num_rows, full_out,
                 )
-                if map_file and unique_src != self.draft["src_path"]:
-                    self.draft["full_src_path"] = self.draft["src_path"]
-                    self.draft["full_out_path"] = self.draft["out_path"]
-                    self.draft["src_path"] = unique_src
-                    self.draft["out_path"] = translated_path(unique_src)
-                    self.draft["map_path"] = map_file
-                    self.draft["num_rows"] = unique_r
-                    saved_r = total_r - unique_r
-                    self.notify_status(
-                        f"Deduplication: {unique_r:,} unique rows "
-                        f"({saved_r:,} duplicates skipped — {saved_r / max(1, total_r) * 100:.1f}% savings).",
-                        OK,
-                    )
-            except Exception:
-                pass
-
+            except Exception as exc:
+                error.update(f"Cannot prepare unique working file: {exc}")
+                return
+            if mapping:
+                self.draft.update(
+                    full_src_path=full_src, full_out_path=full_out,
+                    src_path=unique, out_path=translated_path(unique),
+                    map_path=mapping, num_rows=unique_rows,
+                )
+                skipped = total_rows - unique_rows
+                self.notify_status(
+                    f"Deduplication: {unique_rows:,} unique rows "
+                    f"({skipped:,} duplicates skipped — "
+                    f"{skipped / max(1, total_rows) * 100:.1f}% savings).",
+                    OK,
+                )
         self.app.push_screen(LanguageStyleScreen())
 
 
@@ -1211,8 +1207,11 @@ class PreviewScreen(WizardMenuScreen):
             else f"{preset.rpm} rpm / {preset.tpm:,} tpm"
         )
 
+        display_src = os.path.basename(draft.get("full_src_path") or draft["src_path"])
+        display_out = os.path.basename(draft.get("full_out_path") or draft["out_path"])
+
         lines = [
-            f"[{MUTED}]Source[/]      {os.path.basename(draft['src_path'])}   "
+            f"[{MUTED}]Source[/]      {display_src}   "
             f"{src_letter} → {dst_letter}, rows {draft['start_row']}–{end_row} "
             f"({draft['num_rows']:,} total)",
         ]
@@ -1222,7 +1221,7 @@ class PreviewScreen(WizardMenuScreen):
                 f"({dup_saved:,} duplicates skipped — {dup_saved / max(1, total_source_count) * 100:.1f}% token savings)"
             )
         lines += [
-            f"[{MUTED}]Saves to[/]    [{OK}]{os.path.basename(draft['out_path'])}[/]"
+            f"[{MUTED}]Saves to[/]    [{OK}]{display_out}[/]"
             f"   [{MUTED}]source file is never modified[/]",
             f"[{MUTED}]Provider[/]    {escape_markup(provider_line)}",
             f"[{MUTED}]Model[/]       {escape_markup(choice.label)} · "
@@ -1263,8 +1262,11 @@ class PreviewScreen(WizardMenuScreen):
             provider_id=draft["provider_id"],
             model_id=draft["model_id"],
             connection_id=draft.get("connection_id", ""),
-            src_path=draft["src_path"],
-            out_path=draft["out_path"],
+            src_path=os.path.abspath(draft["src_path"]),
+            out_path=os.path.abspath(draft["out_path"]),
+            full_src_path=os.path.abspath(draft.get("full_src_path", "")) if draft.get("full_src_path") else "",
+            full_out_path=os.path.abspath(draft.get("full_out_path", "")) if draft.get("full_out_path") else "",
+            map_path=os.path.abspath(draft.get("map_path", "")) if draft.get("map_path") else "",
             src_col=draft["src_col"],
             dst_col=draft["dst_col"],
             ctx_col=draft.get("ctx_col", 0),
@@ -1298,7 +1300,8 @@ class PreviewScreen(WizardMenuScreen):
         ).apply_to(job)
 
         if job.debug_log or job.raw_log:
-            job.log_path = os.path.splitext(job.out_path)[0] + "_uet.log"
+            base_out = job.full_out_path or job.full_src_path or job.out_path
+            job.log_path = os.path.splitext(base_out)[0] + "_uet.log"
         return job
 
 

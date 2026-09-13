@@ -1,141 +1,121 @@
-"""
-tests/test_dedup_file.py — Unit tests for unique working file generation and synchronization.
-"""
-
-from __future__ import annotations
-
 import json
-import os
-import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
+from openpyxl import Workbook
 
-from translator.core.dedup_file import prepare_unique_file, sync_unique_to_full
-from translator.io.csv_io import read_rows, sniff, write_rows
-
-
-def _create_sample_csv(path: str) -> None:
-    content = [
-        ["No", "Source_File", "ID", "String", "Original_text", "Translated"],
-        ["1", "sys.json", "S1", "", "Hello", ""],
-        ["2", "sys.json", "S2", "", "Yes", ""],
-        ["3", "sys.json", "S3", "", "Hello", ""],
-        ["4", "sys.json", "S4", "", "Attack", ""],
-        ["5", "sys.json", "S5", "", "Hello", ""],
-        ["6", "sys.json", "S6", "", "Yes", ""],
-    ]
-    fmt = sniff(path) if os.path.exists(path) else None
-    from translator.io.csv_io import CsvFormat
-    fmt = fmt or CsvFormat(delimiter=",", encoding="utf-8")
-    write_rows(path, content, fmt)
+from translator.io import csv_io
+from translator.io.excel_io import load_workbook
 
 
-def test_prepare_unique_file_with_duplicates(tmp_path):
-    src_csv = str(tmp_path / "Dialog.csv")
-    _create_sample_csv(src_csv)
-
-    active_path, map_path, total_rows, unique_rows = prepare_unique_file(
-        src_path=src_csv, src_col=5, dst_col=6, start_row=2
-    )
-
-    assert total_rows == 6
-    assert unique_rows == 3  # "Hello", "Yes", "Attack"
-    assert active_path != src_csv
-    assert active_path.endswith("Dialog.unique.csv")
-    assert os.path.exists(active_path)
-    assert os.path.exists(map_path)
-
-    # Read unique CSV rows
-    fmt = sniff(active_path)
-    rows = read_rows(active_path, fmt)
-    assert len(rows) == 4  # Header + 3 unique rows
-    unique_sources = [r[4] for r in rows[1:]]
-    assert unique_sources == ["Hello", "Yes", "Attack"]
-
-    # Verify map content
-    with open(map_path, "r", encoding="utf-8") as f:
-        map_data = json.load(f)
-    assert map_data["total_rows"] == 6
-    assert map_data["unique_rows"] == 3
-    # Row numbers are sheet row numbers (header is row 1)
-    rep_to_full = map_data["rep_to_full"]
-    # unique row 2 ("Hello") corresponds to original rows [2, 4, 6] in sheet (index 1, 3, 5)
-    assert rep_to_full["2"] == [2, 4, 6]
-    assert rep_to_full["3"] == [3, 7]
-    assert rep_to_full["4"] == [5]
+def api():
+    from translator.core import dedup_file
+    return dedup_file
 
 
-def test_prepare_unique_file_without_duplicates(tmp_path):
-    src_csv = str(tmp_path / "UniqueOnly.csv")
-    from translator.io.csv_io import CsvFormat
-    fmt = CsvFormat(delimiter=",", encoding="utf-8")
-    write_rows(
-        src_csv,
-        [
-            ["No", "Text", "Translated"],
-            ["1", "Apple", ""],
-            ["2", "Banana", ""],
-            ["3", "Orange", ""],
-        ],
-        fmt,
-    )
-
-    active_path, map_path, total_rows, unique_rows = prepare_unique_file(
-        src_path=src_csv, src_col=2, dst_col=3, start_row=2
-    )
-
-    # When no duplicates, original file is used directly
-    assert total_rows == 3
-    assert unique_rows == 3
-    assert active_path == src_csv
-    assert map_path == ""
+def make_file(path, rows):
+    if path.suffix == ".xlsx":
+        wb = Workbook()
+        for row in rows:
+            wb.active.append(row)
+        wb.save(path)
+        wb.close()
+    else:
+        csv_io.write_rows(str(path), rows, csv_io.CsvFormat(bom=True))
+    return str(path)
 
 
-def test_sync_unique_to_full(tmp_path):
-    src_csv = str(tmp_path / "Dialog.csv")
-    full_out_csv = str(tmp_path / "Dialog_Translated.csv")
-    _create_sample_csv(src_csv)
-    _create_sample_csv(full_out_csv)
+def values(path):
+    wb = load_workbook(str(path), data_only=False)
+    try:
+        return list(wb.active.iter_rows(values_only=True))
+    finally:
+        wb.close()
 
-    active_path, map_path, total_rows, unique_rows = prepare_unique_file(
-        src_path=src_csv, src_col=5, dst_col=6, start_row=2
-    )
 
-    # Simulate translating the unique working file
-    # unique file has 3 unique data rows:
-    # row 2 ("Hello") -> "Halo"
-    # row 3 ("Yes") -> "Ya"
-    # row 4 ("Attack") -> "Serang"
-    unique_out_csv = active_path  # simulate in-place or separate output
-    fmt = sniff(active_path)
-    u_rows = read_rows(active_path, fmt)
-    u_rows[1][5] = "Halo"
-    u_rows[2][5] = "Ya"
-    u_rows[3][5] = "Serang"
-    write_rows(unique_out_csv, u_rows, fmt)
+@pytest.mark.parametrize("ext", [".csv", ".xlsx"])
+def test_prepare_and_sync_preserve_rows_columns_and_prefix(tmp_path, ext):
+    source = make_file(tmp_path / ("dialog" + ext), [
+        ["source", "target", "id"], ["prefix", "keep", "0"],
+        ["Hello", "", "1"], ["", "untouched", "2"],
+        ["World", "", "3"], ["Hello", "", "4"],
+    ])
+    unique, mapping, total, count = api().prepare_unique_file(source, 1, 2, 3)
+    assert (total, count) == (3, 2)
+    data = json.loads(Path(mapping).read_text())
+    assert data["rep_to_full"] == {"3": [3, 6], "4": [5]}
+    assert values(unique)[:2] == values(source)[:2]
+    wb = load_workbook(unique, data_only=False)
+    wb.active.cell(3, 2, "Halo")
+    wb.active.cell(4, 2, "Dunia")
+    output = str(Path(unique).with_name(Path(unique).stem + "_Translated" + ext))
+    wb.save(output)
+    wb.close()
+    full = str(tmp_path / ("full" + ext))
+    assert api().sync_unique_to_full(mapping, output, full, 2) == 3
+    rows = values(full)
+    assert [r[1] for r in rows] == ["target", "keep", "Halo", "untouched", "Dunia", "Halo"]
+    assert [r[2] for r in rows] == ["id", "0", "1", "2", "3", "4"]
+    assert values(source)[2][1] in (None, "")
 
-    # Sync back to full file
-    updated_count = sync_unique_to_full(
-        map_file_path=map_path,
-        unique_out_path=unique_out_csv,
-        full_out_path=full_out_csv,
-        dst_col=6,
-    )
 
-    assert updated_count == 6
+def test_no_duplicates_and_blank_rows_return_original(tmp_path):
+    source = make_file(tmp_path / "plain.csv", [["s", "t"], ["a", ""], [], ["b", ""]])
+    assert api().prepare_unique_file(source, 1, 2) == (source, "", 2, 2)
 
-    # Verify every row in full target file
-    full_rows = read_rows(full_out_csv, sniff(full_out_csv))
-    assert full_rows[1][5] == "Halo"    # row 2
-    assert full_rows[2][5] == "Ya"      # row 3
-    assert full_rows[3][5] == "Halo"    # row 4 (duplicate of Hello)
-    assert full_rows[4][5] == "Serang"  # row 5 (Attack)
-    assert full_rows[5][5] == "Halo"    # row 6 (duplicate of Hello)
-    assert full_rows[6][5] == "Ya"      # row 7 (duplicate of Yes)
 
-    # Verify other columns untouched
-    assert full_rows[3][0] == "3"
-    assert full_rows[3][4] == "Hello"
-    assert full_rows[5][0] == "5"
-    assert full_rows[5][4] == "Hello"
+def test_cache_reuse_and_stale_mapping_rejected(tmp_path):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    first = api().prepare_unique_file(source, 1, 2)
+    assert api().prepare_unique_file(source, 1, 2) == first
+    before = Path(first[0]).read_bytes()
+    make_file(Path(source), [["s", "t"], ["b", ""], ["b", ""]])
+    second = api().prepare_unique_file(source, 1, 2)
+    assert second[0] != first[0]
+    assert Path(first[0]).read_bytes() == before
+    with pytest.raises(ValueError, match="(?i)stale|mapping"):
+        api().sync_unique_to_full(first[1], first[0], str(tmp_path / "full.csv"), 2)
+    assert not (tmp_path / "full.csv").exists()
 
+
+def test_sync_validates_unique_order_and_mapping_indices(tmp_path):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["b", ""], ["a", ""]])
+    unique, mapping, _, _ = api().prepare_unique_file(source, 1, 2)
+    make_file(Path(unique), [["s", "t"], ["b", "B"], ["a", "A"]])
+    with pytest.raises(ValueError):
+        api().sync_unique_to_full(mapping, unique, str(tmp_path / "full.csv"), 2)
+
+
+def test_preparation_resumes_full_output_without_overwriting_completed_cells(tmp_path):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""], ["b", ""]])
+    full = make_file(tmp_path / "dialog_Translated.csv", [["s", "t"], ["a", ""], ["a", "Approved"], ["b", "Done"]])
+    unique, mapping, _, _ = api().prepare_unique_file(source, 1, 2, full_out_path=full)
+    assert values(unique)[1][1] == "Approved"
+    api().sync_unique_to_full(mapping, unique, full, 2)
+    assert [r[1] for r in values(full)[1:]] == ["Approved", "Approved", "Done"]
+
+
+def test_range_does_not_broadcast_outside_selected_rows(tmp_path):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""], ["a", "outside"]])
+    unique, mapping, total, count = api().prepare_unique_file(source, 1, 2, num_rows=2)
+    assert (total, count) == (2, 1)
+    wb = load_workbook(unique)
+    wb.active.cell(2, 2, "A")
+    wb.save(unique)
+    wb.close()
+    full = str(tmp_path / "full.csv")
+    api().sync_unique_to_full(mapping, unique, full, 2)
+    assert values(full)[3][1] == "outside"
+
+
+def test_sync_failure_is_atomic(tmp_path, monkeypatch):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", "A"], ["a", ""]])
+    unique, mapping, _, _ = api().prepare_unique_file(source, 1, 2)
+    full = make_file(tmp_path / "full.csv", [["s", "t"], ["a", "A"], ["a", ""]])
+    before = Path(full).read_bytes()
+    def fail(*args):
+        raise PermissionError("locked")
+    monkeypatch.setattr(api().os, "replace", fail)
+    with pytest.raises(PermissionError):
+        api().sync_unique_to_full(mapping, unique, full, 2)
+    assert Path(full).read_bytes() == before

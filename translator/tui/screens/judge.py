@@ -100,7 +100,7 @@ from ...data.presets import (
     update_user_preset,
 )
 from .wizard import ConfirmPresetChangeModal, SaveNewPresetModal
-from ...io.excel_io import ExcelReader
+from ...io.excel_io import ExcelReader, translated_path
 from ...judge import estimator
 from ...judge.models import (
     CRITERIA,
@@ -424,6 +424,9 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
     # ── Layout ────────────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
+        session_rows = getattr(self.app, "judge_session_rows", None)
+        init_rows = session_rows if session_rows else _rejudge_rows_default()
+        self._last_typed_batch = str(init_rows)
         with Vertical(classes="modal"):
             yield Label("Re-judge with", classes="title")
             if self._scope:
@@ -433,8 +436,8 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
                 yield self._model
                 self._batch = LabeledInput(
                     "Rows / request",
-                    value=str(_rejudge_rows_default()),
-                    default=str(_rejudge_rows_default()),
+                    value=str(init_rows),
+                    default=str(init_rows),
                 )
                 self._workers = LabeledInput("Workers")
                 yield self._batch
@@ -459,7 +462,12 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
 
     def on_mount(self) -> None:
         self._model.set_options(_fix_model_options(self.app.registry, self._judge_slot))
-        self._workers.value = str(self._derived_workers())
+        self._active_model_slot = self._chosen_slot()
+        session_workers = getattr(self.app, "judge_session_workers", None)
+        if session_workers:
+            self._workers.value = str(session_workers)
+        else:
+            self._workers.value = str(self._derived_workers())
         self._apply_remembered()
         self._paint_scope()
 
@@ -485,6 +493,13 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
             self._typed_batch(), tok_per_row=config.TOKEN_EST_MIN_PER_ROW * 2
         )
 
+    def _has_remembered(self) -> bool:
+        slot = self._chosen_slot()
+        if slot is None:
+            return False
+        from ...data.app_prefs import remembered_judge_settings
+        return remembered_judge_settings(slot) is not None
+
     def _apply_remembered(self) -> None:
         """
         Prefill from this model's stored settings, when there are any.
@@ -503,6 +518,9 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
             return
         self._batch.value = str(remembered["max_rows"])
         self._workers.value = str(remembered["workers"])
+        for opt in self._remember.options:
+            opt.selected = True
+        self._remember.refresh()
 
     def _paint_scope(self) -> None:
         panel = self.query_one("#rejudge-scope", Static)
@@ -521,12 +539,23 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
         if event.picker is self._model:
+            slot = self._chosen_slot()
+            if slot == getattr(self, "_active_model_slot", None):
+                return
+            self._active_model_slot = slot
             self._apply_remembered()
-            self._workers.value = str(self._derived_workers())
+            if not self._has_remembered():
+                self._workers.value = str(self._derived_workers())
             self._paint_scope()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self._batch.input:
+            if event.value == getattr(self, "_last_typed_batch", None):
+                return
+            self._last_typed_batch = event.value
+            self._workers.value = str(self._derived_workers())
+            self._paint_scope()
+        elif event.input is self._workers.input:
             self._paint_scope()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -564,12 +593,18 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
             self._error.show("Rows per request must be a number.", "cannot start")
             return
 
+        self.app.judge_session_rows = rows
+        self.app.judge_session_workers = workers
+
         from ...data.app_prefs import remember_judge_settings
 
+        remember = "remember" in self._remember.selected_values()
         remember_judge_settings(
             slot, max_rows=rows, workers=workers,
-            remember="remember" in self._remember.selected_values(),
+            remember=remember,
         )
+        if remember:
+            self.app.judge_rejudge_slot = slot
         self.dismiss((slot, rows, workers))
 
     def action_dismiss_none(self) -> None:
@@ -1424,32 +1459,32 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             src_col=src_col, dst_col=dst_col, ctx_col=ctx_col,
             start_row=start, num_rows=num_rows,
         )
-
-        from ...data.app_prefs import dedup_mode
-        from ...core.dedup_file import prepare_unique_file
-
-        if dedup_mode() != "disabled":
+        if app_prefs.dedup_mode() != "disabled":
+            from ...core.dedup_file import prepare_unique_file
+            full_path = self.draft["path"]
             try:
-                unique_src, map_file, total_r, unique_r = prepare_unique_file(
-                    src_path=self.draft["path"],
-                    src_col=src_col,
-                    dst_col=dst_col,
-                    start_row=start,
+                unique, mapping, total_rows, unique_rows = prepare_unique_file(
+                    full_path, src_col, dst_col, start, num_rows,
+                    full_path if "_Translated" in os.path.splitext(full_path)[0] else "",
                 )
-                if map_file and unique_src != self.draft["path"]:
-                    self.draft["full_path"] = self.draft["path"]
-                    self.draft["path"] = unique_src
-                    self.draft["map_path"] = map_file
-                    self.draft["num_rows"] = unique_r
-                    saved_r = total_r - unique_r
-                    self.notify_status(
-                        f"Deduplication: {unique_r:,} unique pairs to evaluate "
-                        f"({saved_r:,} duplicates skipped — {saved_r / max(1, total_r) * 100:.1f}% savings).",
-                        OK,
-                    )
-            except Exception:
-                pass
-
+            except Exception as exc:
+                error.update(f"Cannot prepare unique working file: {exc}")
+                return
+            if mapping:
+                unique_output = translated_path(unique)
+                if os.path.exists(unique_output):
+                    unique = unique_output
+                self.draft.update(
+                    full_path=os.path.abspath(full_path), path=os.path.abspath(unique),
+                    map_path=os.path.abspath(mapping), num_rows=unique_rows,
+                )
+                skipped = total_rows - unique_rows
+                self.notify_status(
+                    f"Deduplication: {unique_rows:,} unique rows "
+                    f"({skipped:,} duplicates skipped — "
+                    f"{skipped / max(1, total_rows) * 100:.1f}% savings).",
+                    OK,
+                )
         # New order (UET_UX §6): file & columns → criteria → language & style →
         # processing → review.
         self.app.push_screen(JudgeCriteriaScreen())
@@ -1563,6 +1598,8 @@ def _target_from(draft: dict) -> JudgeTarget:
         tgt_lang=draft.get("tgt_lang", ""),
         style_prompt=draft.get("style_prompt", ""),
         custom_placeholders=draft.get("custom_placeholders", ""),
+        full_path=draft.get("full_path", ""),
+        map_path=draft.get("map_path", ""),
     )
 
 
@@ -1675,21 +1712,34 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         model_name = (
             f"Group · {choice.label}" if choice.is_combo else choice.label
         )
+        display_file = os.path.basename(draft.get("full_path") or draft["path"])
+        file_total_rows = draft.get("file_total_rows", 0)
+        if not file_total_rows and draft.get("map_path") and os.path.exists(draft["map_path"]):
+            try:
+                import json
+                with open(draft["map_path"], "r", encoding="utf-8") as f:
+                    file_total_rows = int(json.load(f).get("total_rows", 0))
+            except Exception:
+                pass
+        if not file_total_rows:
+            file_total_rows = draft["num_rows"]
+
+        dup_saved = max(0, file_total_rows - plan.unique_rows) if file_total_rows > plan.unique_rows else plan.duplicate_count
         lines = [
-            f"[{MUTED}]File[/]        {escape_markup(os.path.basename(draft['path']))}",
+            f"[{MUTED}]File[/]        {escape_markup(display_file)}",
             f"[{MUTED}]Columns[/]     "
             f"{ExcelReader.col_letter(draft['src_col'])} → "
             f"{ExcelReader.col_letter(draft['dst_col'])}"
             + (f" · context {ExcelReader.col_letter(draft['ctx_col'])}"
                if draft.get("ctx_col") else "")
             + f", rows {draft['start_row']}–"
-              f"{draft['start_row'] + draft['num_rows'] - 1} ({draft['num_rows']:,} total)",
+              f"{draft['start_row'] + draft['num_rows'] - 1} ({file_total_rows:,} total)",
         ]
-        if plan.duplicate_count > 0:
+        if dup_saved > 0:
             lines.append(
                 f"[{MUTED}]Evaluation[/]   [{OK}]{plan.unique_rows:,} unique pairs to evaluate[/] "
-                f"({plan.duplicate_count:,} duplicates skipped — "
-                f"{plan.duplicate_count / max(1, plan.total_rows) * 100:.1f}% token savings)"
+                f"({dup_saved:,} duplicates skipped — "
+                f"{dup_saved / max(1, file_total_rows) * 100:.1f}% token savings)"
             )
         else:
             lines.append(f"[{MUTED}]Evaluation[/]   {plan.unique_rows:,} rows to evaluate")
@@ -2216,6 +2266,7 @@ class JudgeRunScreen(BaseScreen):
         # Rows, as a set: a row reported twice — which a retry can do — must not
         # push the figure past its own total.
         self._reviewed_rows: set[int] = set()
+        self._flagged_rows: set[int] = set()
         self._flagged_live: list[tuple[int, object]] = []
         self._fixed_live: list[tuple[int, str, bool]] = []
         # Rows a Fix All has settled, whether they were rewritten, left alone or
@@ -2229,6 +2280,7 @@ class JudgeRunScreen(BaseScreen):
         self._rejudging = False
         self._rejudge_rows: list[int] = []
         self._rejudge_seen: set[int] = set()
+        self._rejudge_flagged_rows: set[int] = set()
         self._rejudge_flagged: list[tuple[int, object]] = []
         # Every row a re-judge has covered, single (g) or batch (G), so the
         # filter bar can offer exactly the second verdicts as their own view:
@@ -2399,7 +2451,7 @@ class JudgeRunScreen(BaseScreen):
             # The provider gave out mid-run: the first offer is to pick up where
             # it stopped, not to review a report that is not finished (bug #4).
             keys.append(("R", f"retry {len(self._unfinished_rows())} unfinished"))
-        elif self._filter not in ("all", "problems", "fixed", "settled", "rejudged"):
+        elif self._filter not in ("all", "problems", "fixed", "settled"):
             visible = self._visible_problems()
             if visible:
                 scope = self._filter[4:] if self._filter.startswith("sev:") else self._filter
@@ -2459,7 +2511,15 @@ class JudgeRunScreen(BaseScreen):
             runner = JudgeRunner(target=self._target, criteria=self._criteria)
             rows, _contexts = runner.load_rows()
             plan = runner.plan(rows)
-            return rows, plan.unique_rows, plan.total_rows
+            file_total = plan.total_rows
+            if getattr(self._target, "map_path", "") and os.path.exists(self._target.map_path):
+                try:
+                    import json
+                    with open(self._target.map_path, "r", encoding="utf-8") as f:
+                        file_total = int(json.load(f).get("total_rows", file_total))
+                except Exception:
+                    pass
+            return rows, plan.unique_rows, file_total
         except Exception:
             return [], 0, 0
 
@@ -2486,7 +2546,7 @@ class JudgeRunScreen(BaseScreen):
                 # The grid only paints flagged rows mid-run; this stat is what
                 # proves the run itself is moving when the grid is quiet.
                 stat=f"{len(self._reviewed_rows):,} reviewed · "
-                     f"{len(self._flagged_live):,} flagged",
+                     f"{len(self._flagged_rows):,} flagged",
             )
             return [live]
 
@@ -2533,8 +2593,6 @@ class JudgeRunScreen(BaseScreen):
             return f"{len(report.problem_rows)} flagged of {len(report.rows)}"
         if self._filter == "fixed":
             return f"{len(self._before)} row(s) repaired"
-        if self._filter == "rejudged":
-            return f"{len(self._rejudged_rows)} row(s) re-judged"
         return f"{shown} row(s) with {self._filter}"
 
     def _model_id(self) -> str:
@@ -2797,7 +2855,7 @@ class JudgeRunScreen(BaseScreen):
             )
         lines.append(self._timing_line(done, unique_total))
         lines.append("")
-        lines.append(f"[bold {ACCENT}]Flagged so far[/]  {len(self._flagged_live):,}")
+        lines.append(f"[bold {ACCENT}]Flagged so far[/]  {len(self._flagged_rows):,}")
         if not self._flagged_live:
             lines.append(f"[{MUTED}]nothing yet[/]")
         for row, issue in self._flagged_live[-8:]:
@@ -2892,7 +2950,7 @@ class JudgeRunScreen(BaseScreen):
         lines.append(self._timing_line(done, total))
         lines.append("")
         lines.append(
-            f"[bold {ACCENT}]Still wrong[/]  {len(self._rejudge_flagged):,}"
+            f"[bold {ACCENT}]Still wrong[/]  {len(self._rejudge_flagged_rows):,}"
         )
         if not self._rejudge_flagged:
             lines.append(f"[{MUTED}]nothing yet[/]")
@@ -2966,7 +3024,7 @@ class JudgeRunScreen(BaseScreen):
             debug_log=proc.get("debug_log", False),
             raw_log=proc.get("raw_log", False),
             log_path=(
-                os.path.splitext(self._target.path)[0] + "_judge.log"
+                os.path.splitext(getattr(self._target, "full_path", "") or self._target.path)[0] + "_judge.log"
                 if proc.get("debug_log") or proc.get("raw_log")
                 else ""
             ),
@@ -3059,6 +3117,7 @@ class JudgeRunScreen(BaseScreen):
         self,
         model_slot: tuple[str, str, str] | None = None,
         workers: int | None = None,
+        max_rows: int | None = None,
         on_row=None,
         on_fix=None,
         on_section=None,
@@ -3074,6 +3133,7 @@ class JudgeRunScreen(BaseScreen):
         provider — the runner asks `build_pool`, which needs the registry to
         resolve the combo's members.
         """
+        target_max_rows = max_rows if max_rows is not None else self._max_rows
         return JudgeRunner(
             target=self._target,
             job=self._job(model_slot, workers),
@@ -3082,7 +3142,7 @@ class JudgeRunScreen(BaseScreen):
             criteria=self._criteria,
             # Full mode's row cap. `None` in Quick, where the runner reads the
             # saved Settings value as it always has.
-            max_rows=self._max_rows,
+            max_rows=target_max_rows,
             grading_mode=self._grading_mode,
             on_status=lambda status: self._app.call_from_thread(
                 self._on_status, status
@@ -3101,6 +3161,9 @@ class JudgeRunScreen(BaseScreen):
     def _evaluate(self) -> None:
         app = self._app
         self._busy_batch = True
+        self._flagged_rows.clear()
+        self._flagged_live.clear()
+        self._reviewed_rows.clear()
         app.call_from_thread(self._begin_op, "Judge", self._model_slot)
         app.call_from_thread(self.refresh_keys)
         try:
@@ -3131,6 +3194,7 @@ class JudgeRunScreen(BaseScreen):
         self._reviewed_rows.add(row)
         self._pending_live.append((row, issue))
         if issue is not None:
+            self._flagged_rows.add(row)
             self._flagged_live.append((row, issue))
             del self._flagged_live[:-200]
 
@@ -3230,7 +3294,7 @@ class JudgeRunScreen(BaseScreen):
         """
         if self._busy_batch or self._busy_row:
             return
-        if self._filter not in ("all", "problems", "fixed", "settled", "rejudged"):
+        if self._filter not in ("all", "problems", "fixed", "settled"):
             visible = self._visible_problems()
             if visible:
                 rows = sorted(visible)
@@ -3264,6 +3328,7 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_slot = slot
         self._rejudge_rows = list(rows)
         self._rejudge_seen = set()
+        self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
@@ -3271,7 +3336,7 @@ class JudgeRunScreen(BaseScreen):
             f"Re-judging {len(rows)} row(s) from '{self._filter}' filter…",
             ACCENT,
         )
-        self._rejudge_many(list(rows), slot, workers=workers)
+        self._rejudge_many(list(rows), slot, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
     def _retry_unfinished(self, rows: list[int]) -> None:
@@ -3413,11 +3478,6 @@ class JudgeRunScreen(BaseScreen):
             # still flagged. They leave the automatic loop; this chip is where
             # a human finds them.
             chips.append(("settled", "settled", len(self._settled_rows)))
-        if self._rejudged_rows:
-            # The second verdicts: rows the judge looked at again after a fix,
-            # with the outcome carried by the row's colour (severity = still
-            # wrong, green = holds up). A record, like `fixed`, so it sits last.
-            chips.append(("rejudged", "re-judged", len(self._rejudged_rows)))
         return chips
 
     def _rows_for_filter(self, key: str) -> list[int] | None:
@@ -3452,12 +3512,6 @@ class JudgeRunScreen(BaseScreen):
             # Rows whose three fix cycles are spent and are still flagged —
             # the automatic loop is done with them; a human decides.
             return sorted(self._settled_rows)
-        if key == "rejudged":
-            # Every row the judge has looked at twice — passed or still wrong,
-            # the colour tells them apart. Kept separately from `fixed` because
-            # a row can be repaired and not yet re-checked, and vice versa a
-            # re-check can cover a row repaired by hand before any Fix All.
-            return sorted(self._rejudged_rows)
         if key.startswith("sev:"):
             severity = key[4:]
             live = {row for row, issue in report.issues.items()
@@ -3590,12 +3644,6 @@ class JudgeRunScreen(BaseScreen):
                 f"r reverts the one under the cursor",
                 OK,
             )
-        elif key == "rejudged":
-            self.notify_status(
-                f"showing {len(self._rejudged_rows)} re-judged row(s) — "
-                f"severity colour = still wrong, green = the fix holds up",
-                ACCENT,
-            )
         elif key.startswith("sev:"):
             severity = key[4:]
             self.notify_status(
@@ -3641,6 +3689,9 @@ class JudgeRunScreen(BaseScreen):
     def _begin_op(self, label: str, slot: tuple[str, str, str] | None) -> None:
         self._op_label = label
         self._op_slot = slot or self._model_slot
+        self._workers.clear()
+        if hasattr(self, "_ledger"):
+            self._ledger.clear()
         # A new operation starts with a clear stop flag: `c` sets it to stop
         # whatever is running, and without a clear here the next operation —
         # started after the previous one finished — would be instantly
@@ -3957,6 +4008,10 @@ class JudgeRunScreen(BaseScreen):
             # threads, which see the stop flag and give up without retrying.
             self._force_abort()
             self._run_state = "cancelled"
+            if hasattr(self, "_ledger"):
+                self._ledger.reset_all_idle()
+            if hasattr(self, "activity"):
+                self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
             self.notify_status(
                 "Force-cancelling — aborting immediately…", ERROR,
             )
@@ -3967,6 +4022,10 @@ class JudgeRunScreen(BaseScreen):
                     self.indicator.stop()
                     self._fix_seen.clear()
                     self._fixed_live.clear()
+                    if hasattr(self, "_ledger"):
+                        self._ledger.reset_all_idle()
+                    if hasattr(self, "activity"):
+                        self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
                     self._paint_rail()
                     self.refresh_keys()
                     self.notify_status("Operation cancelled.", ERROR)
@@ -4004,8 +4063,12 @@ class JudgeRunScreen(BaseScreen):
         except Exception:
             # The registry is best-effort: with or without it, the stop flag
             # alone still ends the run at the next checkpoint — every result
-            # already read is kept, and nothing new is sent.
+            # an executor was about to return is discarded anyway.
             pass
+        if hasattr(self, "_ledger"):
+            self._ledger.reset_all_idle()
+        if hasattr(self, "activity"):
+            self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
 
     def action_follow_latest(self) -> None:
         """
@@ -4420,15 +4483,23 @@ class JudgeRunScreen(BaseScreen):
         """
         from ...data.app_prefs import remembered_judge_settings
 
+        candidate_slots = []
         session_slot = getattr(self.app, "judge_rejudge_slot", None)
         if session_slot is not None:
-            remembered = remembered_judge_settings(session_slot)
+            candidate_slots.append(session_slot)
+        if self._model_slot and self._model_slot not in candidate_slots:
+            candidate_slots.append(self._model_slot)
+
+        for slot in candidate_slots:
+            remembered = remembered_judge_settings(slot)
             if remembered is not None:
-                then(session_slot, remembered["max_rows"], remembered["workers"])
+                self.app.judge_rejudge_slot = slot
+                then(slot, remembered["max_rows"], remembered["workers"])
                 return
+
         self.app.push_screen(
             RejudgeSetupScreen(
-                model_slot=self._model_slot,
+                model_slot=getattr(self.app, "judge_rejudge_slot", None) or self._model_slot,
                 scope_label=self._rejudge_scope_label(),
             ),
             lambda result: self._rejudge_model_chosen(result, then),
@@ -4446,6 +4517,9 @@ class JudgeRunScreen(BaseScreen):
         if not result:
             return
         slot, rows, workers = result
+        self.app.judge_rejudge_slot = slot
+        self.app.judge_session_rows = rows
+        self.app.judge_session_workers = workers
         then(slot, rows, workers)
 
     def _begin_rejudge_row(
@@ -4600,6 +4674,7 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_slot = slot
         self._rejudge_rows = list(rows)
         self._rejudge_seen = set()
+        self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
@@ -4608,12 +4683,13 @@ class JudgeRunScreen(BaseScreen):
             f"evaluation did — batched, with neighbours…",
             ACCENT,
         )
-        self._rejudge_many(list(rows), slot, workers=workers)
+        self._rejudge_many(list(rows), slot, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
     def _rejudge_many(
         self, rows: list[int], slot: tuple[str, str, str] | None = None,
         workers: int | None = None,
+        rows_per_request: int | None = None,
     ) -> None:
         app = self._app
         wanted = set(rows)
@@ -4621,6 +4697,7 @@ class JudgeRunScreen(BaseScreen):
             runner = self._make_runner(
                 model_slot=slot,
                 workers=workers,
+                max_rows=rows_per_request,
                 on_row=lambda row, issue: app.call_from_thread(
                     self._rejudge_row_landed, row, issue
                 ),
@@ -4659,6 +4736,7 @@ class JudgeRunScreen(BaseScreen):
         """One re-checked row, live — the same feed the evaluation has."""
         self._rejudge_seen.add(row)
         if issue is not None:
+            self._rejudge_flagged_rows.add(row)
             self._rejudge_flagged.append((row, issue))
             del self._rejudge_flagged[:-200]
 
@@ -4752,7 +4830,7 @@ class JudgeRunScreen(BaseScreen):
                 f"see Events for the provider text", WARN,
             )
 
-        self._filter = "rejudged" if self._rejudged_rows else "fixed"
+        self._filter = "problems" if still else "fixed"
         if still:
             self._cursor_row = still[0]
         self._fill_grid()

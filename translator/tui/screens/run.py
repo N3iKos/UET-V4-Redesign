@@ -18,6 +18,7 @@ interval costs one paint, not four (FEATURE-002 NFR-201).
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -150,7 +151,6 @@ class RunScreen(BaseScreen):
         self._error_tally: dict[str, int] = {}
         self._switches: list[str] = []
         self._done_rows = 0
-        self._done_unique_rows = 0
         self._stats = ProcessStats(total=job.num_rows)
         # The denominator for the progress bar. `job.num_rows` is the *range* the
         # wizard asked for, which is only the same thing as the work queue on a
@@ -163,6 +163,15 @@ class RunScreen(BaseScreen):
         # output can redirect the writer to a numbered sibling, and the summary
         # must report the real file. Set by the engine thread on completion.
         self._output_path = job.out_path
+        self._file_total_count = 0
+        if getattr(job, "map_path", "") and os.path.exists(job.map_path):
+            try:
+                import json
+                with open(job.map_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._file_total_count = int(data.get("total_rows", 0))
+            except Exception:
+                pass
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -345,15 +354,7 @@ class RunScreen(BaseScreen):
                 self.feed.resolve(row_num, config.FAIL_MARKER, "failed")
                 self._stats.failed += 1
 
-        # Sibling rows completed via deduplication: count them so progress
-        # bar and stats accurately reflect the actual rows filled in the file.
-        task_row_nums = {rn for rn, _ in task.rows}
-        extra_ok = sum(1 for rn in result.results if rn not in task_row_nums and result.results[rn] != config.FAIL_MARKER)
-        extra_failed = sum(1 for rn in result.failed_rows if rn not in task_row_nums)
-        self._stats.ok += extra_ok
-        self._stats.failed += extra_failed
-        self._done_rows += (len(task.rows) + extra_ok + extra_failed)
-        self._done_unique_rows += len(task.rows)
+        self._done_rows += len(task.rows)
 
         if self._engine is not None:
             self._stats.tokens_consumed = self._engine._pool.total_tokens_consumed()
@@ -462,16 +463,10 @@ class RunScreen(BaseScreen):
         self._tick = tick
         stats = self._stats
 
-        unique_total = getattr(self._engine, "unique_planned", 0) if self._engine is not None else 0
-        file_total = getattr(self._engine, "file_total_rows", 0) or max(0, self.job.num_rows)
-        is_dedup = bool(unique_total and file_total and file_total > unique_total)
-
-        if is_dedup:
-            total = unique_total
-            done = min(total, max(getattr(self, "_done_unique_rows", 0), 0))
-        else:
-            total = max(1, self._total_rows())
-            done = min(total, max(self._done_rows, stats.ok + stats.failed))
+        total = max(1, self._total_rows())
+        done = min(total, max(self._done_rows, stats.ok + stats.failed))
+        file_total = getattr(self, "_file_total_count", 0)
+        is_dedup = bool(file_total and file_total > total)
 
         pct = min(100, int(done / total * 100))
         elapsed = time.time() - self._started
@@ -512,7 +507,7 @@ class RunScreen(BaseScreen):
         self._paint_activity(tick)
         self._paint_foot(stats)
 
-        if self.narrow_bar.display:
+        if getattr(self, "narrow_bar", None) and self.narrow_bar.display:
             self.narrow_bar.update(
                 f"{pct}% · {done:,}/{total:,} · ok {stats.ok:,} · "
                 f"fail {stats.failed:,} · {len(self._workers)} workers{eta}"
@@ -623,6 +618,8 @@ class RunScreen(BaseScreen):
                 abort_all_for(self._stop)
             except Exception:
                 pass
+            if hasattr(self, "_ledger"):
+                self._ledger.reset_all_idle()
             self.notify_status(
                 "Force-stopping — aborting immediately…", ERROR,
             )
@@ -736,6 +733,7 @@ class SummaryScreen(MenuScreen):
         import os
 
         sweeps = [e for e in self.events if "Auto-sweep" in e]
+        saved_target = self.job.full_out_path or self.output_path
         lines = [
             f"Finished in {RunScreen._fmt_short(stats.elapsed)}",
             "",
@@ -748,10 +746,15 @@ class SummaryScreen(MenuScreen):
             "",
             f"tokens     {stats.tokens_consumed:>8,}",
             "",
-            f"[{OK}]saved to[/]   {escape_markup(self.output_path)}",
+            f"[{OK}]saved to[/]   {escape_markup(saved_target)}",
             f"[{MUTED}]column {ExcelReader.col_letter(self.job.dst_col)} · "
             f"source file untouched[/]",
         ]
+        if self.job.full_out_path and self.job.map_path:
+            lines.insert(
+                -1,
+                f"[{MUTED}]synced from[/] {escape_markup(os.path.basename(self.output_path))}",
+            )
         if os.path.abspath(self.output_path) != os.path.abspath(self.job.out_path):
             lines.insert(
                 -1,

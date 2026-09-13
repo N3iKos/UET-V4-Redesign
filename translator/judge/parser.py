@@ -223,6 +223,100 @@ def _as_row(value) -> int | None:
     return int(match.group()) if match else None
 
 
+def _is_natural_acceptance(text: str) -> bool:
+    """True if text is prose stating all lines are acceptable / no errors found."""
+    clean = (text or "").strip().lower()
+    if not clean:
+        return False
+    # If it mentions specific error labels or row numbers with problems, it's not a blanket pass
+    if re.search(r"\b(row\s*\d+|baris\s*\d+|mistranslat|critic|severit)", clean):
+        return False
+    pass_patterns = [
+        r"all\s+(?:lines?|rows?|translations?)\s+(?:are\s+)?acceptable",
+        r"every\s+(?:line|row|translation)\s+(?:is\s+)?acceptable",
+        r"no\s+(?:translation\s+)?errors?\s+(?:found|detected)",
+        r"no\s+issues?\s+(?:found|detected)",
+        r"semua\s+baris\s+(?:sudah\s+)?(?:akurat|benar|tepat|baik|sesuai)",
+        r"tidak\s+ada\s+(?:kesalahan|masalah|error)",
+        r"all\s+(?:lines?|rows?|translations?)\s+(?:are\s+)?(?:correct|accurate|good|valid)",
+    ]
+    return any(re.search(pat, clean) for pat in pass_patterns)
+
+
+def _clean_body(body: str) -> str:
+    """Strip reasoning/think blocks before extracting JSON."""
+    cleaned = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", body, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+def _fix_unescaped_comment_quotes(text: str) -> str:
+    """Convert unescaped internal double quotes inside comment fields to single quotes."""
+    def replace_comment(match):
+        prefix = match.group(1)
+        body = match.group(2)
+        suffix = match.group(3)
+        body_fixed = re.sub(r'(?<!\\)"', "'", body)
+        return f"{prefix}{body_fixed}{suffix}"
+
+    pattern = r'("(?:comment|note|reason)"\s*:\s*")(.*?)("(?:\s*,\s*"(?:error_types?|severity|types?|row|line|id)"|\s*}))'
+    return re.sub(pattern, replace_comment, text, flags=re.DOTALL)
+
+
+def _salvage_truncated(candidate: str) -> dict | list | None:
+    """
+    Salvage JSON cut off mid-stream (e.g. max tokens or truncated reply).
+    Attempts closing open quotes and matching bracket stack, or rolling back to last complete entry.
+    """
+    text = candidate.strip()
+    if not text or not (text.startswith("{") or text.startswith("[")):
+        return None
+
+    def try_closing(s: str):
+        in_string = False
+        escape = False
+        stack: list[str] = []
+        for ch in s:
+            if escape:
+                escape = False
+                continue
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if ch in ('{', '['):
+                    stack.append('}' if ch == '{' else ']')
+                elif ch in ('}', ']') and stack:
+                    if stack[-1] == ch:
+                        stack.pop()
+
+        attempts = []
+        if in_string:
+            attempts.append(s + '"' + "".join(reversed(stack)))
+        attempts.append(s + "".join(reversed(stack)))
+
+        for att in attempts:
+            data = _loads(_strip_trailing_commas(att))
+            if data is not None:
+                return data
+        return None
+
+    res = try_closing(text)
+    if res is not None:
+        return res
+
+    last_brace = text.rfind("}")
+    if last_brace > 0:
+        sub = text[:last_brace + 1]
+        res = try_closing(sub)
+        if res is not None:
+            return res
+
+    return None
+
+
 def _extract_json(text: str) -> dict | None:
     """
     Whole body, then fenced, then the widest `{...}` span — and never raises.
@@ -235,9 +329,17 @@ def _extract_json(text: str) -> dict | None:
     Prose without a JSON shape still comes back `None` — a verdict is never
     invented out of free text.
     """
-    body = (text or "").strip()
+    raw_body = (text or "").strip()
+    if not raw_body:
+        return None
+
+    if _is_natural_acceptance(raw_body):
+        return {"lines": []}
+
+    body = _clean_body(raw_body)
     if not body:
         return None
+
     for candidate in _candidates(body):
         data = _loads(candidate)
         if data is None:
@@ -245,6 +347,8 @@ def _extract_json(text: str) -> dict | None:
             # mechanical damage (trailing commas, quotes, fences) and try the
             # *same span* again — leniency is salvage, not archaeology.
             data = _loads_lenient(candidate)
+        if data is None:
+            data = _salvage_truncated(candidate)
         if data is None:
             continue
         if isinstance(data, dict):
@@ -257,8 +361,8 @@ def _extract_json(text: str) -> dict | None:
 
 def _loads(candidate: str):
     try:
-        return json.loads(candidate)
-    except ValueError:
+        return json.loads(candidate, strict=False)
+    except Exception:
         return None
 
 
@@ -297,6 +401,13 @@ def _loads_lenient(candidate: str) -> dict | list | None:
     data = _loads(_strip_trailing_commas(text))
     if data is not None:
         return data
+
+    # Repair unescaped double quotes inside comment fields
+    quoted_fixed = _fix_unescaped_comment_quotes(text)
+    if quoted_fixed != text:
+        data = _loads(_strip_trailing_commas(quoted_fixed))
+        if data is not None:
+            return data
 
     # Model-produced JSON with single quotes instead of double quotes, or a
     # Python-ish dict (`True`/`False`/`None`).

@@ -161,9 +161,9 @@ def _comment_rules(comment_style: str = "auto") -> str:
                  direction may be stated, and the repair model rewrites freely.
     """
     head = (
-        "For every reported line, write the comment as a repair instruction with "
-        "THREE parts, in this exact shape:\n"
-        "  WHAT: SOURCE says \"...\" but TRANSLATION says \"...\" — quote the exact "
+        "For every reported line, write the comment on a single line as a repair instruction with "
+        "THREE parts separated by ' · ' (never use unescaped double quotes inside the comment; use single quotes '...'):\n"
+        "  WHAT: SOURCE says '...' but TRANSLATION says '...' — quote the exact "
         "word or phrase at fault from the TRANSLATION, and the part of THAT LINE'S "
         "OWN SOURCE it fails to render.\n"
         "  WHY: one sentence stating what is wrong in relation to that SOURCE "
@@ -190,11 +190,11 @@ def _comment_rules(comment_style: str = "auto") -> str:
             "phrased as a recommendation —\n"
             "    - whenever specific words are at fault, you MUST give the exact "
             "recommended wording or the exact term/name/number that should appear "
-            "instead, e.g. FIX: consider using \"kucing hitam\" instead of "
-            "\"kucing merah\". A finding about specific words without the specific "
+            "instead, e.g. FIX: consider using 'kucing hitam' instead of "
+            "'kucing merah'. A finding about specific words without the specific "
             "recommendation is an incomplete comment;\n"
             "    - when a placeholder is broken, name the exact token that should be "
-            "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
+            "restored, e.g. FIX: restore [BR][NL] before 'misi';\n"
             "    - only for pure style/register with no specific word at fault, "
             "describe the direction, e.g. FIX: use casual register matching the "
             "surrounding lines, keep the meaning unchanged.\n"
@@ -205,9 +205,9 @@ def _comment_rules(comment_style: str = "auto") -> str:
             "as a recommendation —\n"
             "    - when the fix is unambiguous, give the exact recommended wording "
             "or the exact term/name/number that should appear instead, e.g. FIX: "
-            "consider using \"kucing hitam\" instead of \"kucing merah\";\n"
+            "consider using 'kucing hitam' instead of 'kucing merah';\n"
             "    - when a placeholder is broken, name the exact token that should be "
-            "restored, e.g. FIX: restore [BR][NL] before \"misi\";\n"
+            "restored, e.g. FIX: restore [BR][NL] before 'misi';\n"
             "    - when several valid phrasings exist (pure style/register), describe "
             "the direction, e.g. FIX: use casual register matching the surrounding "
             "lines, keep the meaning unchanged.\n"
@@ -542,10 +542,10 @@ def build_judge_prompt(
         f'{{"lines": [{{"row": {example_row}, '
         f'"error_types": ["mistranslation"], '
         + ('"severity": "critical", ' if graded else "")
-        + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
-        '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
-        'misread the story · FIX: consider using \\"kucing hitam\\" instead '
-        'of \\"kucing merah\\""}]}'
+        + '"comment": "WHAT: SOURCE says \'black cat\' but TRANSLATION says '
+        '\'kucing merah\' · WHY: the colour is reversed, a player would '
+        'misread the story · FIX: consider using \'kucing hitam\' instead '
+        'of \'kucing merah\'"}]}'
     )
 
     system = _JUDGE_SYS_CHAIN if chain else _JUDGE_SYS
@@ -593,7 +593,10 @@ def build_judge_prompt(
         f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
         f"{example}\n"
         f'If every line is acceptable, reply exactly: {{"lines": []}}\n'
-        f"\nLines:\n{_rows_block(rows, context_map, fitting_map)}\n"
+        f"\nLines:\n{_rows_block(rows, context_map, fitting_map)}\n\n"
+        f"CRITICAL: Output ONLY the JSON object starting with {{ and ending with }}. "
+        f"Do not write any preamble, introduction, markdown code fence, or explanation. "
+        f'If all lines are acceptable, reply exactly: {{"lines": []}}.\n'
     )
 
 
@@ -678,10 +681,10 @@ def build_judge_rechain_prompt(
         f'{{"lines": [{{"row": {example_row}, '
         f'"error_types": ["mistranslation"], '
         + ('"severity": "critical", ' if graded else "")
-        + '"comment": "WHAT: SOURCE says \\"black cat\\" but TRANSLATION says '
-        '\\"kucing merah\\" · WHY: the colour is reversed, a player would '
-        'misread the story · FIX: consider using \\"kucing hitam\\" instead '
-        'of \\"kucing merah\\""}]}'
+        + '"comment": "WHAT: SOURCE says \'black cat\' but TRANSLATION says '
+        '\'kucing merah\' · WHY: the colour is reversed, a player would '
+        'misread the story · FIX: consider using \'kucing hitam\' instead '
+        'of \'kucing merah\'"}]}'
     )
 
     # One merged block, in row-number order, so the stream reads as the file
@@ -737,14 +740,16 @@ def build_judge_rechain_prompt(
         f"- If your analysis concludes the line is acceptable, NEVER include it "
         f"in the lines array with a comment saying it is fine. A verdict of "
         f"\"acceptable\" means OMIT, not report.\n"
-        f"- Say nothing about lines that are acceptable — omit them entirely.\n"
         f"- Do not penalise a valid alternative wording that means the same thing.\n"
         f"- Do not rewrite the line here; describe what is wrong, briefly.\n"
         f"- Use the row numbers exactly as given.\n"
         f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
         f"{example}\n"
         f'If every reviewed line is acceptable, reply exactly: {{"lines": []}}\n'
-        f"\nLines:\n{lines_block}\n"
+        f"\nLines:\n{lines_block}\n\n"
+        f"CRITICAL: Output ONLY the JSON object starting with {{ and ending with }}. "
+        f"Do not write any preamble, introduction, markdown code fence, or explanation. "
+        f'If all reviewed lines are acceptable, reply exactly: {{"lines": []}}.\n'
     )
 
 

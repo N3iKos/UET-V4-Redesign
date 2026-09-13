@@ -878,17 +878,26 @@ class Scheduler:
         status write, it must never raise into the parser.
         """
 
-        def report(kind: str) -> None:
+        def report(kind: str, message: str = "") -> None:
             try:
                 if task.generation != generation:
                     return
+                req_started = self._request_started.get(worker_id, time.time())
+                elapsed = max(0.0, time.time() - req_started)
                 if kind == "retry":
                     phase = "retry"
                 elif kind == "request":
                     phase = "generating"
+                    self._request_started[worker_id] = time.time()
                 else:
                     phase = "parsing"
-                self._set_status(worker_id, phase=phase, started_at=time.time())
+                self._set_status(
+                    worker_id,
+                    phase=phase,
+                    started_at=time.time(),
+                    elapsed=elapsed if kind == "retry" else 0.0,
+                    message=message,
+                )
             except Exception:
                 pass
 

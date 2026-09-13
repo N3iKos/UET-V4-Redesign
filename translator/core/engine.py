@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import datetime
 from typing import Callable, TextIO
 
@@ -128,6 +129,15 @@ class ProcessingEngine:
         # been told yet has to fall back to the range it asked for rather than
         # show a denominator of zero.
         self._planned_rows: int | None = None
+        # Full-file broadcast sync (unique → full) is far too expensive to run
+        # on every batch completion — a 124k-row target takes seconds to load
+        # and rewrite, which blocked the worker and showed up as a fake
+        # "parsing 6s". Throttled to a background thread instead; `_finish`
+        # always runs one final synchronous pass so nothing is lost.
+        self._sync_lock = threading.Lock()
+        self._syncing = False
+        self._last_sync = 0.0
+        self._sync_thread: threading.Thread | None = None
 
     @property
     def planned_rows(self) -> int | None:
@@ -139,14 +149,6 @@ class ProcessingEngine:
         than every row in the file.
         """
         return self._planned_rows
-
-    @property
-    def unique_planned(self) -> int:
-        return getattr(self, "_unique_planned", 0) or getattr(self, "_planned_rows", 0) or 0
-
-    @property
-    def file_total_rows(self) -> int:
-        return getattr(self, "_file_total_rows", 0) or getattr(self, "_planned_rows", 0) or 0
 
     def _output_path(self) -> str:
         """
@@ -441,23 +443,6 @@ class ProcessingEngine:
                     rows_to_batch = [(r, text) for r, text in rows if text not in tm_cache]
                     self._notice("info", f"Translation Memory: {len(tm_hits)} row(s) filled from persistent cache.")
 
-        if current_dedup in ("unique_file", "persistent") and rows_to_batch:
-            dedup_groups: dict[str, list[int]] = {}
-            for r, text in rows_to_batch:
-                dedup_groups.setdefault(text, []).append(r)
-            unique_rows = [(r_list[0], text) for text, r_list in dedup_groups.items()]
-            self._sibling_map = {r_list[0]: r_list for r_list in dedup_groups.values() if len(r_list) > 1}
-            dedup_saved = len(rows_to_batch) - len(unique_rows)
-            if dedup_saved > 0:
-                self._notice("info", f"Deduplication: {len(unique_rows)} unique row(s) to translate ({dedup_saved} duplicates skipped).")
-            rows_to_batch = unique_rows
-            self._unique_planned = len(unique_rows)
-            self._file_total_rows = total
-        else:
-            self._sibling_map = {}
-            self._unique_planned = len(rows_to_batch)
-            self._file_total_rows = total
-
         tasks = build_batches(rows_to_batch, job.batch_size, is_repair=False, context_map=context_map)
         self._notice(
             "info",
@@ -705,26 +690,12 @@ class ProcessingEngine:
     def _write_result(self, task: BatchTask, result: BatchResult) -> None:
         """Hand finished rows to the async writer. Never blocks on disk."""
         payload = dict(result.results)
-        if hasattr(self, "_sibling_map") and self._sibling_map:
-            for rep_row, trans_text in list(result.results.items()):
-                siblings = self._sibling_map.get(rep_row)
-                if siblings:
-                    for s_row in siblings:
-                        payload[s_row] = trans_text
-                        result.results[s_row] = trans_text
-            for rep_row in list(result.failed_rows):
-                siblings = self._sibling_map.get(rep_row)
-                if siblings:
-                    for s_row in siblings:
-                        payload.setdefault(s_row, config.FAIL_MARKER)
-                        if s_row not in result.failed_rows:
-                            result.failed_rows.append(s_row)
-
         for row_num in result.failed_rows:
             payload.setdefault(row_num, config.FAIL_MARKER)
         if payload:
             self._writer.flush(payload, self._dst_col)
-        if getattr(self, "_dedup_mode", "in_memory") == "persistent" and result.results:
+            self._maybe_sync_full()
+        if getattr(self, "_dedup_mode", "unique_file") == "persistent" and result.results:
             from .tm import store_tm_batch
             source_map = getattr(self, "_source_map", {})
             pairs = [
@@ -743,6 +714,64 @@ class ProcessingEngine:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    FULL_SYNC_INTERVAL = 30.0
+
+    def _maybe_sync_full(self) -> None:
+        """
+        Broadcast unique-file rows to the full output — throttled, off-thread.
+
+        A 124k-row target costs seconds per sync; on the worker thread it
+        stalled the run (disguised as "parsing"), and per batch it meant
+        re-writing the whole file thousands of times. The broadcast now runs
+        at most every 30s in a background thread; `_finish` always performs
+        the final synchronous pass, so no completed row is ever left out of
+        the full file when the job ends.
+        """
+        if not (self._job.map_path and self._job.full_out_path):
+            return
+        now = time.monotonic()
+        with self._sync_lock:
+            if self._syncing or now - self._last_sync < self.FULL_SYNC_INTERVAL:
+                return
+            self._syncing = True
+
+        def _run() -> None:
+            try:
+                from .dedup_file import sync_unique_to_full
+                self._writer.sync()
+                sync_unique_to_full(
+                    self._job.map_path, self._output_path(),
+                    self._job.full_out_path, self._dst_col,
+                )
+            except Exception as exc:
+                self._notice("error", f"Full-file sync failed: {exc}")
+            finally:
+                with self._sync_lock:
+                    self._last_sync = time.monotonic()
+                    self._syncing = False
+
+        self._sync_thread = threading.Thread(
+            target=_run, daemon=True, name="uet-full-sync",
+        )
+        self._sync_thread.start()
+
+    def _final_full_sync(self) -> None:
+        """One last synchronous broadcast so the full file is complete."""
+        if not (self._job.map_path and self._job.full_out_path):
+            return
+        thread = self._sync_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=120.0)
+        try:
+            from .dedup_file import sync_unique_to_full
+            synced = sync_unique_to_full(
+                self._job.map_path, self._output_path(),
+                self._job.full_out_path, self._dst_col,
+            )
+            self.write_log(f"[sync] broadcast {synced} cell(s) to full output")
+        except Exception as exc:
+            self._notice("error", f"Final full-file sync failed: {exc}")
 
     # ── Logging ───────────────────────────────────────────────────────────────
 
@@ -820,6 +849,7 @@ class ProcessingEngine:
         """Commit pending writes and close logs. Safe to call once per job."""
         try:
             self._writer.commit()
+            self._final_full_sync()
         except Exception as exc:
             self._notice("error", f"Final Excel write failed: {exc}")
 

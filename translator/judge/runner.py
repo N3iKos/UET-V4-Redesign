@@ -106,6 +106,8 @@ class JudgeTarget:
     tgt_lang: str = ""
     style_prompt: str = ""
     custom_placeholders: str = ""
+    full_path: str = ""
+    map_path: str = ""
 
     @property
     def has_context(self) -> bool:
@@ -444,23 +446,6 @@ class JudgeRunner:
             else:
                 askable.append((row, source, translation))
 
-        from ..data.app_prefs import dedup_mode
-        current_dedup = dedup_mode()
-        if current_dedup in ("unique_file", "persistent") and askable:
-            pair_groups: dict[tuple[str, str], list[int]] = {}
-            for r, s, t in askable:
-                pair_groups.setdefault(((s or "").strip(), (t or "").strip()), []).append(r)
-            unique_askable = []
-            self._judge_siblings: dict[int, list[int]] = {}
-            for (s, t), r_list in pair_groups.items():
-                rep_r = r_list[0]
-                unique_askable.append((rep_r, s, t))
-                if len(r_list) > 1:
-                    self._judge_siblings[rep_r] = r_list[1:]
-            askable = unique_askable
-        else:
-            self._judge_siblings = {}
-
         sections = estimator.split_sections(askable, max_tokens=self._max_tokens, max_rows=self._max_rows)
         return EvaluationPlan(
             rows=rows,
@@ -553,24 +538,6 @@ class JudgeRunner:
 
         if plan.sections:
             self._run_evaluation(plan, contexts, report)
-
-        # Expand deduplicated findings to identical duplicate sibling rows
-        if hasattr(self, "_judge_siblings") and self._judge_siblings:
-            for rep_row, siblings in self._judge_siblings.items():
-                if rep_row in report.issues:
-                    issue = report.issues[rep_row]
-                    for s_row in siblings:
-                        if s_row not in report.issues:
-                            s_issue = RowIssue(
-                                row=s_row,
-                                error_types=list(issue.error_types),
-                                comment=issue.comment,
-                                severity=issue.severity,
-                            )
-                            report.issues[s_row] = s_issue
-                            self._emit_row(s_row, s_issue)
-                if rep_row in self._rows_seen:
-                    self._rows_seen.update(siblings)
 
         report.summary = self._summarise(plan, report)
         report.unparsed_sections = sum(
@@ -774,11 +741,6 @@ class JudgeRunner:
                 elif row not in self._rows_seen:
                     unevaluated.add(row)
 
-        if hasattr(self, "_judge_siblings") and self._judge_siblings:
-            for rep_row, siblings in self._judge_siblings.items():
-                if rep_row in unevaluated:
-                    unevaluated.update(siblings)
-
         for row in unevaluated:
             if row not in report.issues:
                 report.issues[row] = RowIssue(
@@ -860,13 +822,15 @@ class JudgeRunner:
             if self._stop.is_set():
                 break
             attempts += 1
+            retry_msg = f"retry {attempts}/{MAX_FORMAT_RETRIES} (invalid format)"
             self._retry_event(
                 f"Request {index} · invalid Judge format · retry {attempts}/{MAX_FORMAT_RETRIES}"
             )
-            self._report_phase(report, "request")
+            self._report_phase(report, "retry", message=retry_msg)
+            self._report_phase(report, "request", message=retry_msg)
             content, error = self._one_request(
                 prompt, label=f"judge retry {index}",
-                on_phase=lambda phase, active: self._report_phase(report, "request"),
+                on_phase=lambda phase, active: self._report_phase(report, "request", message=retry_msg),
                 on_event=self._retry_exec_event(index),
             )
             self._report_phase(report, "parse")
@@ -885,12 +849,17 @@ class JudgeRunner:
         return result
 
     @staticmethod
-    def _report_phase(report, kind: str) -> None:
+    def _report_phase(report, kind: str, message: str = "") -> None:
         """Tell the scheduler's panel a format-retry phase change, if wired."""
         if report is None:
             return
         try:
-            report(kind)
+            report(kind, message=message)
+        except TypeError:
+            try:
+                report(kind)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1242,6 +1211,12 @@ class JudgeRunner:
             # so a lock or a permission error surfaces here rather than being
             # lost in a background thread.
             writer.commit()
+        if self._target.map_path and self._target.full_path:
+            from ..core.dedup_file import sync_unique_to_full
+            sync_unique_to_full(
+                self._target.map_path, writer.active_path,
+                self._target.full_path, self._target.dst_col,
+            )
         return len(payload)
 
     # ── Single row ────────────────────────────────────────────────────────────

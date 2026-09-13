@@ -56,6 +56,9 @@ class JobConfig:
     # File paths
     src_path: str = ""
     out_path: str = ""
+    full_src_path: str = ""
+    full_out_path: str = ""
+    map_path: str = ""
 
     # Column indices (1-based)
     src_col:    int = 0

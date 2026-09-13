@@ -77,8 +77,8 @@ DEFAULTS: dict = {
     # remembered for subsequent runs.
     "last_judge_criteria": list(DEFAULT_JUDGE_CRITERIA),
     # Deduplication & Translation Memory mode:
-    #   unique_file — extract unique rows to working file & sync back (fast, clean review, default)
-    #   persistent  — cross-file translation memory (SQLite ~/.config/.../tm.db)
+    #   unique_file — extract unique rows to a working file and sync back
+    #   persistent  — unique working file plus persistent translation memory
     #   disabled    — translate every row independently
     "dedup_mode": "unique_file",
 }
@@ -439,7 +439,9 @@ def _clean_judge_criteria(value) -> list[str]:
 
 
 def _clean_dedup_mode(value) -> str:
-    """Validate deduplication mode; defaults to 'unique_file'."""
+    """Validate deduplication mode and migrate the former in-memory default."""
+    if value == "in_memory":
+        return "unique_file"
     if isinstance(value, str) and value in DEDUP_MODES:
         return value
     return "unique_file"
