@@ -78,16 +78,27 @@ def test_file_engine_custom_manual_paths(tmp_path):
     assert paths == [str(f1), str(f2)]
 
 
-def test_file_engine_ignores_cache_path():
+def test_file_engine_ignores_cache_path(tmp_path):
     from translator.tui.screens.file_engine import FileEngineScreen
-    cache_path = r"D:\proj\.uet_cache\test.unique_Translated.csv"
+    cache_dir = tmp_path / ".uet_cache"
+    cache_dir.mkdir()
+    cache_file = cache_dir / "test.unique.csv"
+    cache_file.write_text("id,src\n1,cat\n", encoding="utf-8")
+    valid_file = tmp_path / "valid.csv"
+    valid_file.write_text("id,src\n1,cat\n", encoding="utf-8")
+
     screen = FileEngineScreen(
         on_accept=lambda p: None,
-        existing_path=cache_path,
+        existing_path=str(cache_file),
         next_screen=None,
     )
     assert screen._existing == ""
     assert screen.selected_files == []
+
+    # parse_manual_paths should reject cache_file
+    parsed = screen.parse_manual_paths(f"{cache_file}, {valid_file}")
+    assert parsed == [str(valid_file)]
+
 
 
 

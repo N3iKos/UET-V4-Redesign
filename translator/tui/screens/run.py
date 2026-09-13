@@ -175,7 +175,7 @@ class RunScreen(BaseScreen):
         ]
         self.active_session_index = 0
         self.tab_bar = FileTabBar(
-            tabs=[j.src_path for j in self.jobs],
+            tabs=[(j.full_src_path or j.src_path) for j in self.jobs],
             id="translate-tab-bar",
             on_tab_switch=self.action_switch_tab,
         ) if self.is_multi_tab else None
@@ -321,7 +321,11 @@ class RunScreen(BaseScreen):
 
     def on_screen_ready(self) -> None:
         self._app = self.app
-        self.app.on_shutdown_hook = self._stop.set
+        def _on_shutdown() -> None:
+            self._stop.set()
+            for s in getattr(self, "sessions", []):
+                s.stop.set()
+        self.app.on_shutdown_hook = _on_shutdown
         self._render_sidebar()
         self._run_job()
 
@@ -398,7 +402,7 @@ class RunScreen(BaseScreen):
         self._save_current_session()
         self._load_session(index)
         if getattr(self, "tab_bar", None) is not None:
-            self.tab_bar.switch_tab(index)
+            self.tab_bar.active_tab = index
         s = self.sessions[index]
         if hasattr(self, "feed") and self.feed is not None:
             self.feed.clear()
@@ -432,7 +436,12 @@ class RunScreen(BaseScreen):
             return
 
         app = self._app
-        post = app.call_from_thread
+        def safe_post(fn, *args, **kwargs):
+            try:
+                if getattr(app, "is_running", True):
+                    app.call_from_thread(fn, *args, **kwargs)
+            except Exception:
+                pass
 
         registry = app.registry
         # A combo job has no single provider; `build_pool` is the one place that
@@ -442,30 +451,30 @@ class RunScreen(BaseScreen):
             try:
                 provider = registry.get_provider(self.job.provider_id)
             except Exception as exc:
-                post(self._on_notice, "error", str(exc))
-                post(self._job_finished, ProcessStats(total=self.job.num_rows))
+                safe_post(self._on_notice, "error", str(exc))
+                safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
                 return
         try:
             pool = build_pool(
                 self.job,
                 registry,
                 provider=provider,
-                on_switch=lambda event: post(self._on_switch, event),
-                on_notice=lambda kind, msg: post(self._on_notice, kind, msg),
+                on_switch=lambda event: safe_post(self._on_switch, event),
+                on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
             )
         except AllConnectionsUnavailable as exc:
-            post(self._on_notice, "error", str(exc))
-            post(self._job_finished, ProcessStats(total=self.job.num_rows))
+            safe_post(self._on_notice, "error", str(exc))
+            safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
             return
         engine = ProcessingEngine(
             self.job,
             provider,
             connection_pool=pool,
-            on_status=lambda status: post(self._on_status, status),
-            on_event=lambda event: post(self._on_event, event),
-            on_notice=lambda kind, msg: post(self._on_notice, kind, msg),
-            on_batch_start=lambda task, worker: post(self._on_batch_start, task),
-            on_result=lambda task, result: post(self._on_result, task, result),
+            on_status=lambda status: safe_post(self._on_status, status),
+            on_event=lambda event: safe_post(self._on_event, event),
+            on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
+            on_batch_start=lambda task, worker: safe_post(self._on_batch_start, task),
+            on_result=lambda task, result: safe_post(self._on_result, task, result),
             stop_event=self._stop,
             registry=registry,
         )
@@ -479,7 +488,7 @@ class RunScreen(BaseScreen):
             else:
                 stats = engine.run_translate()
         except Exception as exc:
-            post(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
+            safe_post(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
             stats = ProcessStats(total=self.job.num_rows)
 
         try:
@@ -487,7 +496,7 @@ class RunScreen(BaseScreen):
         except Exception:
             self._output_path = self.job.out_path
 
-        post(self._job_finished, stats)
+        safe_post(self._job_finished, stats)
 
     @work(thread=True)
     def _run_single_session(self, session_idx: int) -> None:
@@ -500,7 +509,7 @@ class RunScreen(BaseScreen):
 
         def safe_post(fn, *args, **kwargs):
             try:
-                if not session.stop.is_set() and not self._stop.is_set() and getattr(app, "is_running", True):
+                if getattr(app, "is_running", True):
                     post(fn, *args, **kwargs)
             except Exception:
                 pass
@@ -510,8 +519,8 @@ class RunScreen(BaseScreen):
             try:
                 provider = registry.get_provider(session.job.provider_id)
             except Exception as exc:
-                if session_idx == self.active_session_index:
-                    safe_post(self._on_notice, "error", str(exc))
+                safe_post(self._session_notice, session_idx, "error", str(exc))
+                safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
                 return
         try:
             pool = build_pool(
@@ -522,8 +531,8 @@ class RunScreen(BaseScreen):
                 on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
             )
         except AllConnectionsUnavailable as exc:
-            if session_idx == self.active_session_index:
-                safe_post(self._on_notice, "error", str(exc))
+            safe_post(self._session_notice, session_idx, "error", str(exc))
+            safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
             return
 
         engine = ProcessingEngine(
@@ -550,6 +559,7 @@ class RunScreen(BaseScreen):
             else:
                 stats = engine.run_translate()
         except Exception as exc:
+            safe_post(self._session_notice, session_idx, "error", f"{type(exc).__name__}: {exc}")
             stats = ProcessStats(total=session.job.num_rows)
 
         try:
@@ -585,8 +595,8 @@ class RunScreen(BaseScreen):
                 if len(session.feed_lines) > 200:
                     session.feed_lines = session.feed_lines[-200:]
             session.done_rows += task.size
-            total = session.plan_total or session.job.num_rows or max(1, session.done_rows)
-            pct = min(100, int(session.done_rows / total * 100))
+            total = session.plan_total or session.file_total_count or session.job.num_rows or (session.stats.total if session.stats else 0)
+            pct = 0 if total <= 0 else min(100, int(session.done_rows / total * 100))
             if getattr(self, "tab_bar", None) is not None:
                 self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
             if session_idx == self.active_session_index:
@@ -605,6 +615,12 @@ class RunScreen(BaseScreen):
 
     def _session_notice(self, session_idx: int, kind: str, msg: str) -> None:
         try:
+            session = self.sessions[session_idx]
+            if kind == "plan":
+                engine = session.engine
+                planned = engine.planned_rows if engine is not None else None
+                if planned is not None:
+                    session.plan_total = planned
             if session_idx == self.active_session_index:
                 self._on_notice(kind, msg)
         except Exception:
@@ -779,12 +795,13 @@ class RunScreen(BaseScreen):
         self._tick = tick
         stats = self._stats
 
-        total = max(1, self._total_rows())
+        total_raw = self._total_rows()
+        total = max(1, total_raw)
         done = min(total, max(self._done_rows, stats.ok + stats.failed))
         file_total = getattr(self, "_file_total_count", 0)
         is_dedup = bool(file_total and file_total > total)
 
-        pct = min(100, int(done / total * 100))
+        pct = 0 if total_raw <= 0 else min(100, int(done / total * 100))
         elapsed = time.time() - self._started
         eta = ""
         if done > 0 and not self._finished:
@@ -930,6 +947,12 @@ class RunScreen(BaseScreen):
         if pending and (now - self._cancel_requested_at) <= 5.0:
             from ...providers.client import abort_all_for
             self._stop.set()
+            for s in getattr(self, "sessions", []):
+                s.stop.set()
+                try:
+                    abort_all_for(s.stop)
+                except Exception:
+                    pass
             try:
                 abort_all_for(self._stop)
             except Exception:
@@ -947,6 +970,8 @@ class RunScreen(BaseScreen):
 
         self._cancel_requested_at = now
         self._stop.set()
+        for s in getattr(self, "sessions", []):
+            s.stop.set()
         self.notify_status(
             "Stopping after the current batch — press c again to abort "
             "immediately.", WARN,

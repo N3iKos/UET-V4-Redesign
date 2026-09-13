@@ -155,4 +155,53 @@ def test_all_sessions_finished_triggers_summary(tmp_path):
     assert pushed[0].__class__.__name__ == "SummaryScreen"
 
 
+def test_run_screen_progress_percentage_and_plan_total(tmp_path):
+    from translator.core.models import ProcessStats, BatchResult
+    from translator.scheduling.scheduler import BatchTask
+
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src\n1,cat\n", encoding="utf-8")
+    f2.write_text("id,src\n1,dog\n", encoding="utf-8")
+
+    j1 = JobConfig(provider_id="p", model_id="m", src_path=str(f1), out_path=str(tmp_path / "a_out.csv"), num_rows=100)
+    j2 = JobConfig(provider_id="p", model_id="m", src_path=str(f2), out_path=str(tmp_path / "b_out.csv"), num_rows=100)
+
+    screen = RunScreen(job=j1, jobs=[j1, j2])
+
+    # Batch 1 lands with 1 row out of 100
+    task = BatchTask(batch_num=1, total_batches=100, rows=[(1, "cat")])
+    res = BatchResult(results={1: "kucing"})
+
+    screen._session_result(0, task, res)
+    label0 = screen.tab_bar.get_tab_label(0)
+    assert "1%" in label0
+    assert "100%" not in label0
+
+
+def test_run_screen_tab_bar_clean_names_in_dedup(tmp_path):
+    f1 = tmp_path / "original.csv"
+    f1.write_text("id,src\n1,cat\n", encoding="utf-8")
+    cache_path = str(tmp_path / ".uet_cache" / "original.123.unique.csv")
+
+    j1 = JobConfig(
+        provider_id="p", model_id="m",
+        src_path=cache_path,
+        full_src_path=str(f1),
+        out_path=str(tmp_path / "out.csv"),
+    )
+    j2 = JobConfig(
+        provider_id="p", model_id="m",
+        src_path=str(f1),
+        out_path=str(tmp_path / "out2.csv"),
+    )
+
+    screen = RunScreen(job=j1, jobs=[j1, j2])
+    label0 = screen.tab_bar.get_tab_label(0)
+    assert "original.csv" in label0
+    assert ".unique" not in label0
+    assert ".uet_cache" not in label0
+
+
+
 

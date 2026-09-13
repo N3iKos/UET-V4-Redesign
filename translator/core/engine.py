@@ -771,11 +771,14 @@ class ProcessingEngine:
             )
             self.write_log(f"[sync] broadcast {synced} cell(s) to full output")
             # Clean up temporary unique files in .uet_cache after successful broadcast
-            unique_out = self._output_path()
-            if unique_out and os.path.exists(unique_out) and unique_out != self._job.full_out_path and ".uet_cache" in unique_out:
-                os.remove(unique_out)
-            if self._job.src_path and os.path.exists(self._job.src_path) and self._job.src_path != self._job.full_src_path and ".uet_cache" in self._job.src_path:
-                os.remove(self._job.src_path)
+            try:
+                unique_out = self._output_path()
+                if unique_out and os.path.exists(unique_out) and unique_out != self._job.full_out_path and ".uet_cache" in unique_out:
+                    os.remove(unique_out)
+                if self._job.src_path and os.path.exists(self._job.src_path) and self._job.src_path != self._job.full_src_path and ".uet_cache" in self._job.src_path:
+                    os.remove(self._job.src_path)
+            except OSError:
+                pass
         except Exception as exc:
             self._notice("error", f"Final full-file sync failed: {exc}")
 

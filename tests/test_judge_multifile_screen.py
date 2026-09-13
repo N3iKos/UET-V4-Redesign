@@ -141,3 +141,124 @@ def test_judge_run_screen_live_tab_switch_and_progress_percentage(tmp_path):
     screen.action_switch_tab(1)
     assert screen.active_session_index == 1
 
+
+def test_judge_run_screen_live_tab_switch_with_compare_grid(tmp_path):
+    from translator.tui.widgets.compare import CompareGrid
+
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    f2.write_text("id,src,dst\n1,dog,anjing\n", encoding="utf-8")
+
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3, num_rows=100)
+    t2 = JudgeTarget(path=str(f2), src_col=2, dst_col=3, num_rows=100)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        targets=[t1, t2],
+        model_slot=("p", "c", "m"),
+        criteria=["mistranslation"],
+    )
+    screen.grid = CompareGrid()
+    # Live switch to tab 1 must not crash with AttributeError clear
+    screen.action_switch_tab(1)
+    assert screen.active_session_index == 1
+    screen.action_switch_tab(0)
+    assert screen.active_session_index == 0
+
+
+def test_judge_run_screen_plan_rows_and_unfinished_rows(tmp_path):
+    from translator.judge.models import JudgeReport
+    f1 = tmp_path / "a.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n2,dog,anjing\n", encoding="utf-8")
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3, num_rows=2)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        model_slot=("p", "c", "m"),
+        criteria=["mistranslation"],
+    )
+    screen._expected_rows = 2
+    screen._by_row = {1: ("cat", "kucing"), 2: ("dog", "anjing")}
+    screen._report = JudgeReport(rows=[(1, "cat", "kucing"), (2, "dog", "anjing")])
+
+    # _plan_rows must return iterable tuples
+    planned = screen._plan_rows()
+    assert len(planned) == 2
+    assert (1, "cat", "kucing") in planned
+
+    # _unfinished_rows must not raise TypeError when run is paused
+    screen._run_state = "paused"
+    screen._reviewed_rows = {1}
+    unfinished = screen._unfinished_rows()
+    assert unfinished == [2]
+
+
+def test_judge_setup_screen_cleans_uet_cache_without_name_error(tmp_path, monkeypatch):
+    from translator.core.models import JobConfig
+    from translator.tui.screens.judge import JudgeSetupScreen
+
+    game_dir = tmp_path / "game"
+    cache_dir = game_dir / ".uet_cache"
+    cache_dir.mkdir(parents=True)
+    real_out = game_dir / "dialog_Translated.csv"
+    real_out.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    cache_unique = cache_dir / "dialog.12345.unique_Translated.csv"
+    cache_unique.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+
+    j = JobConfig(
+        provider_id="p", model_id="m",
+        src_path=str(game_dir / "dialog.csv"),
+        out_path=str(cache_unique),
+        full_out_path="",
+        src_col=2, dst_col=3,
+    )
+
+    class FakeApp:
+        def __init__(self):
+            self.judge_draft = {}
+            self.screen_stack = []
+        def pop_screen(self):
+            pass
+        def push_screen(self, s):
+            self.screen_stack.append(s)
+
+    fake_app = FakeApp()
+    monkeypatch.setattr(JudgeSetupScreen, "app", property(lambda self: fake_app))
+    screen = JudgeSetupScreen(job=j, jobs=[j])
+    # Must run on_screen_ready without NameError: name 're' is not defined
+    screen.on_screen_ready()
+    assert fake_app.judge_draft.get("path") == str(real_out.resolve())
+
+
+def test_judge_session_isolates_settled_rows_and_fix_cycles(tmp_path):
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    f2.write_text("id,src,dst\n1,dog,anjing\n", encoding="utf-8")
+
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3)
+    t2 = JudgeTarget(path=str(f2), src_col=2, dst_col=3)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        targets=[t1, t2],
+        model_slot=("p", "c", "m"),
+        criteria=["mistranslation"],
+    )
+
+    # Tab 0 has row 10 settled
+    screen._settled_rows = {10}
+    screen._fix_cycles = {10: 3}
+
+    # Switch to tab 1
+    screen.action_switch_tab(1)
+    assert screen._settled_rows == set()
+    assert screen._fix_cycles == {}
+
+    # Switch back to tab 0
+    screen.action_switch_tab(0)
+    assert screen._settled_rows == {10}
+    assert screen._fix_cycles == {10: 3}
+
+

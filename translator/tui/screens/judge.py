@@ -71,6 +71,7 @@ be able to kill a repaint.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -331,7 +332,13 @@ class JudgeSetupScreen(JudgeWizardScreen):
                 if ".uet_cache" in p:
                     base_name = os.path.basename(p)
                     clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", base_name)
-                    p = os.path.abspath(clean_name)
+                    parent_dir = p.split(".uet_cache")[0].rstrip(r"\/")
+                    if parent_dir and os.path.exists(os.path.join(parent_dir, clean_name)):
+                        p = os.path.abspath(os.path.join(parent_dir, clean_name))
+                    elif os.path.exists(clean_name):
+                        p = os.path.abspath(clean_name)
+                    else:
+                        p = os.path.abspath(os.path.join(parent_dir or os.getcwd(), clean_name))
                 multi_paths.append(p)
                 multi_info[p] = {
                     "full_path": p,
@@ -343,7 +350,13 @@ class JudgeSetupScreen(JudgeWizardScreen):
             if ".uet_cache" in primary_path:
                 base_name = os.path.basename(primary_path)
                 clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", base_name)
-                primary_path = os.path.abspath(clean_name)
+                parent_dir = primary_path.split(".uet_cache")[0].rstrip(r"\/")
+                if parent_dir and os.path.exists(os.path.join(parent_dir, clean_name)):
+                    primary_path = os.path.abspath(os.path.join(parent_dir, clean_name))
+                elif os.path.exists(clean_name):
+                    primary_path = os.path.abspath(clean_name)
+                else:
+                    primary_path = os.path.abspath(os.path.join(parent_dir or os.getcwd(), clean_name))
             draft.update(
                 path=primary_path,
                 paths=multi_paths,
@@ -2265,6 +2278,9 @@ class JudgeSession:
     rejudge_flagged: list[tuple[int, object]] = field(default_factory=list)
     rejudged_rows: set[int] = field(default_factory=set)
     verdict_stable: set[int] = field(default_factory=set)
+    settled_rows: set[int] = field(default_factory=set)
+    fix_cycles: dict[int, int] = field(default_factory=dict)
+    section_shape_cache: tuple[int, int] | None = None
     run_state: str = "running"
     sections_done: int = 0
     sections_total: int = 0
@@ -2385,7 +2401,7 @@ class JudgeRunScreen(BaseScreen):
         self.active_session_index = 0
         if self.is_multi_tab:
             self.tab_bar = FileTabBar(
-                tabs=[t.path for t in self.targets],
+                tabs=[(t.full_path or t.path) for t in self.targets],
                 id="judge-tab-bar",
                 on_tab_switch=self.action_switch_tab,
             )
@@ -3175,7 +3191,12 @@ class JudgeRunScreen(BaseScreen):
 
     def _plan_rows(self) -> list:
         """Rows this evaluation set out to review, for the progress figure."""
-        return getattr(self, "_expected_rows", []) or []
+        if hasattr(self, "_by_row") and self._by_row:
+            return [(r, s, t) for r, (s, t) in self._by_row.items()]
+        expected = getattr(self, "_expected_rows", None)
+        if isinstance(expected, list):
+            return expected
+        return []
 
     def _log(self, message: str, style: str = "") -> None:
         body = escape_markup(message)
@@ -3355,8 +3376,14 @@ class JudgeRunScreen(BaseScreen):
         """
         tgt = target or self._target
         stp = stop_event or self._stop
-        status_cb = on_status or (lambda status: self._app.call_from_thread(self._on_status, status))
-        event_cb = on_event or (lambda event: self._app.call_from_thread(self._on_event, event))
+        def _safe_thread_call(fn, *args, **kwargs):
+            try:
+                if getattr(self._app, "is_running", True):
+                    self._app.call_from_thread(fn, *args, **kwargs)
+            except Exception:
+                pass
+        status_cb = on_status or (lambda status: _safe_thread_call(self._on_status, status))
+        event_cb = on_event or (lambda event: _safe_thread_call(self._on_event, event))
         target_max_rows = max_rows if max_rows is not None else self._max_rows
         return JudgeRunner(
             target=tgt,
@@ -3370,7 +3397,7 @@ class JudgeRunScreen(BaseScreen):
             grading_mode=self._grading_mode,
             on_status=status_cb,
             on_event=event_cb,
-            on_notice=lambda kind, msg: self._app.call_from_thread(
+            on_notice=lambda kind, msg: _safe_thread_call(
                 self._on_notice, kind, msg
             ),
             on_row=on_row,
@@ -3387,27 +3414,34 @@ class JudgeRunScreen(BaseScreen):
             return
 
         app = self._app
+        def safe_call(fn, *args, **kwargs):
+            try:
+                if getattr(app, "is_running", True):
+                    app.call_from_thread(fn, *args, **kwargs)
+            except Exception:
+                pass
+
         self._busy_batch = True
         self._flagged_rows.clear()
         self._flagged_live.clear()
         self._reviewed_rows.clear()
-        app.call_from_thread(self._begin_op, "Judge", self._model_slot)
-        app.call_from_thread(self.refresh_keys)
+        safe_call(self._begin_op, "Judge", self._model_slot)
+        safe_call(self.refresh_keys)
         try:
             runner = self._make_runner(
-                on_row=lambda row, issue: app.call_from_thread(
+                on_row=lambda row, issue: safe_call(
                     self._row_reviewed, row, issue
                 ),
-                on_section=lambda index, total, rows, ok: app.call_from_thread(
+                on_section=lambda index, total, rows, ok: safe_call(
                     self._section_done, index, total, rows, ok
                 ),
             )
             self._runner = runner
             report = runner.evaluate()
         except Exception as exc:            # a crash must not eat the screen
-            app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
+            safe_call(self._failed, f"{type(exc).__name__}: {exc}")
             return
-        app.call_from_thread(self._evaluated, report)
+        safe_call(self._evaluated, report)
 
     @work(thread=True)
     def _evaluate_single_session(self, session_idx: int) -> None:
@@ -3418,19 +3452,20 @@ class JudgeRunScreen(BaseScreen):
         session.flagged_rows.clear()
         session.flagged_live.clear()
         session.reviewed_rows.clear()
+        def safe_call(fn, *args, **kwargs):
+            try:
+                if getattr(app, "is_running", True):
+                    app.call_from_thread(fn, *args, **kwargs)
+            except Exception:
+                pass
+
         if session_idx == self.active_session_index:
             self._busy_batch = True
             self._flagged_rows.clear()
             self._flagged_live.clear()
             self._reviewed_rows.clear()
-            app.call_from_thread(self._begin_op, "Judge", self._model_slot)
-            app.call_from_thread(self.refresh_keys)
-        def safe_call(fn, *args, **kwargs):
-            try:
-                if not session.stop.is_set() and not self._stop.is_set() and getattr(app, "is_running", True):
-                    app.call_from_thread(fn, *args, **kwargs)
-            except Exception:
-                pass
+            safe_call(self._begin_op, "Judge", self._model_slot)
+            safe_call(self.refresh_keys)
 
         try:
             runner = self._make_runner(
@@ -3454,9 +3489,13 @@ class JudgeRunScreen(BaseScreen):
                 self._runner = runner
             report = runner.evaluate()
         except Exception as exc:
+            session.busy_batch = False
+            session.run_state = "failed"
+            safe_call(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
+            if getattr(self, "tab_bar", None) is not None:
+                safe_call(self.tab_bar.update_tab, session_idx, status="failed")
             if session_idx == self.active_session_index:
                 safe_call(self._failed, f"{type(exc).__name__}: {exc}")
-            session.run_state = "failed"
             return
         safe_call(self._session_evaluated, session_idx, report)
 
@@ -3650,6 +3689,9 @@ class JudgeRunScreen(BaseScreen):
         s.rejudge_flagged = list(self._rejudge_flagged)
         s.rejudged_rows = set(self._rejudged_rows)
         s.verdict_stable = set(self._verdict_stable)
+        s.settled_rows = set(self._settled_rows)
+        s.fix_cycles = dict(self._fix_cycles)
+        s.section_shape_cache = self._section_shape_cache
         s.run_state = self._run_state
         s.sections_done = self._sections_done
         s.sections_total = self._sections_total
@@ -3696,6 +3738,9 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_flagged = list(s.rejudge_flagged)
         self._rejudged_rows = set(s.rejudged_rows)
         self._verdict_stable = set(s.verdict_stable)
+        self._settled_rows = set(s.settled_rows)
+        self._fix_cycles = dict(s.fix_cycles)
+        self._section_shape_cache = s.section_shape_cache
         self._run_state = s.run_state
         self._sections_done = s.sections_done
         self._sections_total = s.sections_total
@@ -3722,7 +3767,7 @@ class JudgeRunScreen(BaseScreen):
         self._save_current_session()
         self._load_session(index)
         if getattr(self, "tab_bar", None) is not None:
-            self.tab_bar.switch_tab(index)
+            self.tab_bar.active_tab = index
         if getattr(self, "grid", None) is not None:
             if self._report is not None:
                 self._fill_grid()
@@ -3741,9 +3786,7 @@ class JudgeRunScreen(BaseScreen):
             fresh.append((row, source))
         try:
             with self.grid.batched():
-                self.grid.set_columns(self._columns())
-                self.grid.clear()
-                self.grid.add_rows(fresh)
+                self.grid.set_sources(fresh, self._columns())
                 self.grid.set_notes(dict(self._live_notes), dict(self._live_styles))
         except Exception:
             pass

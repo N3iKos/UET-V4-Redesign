@@ -67,7 +67,7 @@ class FileEngineScreen(BaseScreen):
         paths: list[str] = []
         for p in parts:
             cleaned = os.path.abspath(os.path.expanduser(p.strip().strip('"').strip("'")))
-            if cleaned and os.path.isfile(cleaned):
+            if cleaned and os.path.isfile(cleaned) and ".uet_cache" not in cleaned:
                 if cleaned not in paths:
                     paths.append(cleaned)
         return paths[:self._max_files]
@@ -75,7 +75,7 @@ class FileEngineScreen(BaseScreen):
     def toggle_selection(self, path: str) -> None:
         """Toggle a file in or out of multi-selection up to max_files."""
         canon = os.path.abspath(os.path.expanduser((path or "").strip().strip('"').strip("'")))
-        if not canon or not os.path.isfile(canon):
+        if not canon or not os.path.isfile(canon) or ".uet_cache" in canon:
             return
         # Compare canonical paths
         existing_matches = [p for p in self.selected_files if os.path.abspath(p) == canon]
@@ -113,7 +113,7 @@ class FileEngineScreen(BaseScreen):
                 valid_paths = manual
             else:
                 path = os.path.abspath(os.path.expanduser(raw.strip('"').strip("'")))
-                if os.path.isfile(path):
+                if os.path.isfile(path) and ".uet_cache" not in path:
                     valid_paths = [path]
         if not valid_paths:
             return False
@@ -274,6 +274,9 @@ class FileEngineScreen(BaseScreen):
 
         path = os.path.abspath(os.path.expanduser(raw.strip('"').strip("'")))
         error = self.query_one("#file-error", Label)
+        if ".uet_cache" in path:
+            error.update("Cannot select temporary cache files (.uet_cache)")
+            return
 
         def accept(path_: str) -> None:
             if self._on_accept_multiple is not None:

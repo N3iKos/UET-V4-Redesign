@@ -183,6 +183,15 @@ class CompareGrid(Widget):
                 self._held = 0
                 self._rebuild()
 
+    def clear(self) -> None:
+        """Clear all rows, notes, and styles from the grid."""
+        self._sources.clear()
+        self._notes.clear()
+        self._note_styles.clear()
+        self._row_styles.clear()
+        self._visible = None
+        self._rebuild()
+
     def set_sources(self, rows: list[tuple[int, str]], columns: list[Column]) -> None:
         self._sources = list(rows)
         self._columns = list(columns)
