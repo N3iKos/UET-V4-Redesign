@@ -588,8 +588,8 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         slot = self._chosen_slot()
         if slot is None:
             return False
-        from ...data.app_prefs import remembered_judge_settings
-        return remembered_judge_settings(slot) is not None
+        from ...data.app_prefs import remembered_rejudge_settings
+        return remembered_rejudge_settings(slot) is not None
 
     def _apply_remembered(self) -> None:
         """
@@ -602,9 +602,9 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         slot = self._chosen_slot()
         if slot is None:
             return
-        from ...data.app_prefs import remembered_judge_settings
+        from ...data.app_prefs import remembered_fix_settings
 
-        remembered = remembered_judge_settings(slot)
+        remembered = remembered_fix_settings(slot)
         if remembered is None:
             return
         self._batch.value = str(remembered["max_rows"])
@@ -687,10 +687,10 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         self.app.judge_session_rows = rows
         self.app.judge_session_workers = workers
 
-        from ...data.app_prefs import remember_judge_settings
+        from ...data.app_prefs import remember_rejudge_settings
 
         remember = "remember" in self._remember.selected_values()
-        remember_judge_settings(
+        remember_rejudge_settings(
             slot, max_rows=rows, workers=workers,
             remember=remember,
         )
@@ -2356,6 +2356,7 @@ class JudgeRunScreen(BaseScreen):
         # "confirm & save" (bug #2/#3). One key each, dispatched on state, so the
         # live screen and the review screen never fight over a binding.
         Binding("f", "f_key", "follow / fix all", show=False),
+        Binding("F", "fix_all_force", "fix all (reconfigure)", show=False),
         Binding("c", "c_key", "stop / confirm", show=False),
         Binding("C", "c_key", "stop / confirm", show=False),
         Binding("g", "judge_again", "judge again", show=False),
@@ -2843,25 +2844,28 @@ class JudgeRunScreen(BaseScreen):
         One timer for the whole screen, as on the run screen: the grid's
         spinner, the panel's durations, the rail and the live grid all advance
         from it, so a burst of worker updates costs one paint (NFR-201).
-
-        The rail is repainted here rather than only from `_log`. It was the
-        latter, which is why the progress bar sat at 0%: `_reviewed` was counting
-        correctly all along, but nothing asked the rail to draw it again unless a
-        retry or a failure happened to log a line.
         """
+        self._anim_tick += 1
+        if self._busy_batch or self._busy_row:
+            if self._run_state == "running" and self._started_at:
+                self._elapsed = time.monotonic() - self._started_at
+
         try:
             self._flush_live()
-            if self._busy_batch:
-                # Animation and the running clock advance every tick while work
-                # is in flight, whether or not a row landed (bug #5/#7). The
-                # activity panel's spinner is driven from `_anim_tick`, not the
-                # grid's tick, because Judge's grid columns are always `done` and
-                # `grid._tick` therefore never moves.
-                self._anim_tick += 1
-                if self._run_state == "running" and self._started_at:
-                    self._elapsed = time.monotonic() - self._started_at
-                self._paint_rail()
+        except Exception:
+            pass
+
+        try:
+            self._paint_rail()
+        except Exception:
+            pass
+
+        try:
             self.grid.tick()
+        except Exception:
+            pass
+
+        try:
             self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
         except Exception:
             pass
@@ -3283,10 +3287,6 @@ class JudgeRunScreen(BaseScreen):
         target_workers = workers if workers is not None else self._chosen_workers
         if target_workers is not None and target_workers > 0:
             job.n_workers = int(target_workers)
-
-        # Multi-tab smart shared pool: if multiple files share this session's model, split workers
-        if getattr(self, "is_multi_tab", False) and len(self.targets) > 1 and workers is None:
-            job.n_workers = max(1, job.n_workers // len(self.targets))
 
         if job.n_workers <= 1 and job.processing_mode == "parallel":
             job.processing_mode = "sequential"
@@ -4353,7 +4353,9 @@ class JudgeRunScreen(BaseScreen):
         which is what used to make `f` fix a different row than the one being
         looked at after a filter change.
         """
-        visible = self.grid.visible_rows
+        if not hasattr(self, "grid") or self.grid is None:
+            return getattr(self, "_cursor_row", 0) or 0
+        visible = getattr(self.grid, "visible_rows", [])
         if self._cursor_row in visible:
             return self._cursor_row
         self._cursor_row = self._preferred_row(visible)
@@ -4693,7 +4695,7 @@ class JudgeRunScreen(BaseScreen):
 
     # ── Fix All (batch, worker panel) ─────────────────────────────────────────
 
-    def action_fix_all(self) -> None:
+    def action_fix_all(self, force: bool = False) -> None:
         """
         Open the Fix All wizard for the rows the filter is showing.
 
@@ -4735,16 +4737,38 @@ class JudgeRunScreen(BaseScreen):
                 "The flagged rows are empty cells — translate them instead.", WARN
             )
             return
+
+        from ...data.app_prefs import remembered_fix_settings
+
+        slot = getattr(self.app, "judge_fix_slot", None) or self._model_slot
+        if not force and getattr(self.app, "judge_fix_slot", None) is not None:
+            remembered = remembered_fix_settings(slot)
+            if remembered is not None:
+                plan = FixAllPlan(
+                    model_slot=slot,
+                    rows=fixable,
+                    criteria=list(self._criteria),
+                    severities=None,
+                    batch_size=remembered["max_rows"],
+                    workers=remembered["workers"],
+                )
+                self._fix_all_confirmed(plan)
+                return
+
         self.app.push_screen(
             FixAllSetupScreen(
                 report=report,
                 rows=fixable,
-                model_slot=self._model_slot,
+                model_slot=slot,
                 target=self._target,
                 scope=self._scope_label(),
             ),
             self._fix_all_confirmed,
         )
+
+    def action_fix_all_force(self) -> None:
+        """Force open Fix All setup wizard even if 'Don't ask' was remembered."""
+        self.action_fix_all(force=True)
 
     def _scope_label(self) -> str:
         """How the wizard describes where its rows came from."""
@@ -4992,7 +5016,7 @@ class JudgeRunScreen(BaseScreen):
         stored rows/workers, and any other model opens the full setup form.
         Kept separate from the Fix slot so the two never bleed into each other.
         """
-        from ...data.app_prefs import remembered_judge_settings
+        from ...data.app_prefs import remembered_rejudge_settings
 
         candidate_slots = []
         session_slot = getattr(self.app, "judge_rejudge_slot", None)
@@ -5002,7 +5026,7 @@ class JudgeRunScreen(BaseScreen):
             candidate_slots.append(self._model_slot)
 
         for slot in candidate_slots:
-            remembered = remembered_judge_settings(slot)
+            remembered = remembered_rejudge_settings(slot)
             if remembered is not None:
                 self.app.judge_rejudge_slot = slot
                 then(slot, remembered["max_rows"], remembered["workers"])
@@ -6080,16 +6104,20 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         # the app preferences, so the next Fix All that opens on this model is
         # prefilled with them; unticking removes the entry. The scope filters
         # are never remembered (UET_UX §6).
-        from ...data.app_prefs import remember_judge_settings
+        from ...data.app_prefs import remember_fix_settings
 
-        remember_judge_settings(
+        remember = "remember" in self._remember.selected_values()
+        remember_fix_settings(
             slot, max_rows=self._typed_batch(), workers=workers,
-            remember="remember" in self._remember.selected_values(),
+            remember=remember,
         )
-        if "remember" in self._remember.selected_values():
+        if remember:
             # Session convenience alongside the persisted entry: single-row Fix
             # It reuses the slot without a popup for the rest of the session.
             self.app.judge_fix_slot = slot
+        else:
+            if getattr(self.app, "judge_fix_slot", None) == slot:
+                self.app.judge_fix_slot = None
 
         self.dismiss(FixAllPlan(
             model_slot=slot,

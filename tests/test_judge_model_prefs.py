@@ -118,6 +118,29 @@ class TestRemember:
         assert "request_timeout" in prefs
         assert prefs["request_timeout"] == app_prefs.request_timeout()
 
+    def test_fix_and_rejudge_settings_are_isolated(self):
+        # Setting fix preferences must NOT bleed into rejudge preferences
+        app_prefs.remember_fix_settings(
+            SLOT_A, max_rows=15, workers=10, remember=True
+        )
+        assert app_prefs.remembered_fix_settings(SLOT_A) == {
+            "max_rows": 15, "workers": 10,
+        }
+        # Rejudge must remain None (unpolluted by Fix All)
+        assert app_prefs.remembered_rejudge_settings(SLOT_A) is None
+
+        # Setting rejudge preferences must NOT change fix preferences
+        app_prefs.remember_rejudge_settings(
+            SLOT_A, max_rows=5, workers=2, remember=True
+        )
+        assert app_prefs.remembered_rejudge_settings(SLOT_A) == {
+            "max_rows": 5, "workers": 2,
+        }
+        assert app_prefs.remembered_fix_settings(SLOT_A) == {
+            "max_rows": 15, "workers": 10,
+        }
+
+
 
 class TestRememberedJudgeCriteria:
     def test_default_is_four_criteria(self):

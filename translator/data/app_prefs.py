@@ -72,6 +72,8 @@ DEFAULTS: dict = {
     # name on different connections stay separate. Values:
     # {"remember": bool, "max_rows": int, "workers": int}
     "judge_model_prefs": {},
+    "rejudge_model_prefs": {},
+    "fix_model_prefs": {},
     # Remembered criteria for Judge runs (defaults to the 4 core criteria).
     # If the user selects fitting or deselects others, the combination is
     # remembered for subsequent runs.
@@ -129,6 +131,12 @@ def load_prefs() -> dict:
     )
     prefs["judge_model_prefs"] = _clean_judge_model_prefs(
         payload.get("judge_model_prefs")
+    )
+    prefs["rejudge_model_prefs"] = _clean_judge_model_prefs(
+        payload.get("rejudge_model_prefs")
+    )
+    prefs["fix_model_prefs"] = _clean_judge_model_prefs(
+        payload.get("fix_model_prefs")
     )
     prefs["last_judge_criteria"] = _clean_judge_criteria(
         payload.get("last_judge_criteria")
@@ -189,6 +197,12 @@ def save_prefs(prefs: dict) -> None:
     )
     current["judge_model_prefs"] = _clean_judge_model_prefs(
         current.get("judge_model_prefs")
+    )
+    current["rejudge_model_prefs"] = _clean_judge_model_prefs(
+        current.get("rejudge_model_prefs")
+    )
+    current["fix_model_prefs"] = _clean_judge_model_prefs(
+        current.get("fix_model_prefs")
     )
     current["last_judge_criteria"] = _clean_judge_criteria(
         current.get("last_judge_criteria")
@@ -361,20 +375,14 @@ def judge_model_prefs_key(slot: tuple[str, str, str] | list) -> str:
     return "\n".join(str(part) for part in (provider, connection, model))
 
 
-def remembered_judge_settings(
+def remembered_rejudge_settings(
     slot: tuple[str, str, str] | list,
 ) -> dict | None:
-    """
-    The remembered re-judge/fix settings for one model, or None.
-
-    None (rather than a dict) means "this model has no remembered settings" —
-    the caller must ask. A stored entry with `remember: false` counts as no
-    entry: it is a draft the user chose not to persist.
-    """
+    """The remembered re-judge settings for one model, or None."""
     key = judge_model_prefs_key(slot)
     if not key:
         return None
-    entry = (load_prefs()["judge_model_prefs"] or {}).get(key)
+    entry = (load_prefs().get("rejudge_model_prefs") or {}).get(key)
     if not isinstance(entry, dict) or not entry.get("remember"):
         return None
     return {
@@ -383,23 +391,18 @@ def remembered_judge_settings(
     }
 
 
-def remember_judge_settings(
+def remember_rejudge_settings(
     slot: tuple[str, str, str] | list,
     max_rows: int,
     workers: int,
     remember: bool,
 ) -> None:
-    """
-    Store (or clear) the remembered settings for one model.
-
-    `remember=False` removes the entry entirely — the next use of this model
-    asks again — rather than leaving a dormant draft behind.
-    """
+    """Store (or clear) the remembered settings for Rejudge on this model."""
     key = judge_model_prefs_key(slot)
     if not key:
         return
     prefs = load_prefs()
-    store = dict(prefs["judge_model_prefs"] or {})
+    store = dict(prefs.get("rejudge_model_prefs") or {})
     if remember:
         store[key] = {
             "remember": True,
@@ -408,7 +411,63 @@ def remember_judge_settings(
         }
     else:
         store.pop(key, None)
-    save_prefs({"judge_model_prefs": store})
+    save_prefs({"rejudge_model_prefs": store})
+
+
+def remembered_judge_settings(
+    slot: tuple[str, str, str] | list,
+) -> dict | None:
+    """Backwards-compatible alias for remembered Rejudge settings."""
+    return remembered_rejudge_settings(slot)
+
+
+def remember_judge_settings(
+    slot: tuple[str, str, str] | list,
+    max_rows: int,
+    workers: int,
+    remember: bool,
+) -> None:
+    """Backwards-compatible alias for remember Rejudge settings."""
+    remember_rejudge_settings(slot, max_rows, workers, remember)
+
+
+def remembered_fix_settings(
+    slot: tuple[str, str, str] | list,
+) -> dict | None:
+    """The remembered Fix All settings for one model, or None."""
+    key = judge_model_prefs_key(slot)
+    if not key:
+        return None
+    entry = (load_prefs().get("fix_model_prefs") or {}).get(key)
+    if not isinstance(entry, dict) or not entry.get("remember"):
+        return None
+    return {
+        "max_rows": _clamp_rows(entry.get("max_rows")),
+        "workers": _clamp_workers(entry.get("workers")),
+    }
+
+
+def remember_fix_settings(
+    slot: tuple[str, str, str] | list,
+    max_rows: int,
+    workers: int,
+    remember: bool,
+) -> None:
+    """Store (or clear) the remembered settings for Fix All on this model."""
+    key = judge_model_prefs_key(slot)
+    if not key:
+        return
+    prefs = load_prefs()
+    store = dict(prefs.get("fix_model_prefs") or {})
+    if remember:
+        store[key] = {
+            "remember": True,
+            "max_rows": _clamp_rows(max_rows),
+            "workers": _clamp_workers(workers),
+        }
+    else:
+        store.pop(key, None)
+    save_prefs({"fix_model_prefs": store})
 
 
 def _clean_judge_model_prefs(value) -> dict:

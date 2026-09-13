@@ -262,3 +262,89 @@ def test_judge_session_isolates_settled_rows_and_fix_cycles(tmp_path):
     assert screen._fix_cycles == {10: 3}
 
 
+def test_judge_workers_not_divided_across_multi_tab(tmp_path, monkeypatch):
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    f2.write_text("id,src,dst\n1,dog,anjing\n", encoding="utf-8")
+
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3)
+    t2 = JudgeTarget(path=str(f2), src_col=2, dst_col=3)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        targets=[t1, t2],
+        model_slot=("p", "c", "m"),
+        criteria=["mistranslation"],
+        workers=20,
+    )
+    class FakeApp:
+        class FakeRegistry:
+            providers = []
+        registry = FakeRegistry()
+    screen._app = FakeApp()
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: FakeApp()))
+    runner = screen._make_runner(workers=20)
+    # In Judge mode, workers must remain 100% individual (20 workers, NOT 10 or 2!)
+    assert runner._job.n_workers == 20
+
+
+def test_fix_all_respects_dont_ask_and_rejudge_isolated(tmp_path, monkeypatch):
+    from translator.data import app_prefs
+    from translator.judge.models import JudgeReport, RowIssue
+
+    f1 = tmp_path / "a.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3)
+
+    slot_fix = ("prov1", "conn1", "model-fix")
+    slot_judge = ("prov1", "conn1", "model-judge")
+
+    # Set Fix All to "Don't ask again" with 15 rows, 8 workers
+    app_prefs.remember_fix_settings(slot_fix, max_rows=15, workers=8, remember=True)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        model_slot=slot_judge,
+        criteria=["mistranslation"],
+    )
+    rep = JudgeReport(rows=[(1, "cat", "kucing")], issues={1: RowIssue(1, ["mistranslation"], "wrong", "critical")})
+    screen._report = rep
+    screen.grid = type("G", (), {"visible_rows": [1]})()
+
+    pushed_screens = []
+    class FakeApp:
+        def __init__(self):
+            self.judge_fix_slot = slot_fix
+            self.judge_rejudge_slot = None
+        def push_screen(self, s, *a, **k):
+            pushed_screens.append(s)
+
+    fake_app = FakeApp()
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: fake_app))
+
+    confirmed_plans = []
+    screen._fix_all_confirmed = lambda plan: confirmed_plans.append(plan)
+
+    # 1. action_fix_all() should respect Don't ask and NOT push FixAllSetupScreen!
+    screen.action_fix_all(force=False)
+    assert len(pushed_screens) == 0
+    assert len(confirmed_plans) == 1
+    assert confirmed_plans[0].model_slot == slot_fix
+    assert confirmed_plans[0].batch_size == 15
+    assert confirmed_plans[0].workers == 8
+
+    # 2. action_fix_all(force=True) should force push FixAllSetupScreen
+    screen.action_fix_all(force=True)
+    assert len(pushed_screens) == 1
+    assert pushed_screens[0].__class__.__name__ == "FixAllSetupScreen"
+
+    # 3. Rejudge MUST NOT be hijacked by Fix All! Rejudge should push RejudgeSetupScreen
+    rejudge_run = []
+    screen._with_rejudge_model(lambda slot, rows, workers: rejudge_run.append((slot, rows, workers)))
+    # Because Rejudge was NOT remembered, it must push RejudgeSetupScreen!
+    assert any(s.__class__.__name__ == "RejudgeSetupScreen" for s in pushed_screens)
+    assert len(rejudge_run) == 0
+
+
+
