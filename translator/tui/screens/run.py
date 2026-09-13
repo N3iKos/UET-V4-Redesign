@@ -629,14 +629,18 @@ class RunScreen(BaseScreen):
 
         all_done = all(s.finished for s in self.sessions)
         if all_done:
-            self._finished = True
-            self.refresh_keys()
-            self._render_sidebar()
-            self._on_notice("done", "All files have finished translating! Press 's' to view summary.")
+            active_s = self.sessions[self.active_session_index]
+            self._job_finished(active_s.stats or stats)
         elif session_idx == self.active_session_index:
             self._finished = True
-            self.refresh_keys()
-            self._render_sidebar()
+            try:
+                self.refresh_keys()
+            except Exception:
+                pass
+            try:
+                self._render_sidebar()
+            except Exception:
+                pass
             self._on_notice("info", f"{os.path.basename(session.job.src_path)} finished. Other files still running.")
 
     # ── Callbacks (main thread) ───────────────────────────────────────────────
@@ -1003,15 +1007,27 @@ class RunScreen(BaseScreen):
     def _job_finished(self, stats: ProcessStats) -> None:
         self._finished = True
         self._stats = stats
-        self.app.on_shutdown_hook = None
-        self._render_sidebar()
-        self.refresh_keys()
-        self.app.push_screen(
-            SummaryScreen(
-                self.job, stats, self._events, self._error_tally,
-                output_path=self._output_path,
-            )
+        app = getattr(self, "_app", None)
+        if app is None:
+            try:
+                app = self.app
+            except Exception:
+                pass
+        if app is not None:
+            app.on_shutdown_hook = None
+        try:
+            self._render_sidebar()
+            self.refresh_keys()
+        except Exception:
+            pass
+        summary_screen = SummaryScreen(
+            self.job, stats, self._events, self._error_tally,
+            output_path=self._output_path,
+            jobs=getattr(self, "jobs", None),
+            sessions=getattr(self, "sessions", None),
         )
+        if app is not None:
+            app.push_screen(summary_screen)
 
 
 class SummaryScreen(MenuScreen):
@@ -1025,10 +1041,14 @@ class SummaryScreen(MenuScreen):
         events: list[str],
         errors: dict[str, int] | None = None,
         output_path: str | None = None,
+        jobs: list[JobConfig] | None = None,
+        sessions: list[TranslateSession] | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.job = job
+        self.jobs = list(jobs) if jobs else [job]
+        self.sessions = sessions or []
         self.stats = stats
         self.events = events
         self.errors = errors or {}
@@ -1043,6 +1063,33 @@ class SummaryScreen(MenuScreen):
     def _summary(self) -> str:
         stats = self.stats
         import os
+
+        if len(self.jobs) > 1:
+            total_ok = sum(s.stats.ok for s in self.sessions if s.stats) if self.sessions else stats.ok
+            total_failed = sum(s.stats.failed for s in self.sessions if s.stats) if self.sessions else stats.failed
+            total_skipped = sum(s.stats.skipped for s in self.sessions if s.stats) if self.sessions else stats.skipped
+            total_tokens = sum(s.stats.tokens_consumed for s in self.sessions if s.stats) if self.sessions else stats.tokens_consumed
+            
+            lines = [
+                f"Finished {len(self.jobs)} files in {RunScreen._fmt_short(stats.elapsed)}",
+                "",
+                f"[{OK}]Files completed:[/]",
+            ]
+            for i, j in enumerate(self.jobs):
+                f_name = os.path.basename(j.full_out_path or j.out_path)
+                f_stat = self.sessions[i].stats if i < len(self.sessions) and self.sessions[i].stats else None
+                ok_cnt = f_stat.ok if f_stat else "?"
+                fail_cnt = f_stat.failed if f_stat else 0
+                lines.append(f"  • {i+1}. {escape_markup(f_name)}  (ok: {ok_cnt}, failed: {fail_cnt})")
+            lines += [
+                "",
+                f"[{OK}]total ok[/]     {total_ok:>8,}",
+                f"[{ERROR}]failed[/]       {total_failed:>8,}",
+                f"[{MUTED}]skipped[/]      {total_skipped:>8,}",
+                "",
+                f"total tokens  {total_tokens:>8,}",
+            ]
+            return "\n".join(lines)
 
         sweeps = [e for e in self.events if "Auto-sweep" in e]
         saved_target = self.job.full_out_path or self.output_path
@@ -1135,7 +1182,7 @@ class SummaryScreen(MenuScreen):
 
             # The finished job carries the file, the columns and the languages,
             # so the setup screen only has to ask for criteria and a model.
-            self.app.push_screen(JudgeSetupScreen(job=self.job))
+            self.app.push_screen(JudgeSetupScreen(job=self.job, jobs=self.jobs))
         else:
             import copy
 

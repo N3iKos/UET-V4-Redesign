@@ -122,3 +122,37 @@ def test_run_screen_switch_tab_restores_feed_without_crash(tmp_path):
     assert screen.feed._rows[1].result == "ikan"
 
 
+def test_all_sessions_finished_triggers_summary(tmp_path):
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src\n1,cat\n", encoding="utf-8")
+    f2.write_text("id,src\n1,dog\n", encoding="utf-8")
+
+    from translator.core.models import ProcessStats
+    j1 = JobConfig(provider_id="p", model_id="m", src_path=str(f1), out_path=str(tmp_path / "a_out.csv"))
+    j2 = JobConfig(provider_id="p", model_id="m", src_path=str(f2), out_path=str(tmp_path / "b_out.csv"))
+
+    pushed = []
+    class FakeApp:
+        def push_screen(self, s):
+            pushed.append(s)
+
+    screen = RunScreen(job=j1, jobs=[j1, j2])
+    screen._app = FakeApp()
+
+    # Session 1 finishes first
+    screen._session_finished(1, ProcessStats(total=10, ok=10))
+    assert screen.sessions[1].finished is True
+    # Session 0 not yet finished, so SummaryScreen should NOT be pushed yet
+    assert len(pushed) == 0
+
+    # Now Session 0 finishes (all finished!)
+    screen._session_finished(0, ProcessStats(total=10, ok=10))
+    assert screen.sessions[0].finished is True
+    assert screen._finished is True
+    # Now SummaryScreen MUST be pushed!
+    assert len(pushed) == 1
+    assert pushed[0].__class__.__name__ == "SummaryScreen"
+
+
+

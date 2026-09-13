@@ -308,9 +308,10 @@ class JudgeSetupScreen(JudgeWizardScreen):
 
     breadcrumb = "Judge"
 
-    def __init__(self, job: JobConfig | None = None, **kwargs) -> None:
+    def __init__(self, job: JobConfig | None = None, jobs: list[JobConfig] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._job = job
+        self._jobs = list(jobs) if jobs else ([job] if job else [])
 
     def on_screen_ready(self) -> None:
         job = self._job
@@ -323,8 +324,20 @@ class JudgeSetupScreen(JudgeWizardScreen):
         if job is not None:
             # Everything about the file is already known, so the wizard's
             # later steps arrive filled in and can be walked through with Enter.
+            multi_paths = [j.full_out_path or j.out_path for j in self._jobs]
+            multi_info = {}
+            for j in self._jobs:
+                p = j.full_out_path or j.out_path
+                multi_info[p] = {
+                    "full_path": j.full_out_path or j.out_path,
+                    "path": j.out_path,
+                    "map_path": j.map_path,
+                    "num_rows": j.num_rows,
+                }
             draft.update(
                 path=job.out_path,
+                paths=multi_paths,
+                multi_targets_info=multi_info,
                 src_col=job.src_col,
                 dst_col=job.dst_col,
                 ctx_col=job.ctx_col,
