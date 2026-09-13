@@ -966,6 +966,28 @@ class TranslationFeed(Widget):
         entry.error = error
         self.refresh(layout=True)
 
+    def add(
+        self,
+        row_num: int,
+        source: str,
+        result: str,
+        state: str = "ok",
+        error: str = "",
+    ) -> None:
+        """Add or update a completed row in the feed (for live display and tab restore)."""
+        entry = self._index.get(row_num)
+        if entry is None:
+            entry = FeedRow(row_num=row_num, source=source, result=result, state=state, error=error)
+            self._index[row_num] = entry
+            self._rows.append(entry)
+            self._trim()
+        else:
+            entry.source = source
+            entry.result = result
+            entry.state = state
+            entry.error = error
+        self.refresh(layout=True)
+
     def clear(self) -> None:
         self._rows.clear()
         self._index.clear()

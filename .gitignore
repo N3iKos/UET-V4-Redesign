@@ -8,5 +8,6 @@ graphify-out/
 *.log
 *.csv
 *.rar
+*.txt
 .uet_cache/
 backup/

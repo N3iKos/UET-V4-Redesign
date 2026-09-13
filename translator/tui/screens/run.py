@@ -156,6 +156,8 @@ class RunScreen(BaseScreen):
         Binding("4", "switch_tab(3)", "tab 4", show=False),
         Binding("bracketleft", "prev_tab", "prev tab", show=False),
         Binding("bracketright", "next_tab", "next tab", show=False),
+        Binding("s", "view_summary", "summary", show=False),
+        Binding("enter", "view_summary", "summary", show=False),
     ]
 
     def __init__(self, job: JobConfig, jobs: list[JobConfig] | None = None, **kwargs) -> None:
@@ -278,21 +280,46 @@ class RunScreen(BaseScreen):
     """
 
     def screen_keys(self) -> list[tuple[str, str]]:
-        if self._finished:
-            return [("↑↓", "scroll"), ("⏎", "summary")]
+        active_finished = self._finished or (
+            getattr(self, "is_multi_tab", False) and self.sessions[self.active_session_index].finished
+        )
+        if active_finished:
+            keys = [("↑↓", "scroll"), ("⏎/s", "summary")]
+            if getattr(self, "is_multi_tab", False):
+                keys.append(("1-4", "switch tab"))
+            return keys
         follow = "unfollow" if getattr(self, "feed", None) and self.feed.follow \
             else "follow"
         workers = "hide workers" if not self._workers_collapsed() \
             else "show workers"
         events = "hide events" if not self._events_collapsed() \
             else "show events"
-        return [("↑↓", "scroll"), ("f", follow), ("a", workers), ("e", events),
+        keys = [("↑↓", "scroll"), ("f", follow), ("a", workers), ("e", events),
                 ("d", "worker detail"), ("c", "stop & save")]
+        if getattr(self, "is_multi_tab", False):
+            keys.append(("1-4", "switch tab"))
+        return keys
+
+    def action_view_summary(self) -> None:
+        active_finished = self._finished or (
+            getattr(self, "is_multi_tab", False) and self.sessions[self.active_session_index].finished
+        )
+        if not active_finished:
+            return
+        s = self.sessions[self.active_session_index] if getattr(self, "is_multi_tab", False) else None
+        stats = s.stats if (s and s.stats) else self._stats
+        job = s.job if s else self.job
+        events = s.events if s else self._events
+        errors = s.error_tally if s else self._error_tally
+        out_path = s.output_path if (s and s.output_path) else self._output_path
+        self.app.push_screen(
+            SummaryScreen(
+                job, stats, events, errors,
+                output_path=out_path,
+            )
+        )
 
     def on_screen_ready(self) -> None:
-        # The scheduler spawns its own worker threads and calls back from
-        # them; those threads have no Textual active-app context, so grab a
-        # direct reference now rather than touching self.app from there.
         self._app = self.app
         self.app.on_shutdown_hook = self._stop.set
         self._render_sidebar()
@@ -307,11 +334,14 @@ class RunScreen(BaseScreen):
         return bool(panel is not None and panel.collapsed)
 
     def _apply_responsive(self) -> None:
-        narrow = (self.size.width or 120) < NARROW_TERMINAL
-        pane = self.query_one("#sidebar-pane")
-        if pane.display == narrow:
-            pane.display = not narrow
-            self.narrow_bar.display = narrow
+        try:
+            narrow = (self.size.width or 120) < NARROW_TERMINAL
+            pane = self.query_one("#sidebar-pane")
+            if pane.display == narrow:
+                pane.display = not narrow
+                self.narrow_bar.display = narrow
+        except Exception:
+            pass
 
     # ── Multi-tab session management ──────────────────────────────────────────
 
@@ -462,9 +492,18 @@ class RunScreen(BaseScreen):
     @work(thread=True)
     def _run_single_session(self, session_idx: int) -> None:
         app = self._app
+        if app is None:
+            return
         post = app.call_from_thread
         session = self.sessions[session_idx]
         registry = app.registry
+
+        def safe_post(fn, *args, **kwargs):
+            try:
+                if not session.stop.is_set() and not self._stop.is_set() and getattr(app, "is_running", True):
+                    post(fn, *args, **kwargs)
+            except Exception:
+                pass
 
         provider = None
         if not session.job.uses_combo:
@@ -472,30 +511,30 @@ class RunScreen(BaseScreen):
                 provider = registry.get_provider(session.job.provider_id)
             except Exception as exc:
                 if session_idx == self.active_session_index:
-                    post(self._on_notice, "error", str(exc))
+                    safe_post(self._on_notice, "error", str(exc))
                 return
         try:
             pool = build_pool(
                 session.job,
                 registry,
                 provider=provider,
-                on_switch=lambda event: post(self._session_switch, session_idx, event),
-                on_notice=lambda kind, msg: post(self._session_notice, session_idx, kind, msg),
+                on_switch=lambda event: safe_post(self._session_switch, session_idx, event),
+                on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
             )
         except AllConnectionsUnavailable as exc:
             if session_idx == self.active_session_index:
-                post(self._on_notice, "error", str(exc))
+                safe_post(self._on_notice, "error", str(exc))
             return
 
         engine = ProcessingEngine(
             session.job,
             provider,
             connection_pool=pool,
-            on_status=lambda status: post(self._session_status, session_idx, status),
-            on_event=lambda event: post(self._session_event, session_idx, event),
-            on_notice=lambda kind, msg: post(self._session_notice, session_idx, kind, msg),
-            on_batch_start=lambda task, worker: post(self._session_batch_start, session_idx, task),
-            on_result=lambda task, result: post(self._session_result, session_idx, task, result),
+            on_status=lambda status: safe_post(self._session_status, session_idx, status),
+            on_event=lambda event: safe_post(self._session_event, session_idx, event),
+            on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
+            on_batch_start=lambda task, worker: safe_post(self._session_batch_start, session_idx, task),
+            on_result=lambda task, result: safe_post(self._session_result, session_idx, task, result),
             stop_event=session.stop,
             registry=registry,
         )
@@ -518,47 +557,65 @@ class RunScreen(BaseScreen):
         except Exception:
             session.output_path = session.job.out_path
 
-        post(self._session_finished, session_idx, stats)
+        safe_post(self._session_finished, session_idx, stats)
 
     def _session_status(self, session_idx: int, status: WorkerStatus) -> None:
-        session = self.sessions[session_idx]
-        session.workers[status.worker_id] = status
-        session.ledger.note(status)
-        if session_idx == self.active_session_index:
-            self._on_status(status)
+        try:
+            session = self.sessions[session_idx]
+            session.workers[status.worker_id] = status
+            session.ledger.note(status)
+            if session_idx == self.active_session_index:
+                self._on_status(status)
+        except Exception:
+            pass
 
     def _session_batch_start(self, session_idx: int, task: BatchTask) -> None:
-        if session_idx == self.active_session_index:
-            self._on_batch_start(task)
+        try:
+            if session_idx == self.active_session_index:
+                self._on_batch_start(task)
+        except Exception:
+            pass
 
     def _session_result(self, session_idx: int, task: BatchTask, result: BatchResult) -> None:
-        session = self.sessions[session_idx]
-        for row, text in result.results.items():
-            source = dict(task.rows).get(row, "")
-            session.feed_lines.append((row, source, text))
-            if len(session.feed_lines) > 200:
-                session.feed_lines = session.feed_lines[-200:]
-        session.done_rows += task.size
-        total = session.plan_total or session.job.num_rows or max(1, session.done_rows)
-        pct = min(100, int(session.done_rows / total * 100))
-        if getattr(self, "tab_bar", None) is not None:
-            self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
-        if session_idx == self.active_session_index:
-            self._on_result(task, result)
+        try:
+            session = self.sessions[session_idx]
+            for row, text in result.results.items():
+                source = dict(task.rows).get(row, "")
+                session.feed_lines.append((row, source, text))
+                if len(session.feed_lines) > 200:
+                    session.feed_lines = session.feed_lines[-200:]
+            session.done_rows += task.size
+            total = session.plan_total or session.job.num_rows or max(1, session.done_rows)
+            pct = min(100, int(session.done_rows / total * 100))
+            if getattr(self, "tab_bar", None) is not None:
+                self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
+            if session_idx == self.active_session_index:
+                self._on_result(task, result)
+        except Exception:
+            pass
 
     def _session_event(self, session_idx: int, event: ScheduleEvent) -> None:
-        session = self.sessions[session_idx]
-        session.events.append(getattr(event, "message", "") or "")
-        if session_idx == self.active_session_index:
-            self._on_event(event)
+        try:
+            session = self.sessions[session_idx]
+            session.events.append(getattr(event, "message", "") or "")
+            if session_idx == self.active_session_index:
+                self._on_event(event)
+        except Exception:
+            pass
 
     def _session_notice(self, session_idx: int, kind: str, msg: str) -> None:
-        if session_idx == self.active_session_index:
-            self._on_notice(kind, msg)
+        try:
+            if session_idx == self.active_session_index:
+                self._on_notice(kind, msg)
+        except Exception:
+            pass
 
     def _session_switch(self, session_idx: int, event: SwitchEvent) -> None:
-        if session_idx == self.active_session_index:
-            self._on_switch(event)
+        try:
+            if session_idx == self.active_session_index:
+                self._on_switch(event)
+        except Exception:
+            pass
 
     def _session_finished(self, session_idx: int, stats: ProcessStats) -> None:
         session = self.sessions[session_idx]
@@ -566,8 +623,21 @@ class RunScreen(BaseScreen):
         session.stats = stats
         if getattr(self, "tab_bar", None) is not None:
             self.tab_bar.update_tab(session_idx, progress_text="100%", status="done")
-        if session_idx == self.active_session_index:
+        if not getattr(self, "is_multi_tab", False):
             self._job_finished(stats)
+            return
+
+        all_done = all(s.finished for s in self.sessions)
+        if all_done:
+            self._finished = True
+            self.refresh_keys()
+            self._render_sidebar()
+            self._on_notice("done", "All files have finished translating! Press 's' to view summary.")
+        elif session_idx == self.active_session_index:
+            self._finished = True
+            self.refresh_keys()
+            self._render_sidebar()
+            self._on_notice("info", f"{os.path.basename(session.job.src_path)} finished. Other files still running.")
 
     # ── Callbacks (main thread) ───────────────────────────────────────────────
 
