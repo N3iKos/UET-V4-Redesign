@@ -796,12 +796,19 @@ class JudgeModelScreen(JudgeWizardScreen):
         )
         from .file_engine import FileEngineScreen
         self.app.push_screen(FileEngineScreen(
-            title="Select a spreadsheet to review",
+            title="Select spreadsheet(s) to review (up to 4)",
             on_accept=self._file_engine_accepted,
+            on_accept_multiple=self._file_engine_accepted_multiple,
+            max_files=4,
             next_screen=lambda: JudgeColumnsScreen(),
             existing_path=self.draft.get("path", ""),
             sort_translated_first=True,
         ))
+
+    def _file_engine_accepted_multiple(self, paths: list[str]) -> None:
+        if paths:
+            self.draft["paths"] = paths
+            self._file_engine_accepted(paths[0])
 
     def _file_engine_accepted(self, path: str) -> None:
         if path != self.draft.get("path"):
@@ -1239,7 +1246,12 @@ class JudgeColumnsScreen(JudgeWizardScreen):
 
     def compose_body(self) -> ComposeResult:
         yield Label("Columns and range", classes="title")
-        yield Label(os.path.basename(self.draft.get("path", "")), classes="hint")
+        paths = self.draft.get("paths") or []
+        if len(paths) > 1:
+            first_name = os.path.basename(paths[0])
+            yield Label(f"{first_name} (+{len(paths) - 1} other files)", classes="hint")
+        else:
+            yield Label(os.path.basename(self.draft.get("path", "")), classes="hint")
         self._preview = ColumnPreview(id="judge-preview", classes="panel")
         yield self._preview
         yield Label("")
@@ -1461,28 +1473,38 @@ class JudgeColumnsScreen(JudgeWizardScreen):
         )
         if app_prefs.dedup_mode() != "disabled":
             from ...core.dedup_file import prepare_unique_file
-            full_path = self.draft["path"]
-            try:
-                unique, mapping, total_rows, unique_rows = prepare_unique_file(
-                    full_path, src_col, dst_col, start, num_rows,
-                    full_path if "_Translated" in os.path.splitext(full_path)[0] else "",
-                )
-            except Exception as exc:
-                error.update(f"Cannot prepare unique working file: {exc}")
-                return
-            if mapping:
-                unique_output = translated_path(unique)
-                if os.path.exists(unique_output):
-                    unique = unique_output
-                self.draft.update(
-                    full_path=os.path.abspath(full_path), path=os.path.abspath(unique),
-                    map_path=os.path.abspath(mapping), num_rows=unique_rows,
-                )
-                skipped = total_rows - unique_rows
+            paths_to_dedup = self.draft.get("paths") or [self.draft["path"]]
+            multi_info = {}
+            for fp in paths_to_dedup:
+                try:
+                    f_total = ExcelReader.row_count(fp)
+                    f_avail = max(0, f_total - start + 1)
+                    f_num_rows = min(num_rows, f_avail) if num_rows > 0 else f_avail
+                    unique, mapping, total_rows, unique_rows = prepare_unique_file(
+                        fp, src_col, dst_col, start, f_num_rows,
+                        fp if "_Translated" in os.path.splitext(fp)[0] else "",
+                    )
+                    if mapping:
+                        unique_output = translated_path(unique)
+                        if os.path.exists(unique_output):
+                            unique = unique_output
+                        multi_info[fp] = {
+                            "full_path": os.path.abspath(fp),
+                            "path": os.path.abspath(unique),
+                            "map_path": os.path.abspath(mapping),
+                            "num_rows": unique_rows,
+                            "file_total_rows": total_rows,
+                        }
+                except Exception as exc:
+                    pass
+            self.draft["multi_targets_info"] = multi_info
+            first_p = paths_to_dedup[0]
+            if first_p in multi_info:
+                self.draft.update(multi_info[first_p])
+                skipped = multi_info[first_p]["file_total_rows"] - multi_info[first_p]["num_rows"]
                 self.notify_status(
-                    f"Deduplication: {unique_rows:,} unique rows "
-                    f"({skipped:,} duplicates skipped — "
-                    f"{skipped / max(1, total_rows) * 100:.1f}% savings).",
+                    f"Deduplication: {multi_info[first_p]['num_rows']:,} unique rows "
+                    f"({skipped:,} duplicates skipped).",
                     OK,
                 )
         # New order (UET_UX §6): file & columns → criteria → language & style →
@@ -1577,6 +1599,22 @@ def _judge_rows_default() -> int:
         return app_prefs.max_rows_per_request()
     except Exception:
         return config.DEFAULT_MAX_ROWS_PER_REQUEST
+
+
+def _targets_from(draft: dict) -> list[JudgeTarget]:
+    """Build a list of JudgeTarget instances for multi-file review (up to 4), or a single target."""
+    paths = draft.get("paths")
+    if paths and len(paths) > 1:
+        targets = []
+        multi_info = draft.get("multi_targets_info", {})
+        for p in paths:
+            t_draft = dict(draft)
+            t_draft["path"] = p
+            if p in multi_info:
+                t_draft.update(multi_info[p])
+            targets.append(_target_from(t_draft))
+        return targets
+    return [_target_from(draft)]
 
 
 def _target_from(draft: dict) -> JudgeTarget:
