@@ -2273,6 +2273,9 @@ class JudgeSession:
     file_total_count: int = 0
     live_rows: dict[int, str] = field(default_factory=dict)
     pending_live: list[tuple[int, object]] = field(default_factory=list)
+    by_row: dict[int, tuple[str, str]] = field(default_factory=dict)
+    live_notes: dict[int, str] = field(default_factory=dict)
+    live_styles: dict[int, str] = field(default_factory=dict)
     issue_active: bool = False
     aborted_run: bool = False
     stop: threading.Event = field(default_factory=threading.Event)
@@ -2678,14 +2681,27 @@ class JudgeRunScreen(BaseScreen):
     def on_screen_ready(self) -> None:
         self._app = self.app
         self.app.on_shutdown_hook = self._stop.set
-        self._expected_rows, self._unique_rows_count, self._file_total_count = self._count_rows()
-        # (source, translation) per row, read once with the count. The live grid
-        # needs the source text for a row the moment its verdict lands, and
-        # reading the sheet per row — or per repaint — would be absurd.
-        self._by_row = {
-            row: (source, translation)
-            for row, source, translation in self._expected_rows
-        }
+        if getattr(self, "is_multi_tab", False):
+            for s in self.sessions:
+                rows, uniq, total = self._count_rows_for(s.target)
+                s.expected_rows = len(rows)
+                s.unique_rows_count = uniq
+                s.file_total_count = total
+                s.by_row = {row: (source, translation) for row, source, translation in rows}
+            first_s = self.sessions[0]
+            self._expected_rows = first_s.expected_rows
+            self._unique_rows_count = first_s.unique_rows_count
+            self._file_total_count = first_s.file_total_count
+            self._by_row = dict(first_s.by_row)
+        else:
+            rows, uniq, total = self._count_rows_for(self._target)
+            self._expected_rows = len(rows)
+            self._unique_rows_count = uniq
+            self._file_total_count = total
+            self._by_row = {
+                row: (source, translation)
+                for row, source, translation in rows
+            }
         self.set_interval(0.12, self._repaint)
         # The same columns the live flush will use, so the header does not change
         # shape the moment the first row lands.
@@ -2695,26 +2711,29 @@ class JudgeRunScreen(BaseScreen):
         self._paint_rail()
         self._evaluate()
 
-    def _count_rows(self) -> tuple[list, int, int]:
+    def _count_rows_for(self, target: JudgeTarget) -> tuple[list, int, int]:
         """
-        The rows this evaluation will review, read once.
+        The rows this evaluation will review, read once for a specific target.
         Returns (rows, unique_rows_to_evaluate, total_rows_in_file).
         """
         try:
-            runner = JudgeRunner(target=self._target, criteria=self._criteria)
+            runner = JudgeRunner(target=target, criteria=self._criteria)
             rows, _contexts = runner.load_rows()
             plan = runner.plan(rows)
             file_total = plan.total_rows
-            if getattr(self._target, "map_path", "") and os.path.exists(self._target.map_path):
+            if getattr(target, "map_path", "") and os.path.exists(target.map_path):
                 try:
                     import json
-                    with open(self._target.map_path, "r", encoding="utf-8") as f:
+                    with open(target.map_path, "r", encoding="utf-8") as f:
                         file_total = int(json.load(f).get("total_rows", file_total))
                 except Exception:
                     pass
             return rows, plan.unique_rows, file_total
         except Exception:
-            return [], 0, 0
+            return [], target.num_rows or 0, target.num_rows or 0
+
+    def _count_rows(self) -> tuple[list, int, int]:
+        return self._count_rows_for(self._target)
 
     def _columns(self) -> list[Column]:
         """
@@ -3406,20 +3425,27 @@ class JudgeRunScreen(BaseScreen):
             self._reviewed_rows.clear()
             app.call_from_thread(self._begin_op, "Judge", self._model_slot)
             app.call_from_thread(self.refresh_keys)
+        def safe_call(fn, *args, **kwargs):
+            try:
+                if not session.stop.is_set() and not self._stop.is_set() and getattr(app, "is_running", True):
+                    app.call_from_thread(fn, *args, **kwargs)
+            except Exception:
+                pass
+
         try:
             runner = self._make_runner(
                 target=session.target,
                 stop_event=session.stop,
-                on_row=lambda row, issue: app.call_from_thread(
+                on_row=lambda row, issue: safe_call(
                     self._session_row_reviewed, session_idx, row, issue
                 ),
-                on_section=lambda index, total, rows, ok: app.call_from_thread(
+                on_section=lambda index, total, rows, ok: safe_call(
                     self._session_section_done, session_idx, index, total, rows, ok
                 ),
-                on_status=lambda status: app.call_from_thread(
+                on_status=lambda status: safe_call(
                     self._session_status, session_idx, status
                 ),
-                on_event=lambda event: app.call_from_thread(
+                on_event=lambda event: safe_call(
                     self._session_event, session_idx, event
                 ),
             )
@@ -3429,10 +3455,10 @@ class JudgeRunScreen(BaseScreen):
             report = runner.evaluate()
         except Exception as exc:
             if session_idx == self.active_session_index:
-                app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
+                safe_call(self._failed, f"{type(exc).__name__}: {exc}")
             session.run_state = "failed"
             return
-        app.call_from_thread(self._session_evaluated, session_idx, report)
+        safe_call(self._session_evaluated, session_idx, report)
 
     def _session_row_reviewed(self, session_idx: int, row: int, issue) -> None:
         session = self.sessions[session_idx]
@@ -3442,7 +3468,9 @@ class JudgeRunScreen(BaseScreen):
             session.flagged_rows.add(row)
             session.flagged_live.append((row, issue))
             del session.flagged_live[:-200]
-        total = session.unique_rows_count or session.expected_rows or max(1, len(session.reviewed_rows))
+            session.live_notes[row] = f"{issue.label} · {issue.comment}"
+            session.live_styles[row] = _SEVERITY_STYLES.get(getattr(issue, "severity", ""), WARN)
+        total = session.unique_rows_count or session.expected_rows or max(1, session.target.num_rows or 1)
         pct = min(100, int(len(session.reviewed_rows) / total * 100))
         if getattr(self, "tab_bar", None) is not None:
             self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
@@ -3630,6 +3658,9 @@ class JudgeRunScreen(BaseScreen):
         s.file_total_count = getattr(self, "_file_total_count", 0)
         s.live_rows = dict(self._live_rows)
         s.pending_live = list(self._pending_live)
+        s.by_row = dict(self._by_row)
+        s.live_notes = dict(self._live_notes)
+        s.live_styles = dict(self._live_styles)
         s.issue_active = self._issue_active
         s.aborted_run = self._aborted_run
         s.stop = self._stop
@@ -3673,6 +3704,9 @@ class JudgeRunScreen(BaseScreen):
         self._file_total_count = s.file_total_count
         self._live_rows = dict(s.live_rows)
         self._pending_live = list(s.pending_live)
+        self._by_row = dict(s.by_row)
+        self._live_notes = dict(s.live_notes)
+        self._live_styles = dict(s.live_styles)
         self._issue_active = s.issue_active
         self._aborted_run = s.aborted_run
         self._stop = s.stop
@@ -3690,10 +3724,29 @@ class JudgeRunScreen(BaseScreen):
         if getattr(self, "tab_bar", None) is not None:
             self.tab_bar.switch_tab(index)
         if getattr(self, "grid", None) is not None:
-            self._rebuild_grid()
+            if self._report is not None:
+                self._fill_grid()
+            else:
+                self._rebuild_live_grid()
         if getattr(self, "rail", None) is not None:
             self._paint_rail()
         self.refresh()
+
+    def _rebuild_live_grid(self) -> None:
+        if getattr(self, "grid", None) is None or not hasattr(self.grid, "batched"):
+            return
+        fresh = []
+        for row, issue in self._flagged_live:
+            source, _tr = self._by_row.get(row, ("", ""))
+            fresh.append((row, source))
+        try:
+            with self.grid.batched():
+                self.grid.set_columns(self._columns())
+                self.grid.clear()
+                self.grid.add_rows(fresh)
+                self.grid.set_notes(dict(self._live_notes), dict(self._live_styles))
+        except Exception:
+            pass
 
     def action_next_tab(self) -> None:
         if getattr(self, "is_multi_tab", False) and self.sessions:

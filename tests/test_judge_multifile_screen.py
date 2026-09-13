@@ -106,3 +106,38 @@ def test_judge_run_screen_single_target_not_multi_tab(tmp_path):
         criteria=["mistranslation"],
     )
     assert screen.is_multi_tab is False
+
+
+def test_judge_run_screen_live_tab_switch_and_progress_percentage(tmp_path):
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f1.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    f2.write_text("id,src,dst\n1,dog,anjing\n", encoding="utf-8")
+
+    from translator.judge.models import RowIssue
+    t1 = JudgeTarget(path=str(f1), src_col=2, dst_col=3, num_rows=100)
+    t2 = JudgeTarget(path=str(f2), src_col=2, dst_col=3, num_rows=100)
+
+    screen = JudgeRunScreen(
+        target=t1,
+        targets=[t1, t2],
+        model_slot=("p", "c", "m"),
+        criteria=["mistranslation"],
+    )
+    # Set targets total rows
+    screen.sessions[0].unique_rows_count = 100
+    screen.sessions[1].unique_rows_count = 100
+
+    # Review row 1 out of 100
+    screen._session_row_reviewed(0, 1, RowIssue(1, ["mistranslation"], "wrong", "critical"))
+    # Tab 0 must show 1%, NOT 100%!
+    label0 = screen.tab_bar.get_tab_label(0)
+    assert "1%" in label0
+    assert "100%" not in label0
+
+    # Switch to tab 1 during live evaluation (without finished report)
+    # Must not raise AttributeError: 'JudgeRunScreen' object has no attribute '_rebuild_grid'
+    screen.grid = object()
+    screen.action_switch_tab(1)
+    assert screen.active_session_index == 1
+
