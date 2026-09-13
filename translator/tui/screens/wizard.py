@@ -308,13 +308,21 @@ class ReasoningScreen(WizardMenuScreen):
         self.app.pop_screen()
         from .file_engine import FileEngineScreen
         target = FileEngineScreen(
+            title="Select spreadsheet(s) to translate (up to 4)",
             on_accept=self._file_engine_accepted,
+            on_accept_multiple=self._file_engine_accepted_multiple,
+            max_files=4,
             next_screen=lambda: ColumnsScreen(),
             existing_path=self.draft.get("src_path", ""),
         )
         if note:
             target.queue_note(note, MUTED)
         self.app.push_screen(target)
+
+    def _file_engine_accepted_multiple(self, paths: list[str]) -> None:
+        if paths:
+            self.draft["src_paths"] = paths
+            self._file_engine_accepted(paths[0])
 
     def _file_engine_accepted(self, path: str) -> None:
         if path != self.draft.get("src_path"):
@@ -371,7 +379,10 @@ class ReasoningScreen(WizardMenuScreen):
             self.draft["reasoning_enabled"] = None
         from .file_engine import FileEngineScreen
         self.app.push_screen(FileEngineScreen(
+            title="Select spreadsheet(s) to translate (up to 4)",
             on_accept=self._file_engine_accepted,
+            on_accept_multiple=self._file_engine_accepted_multiple,
+            max_files=4,
             next_screen=lambda: ColumnsScreen(),
             existing_path=self.draft.get("src_path", ""),
         ))
@@ -395,7 +406,12 @@ class ColumnsScreen(WizardScreen):
 
     def compose_body(self) -> ComposeResult:
         yield Label("Columns and range", classes="title")
-        yield Label(os.path.basename(self.draft.get("src_path", "")), classes="hint")
+        paths = self.draft.get("src_paths") or []
+        if len(paths) > 1:
+            first_name = os.path.basename(paths[0])
+            yield Label(f"{first_name} (+{len(paths) - 1} other files)", classes="hint")
+        else:
+            yield Label(os.path.basename(self.draft.get("src_path", "")), classes="hint")
         self._preview = ColumnPreview(id="col-preview", classes="panel")
         yield self._preview
         yield Label("")
@@ -630,26 +646,38 @@ class ColumnsScreen(WizardScreen):
         )
         if app_prefs.dedup_mode() != "disabled":
             from ...core.dedup_file import prepare_unique_file
-            full_src = self.draft["src_path"]
-            full_out = self.draft["out_path"]
-            try:
-                unique, mapping, total_rows, unique_rows = prepare_unique_file(
-                    full_src, src_col, dst_col, start, num_rows, full_out,
-                )
-            except Exception as exc:
-                error.update(f"Cannot prepare unique working file: {exc}")
-                return
-            if mapping:
-                self.draft.update(
-                    full_src_path=full_src, full_out_path=full_out,
-                    src_path=unique, out_path=translated_path(unique),
-                    map_path=mapping, num_rows=unique_rows,
-                )
-                skipped = total_rows - unique_rows
+            src_paths = self.draft.get("src_paths") or [self.draft["src_path"]]
+            multi_info = {}
+            for sp in src_paths:
+                f_out = translated_path(sp)
+                try:
+                    f_total = ExcelReader.row_count(sp)
+                    f_avail = max(0, f_total - start + 1)
+                    f_num_rows = min(num_rows, f_avail) if num_rows > 0 else f_avail
+                    unique, mapping, total_rows, unique_rows = prepare_unique_file(
+                        sp, src_col, dst_col, start, f_num_rows, f_out,
+                    )
+                    if mapping:
+                        unique_out = translated_path(unique)
+                        multi_info[sp] = {
+                            "full_src_path": os.path.abspath(sp),
+                            "full_out_path": os.path.abspath(f_out),
+                            "src_path": os.path.abspath(unique),
+                            "out_path": os.path.abspath(unique_out),
+                            "map_path": os.path.abspath(mapping),
+                            "num_rows": unique_rows,
+                            "file_total_rows": total_rows,
+                        }
+                except Exception:
+                    pass
+            self.draft["multi_targets_info"] = multi_info
+            first_sp = src_paths[0]
+            if first_sp in multi_info:
+                self.draft.update(multi_info[first_sp])
+                skipped = multi_info[first_sp]["file_total_rows"] - multi_info[first_sp]["num_rows"]
                 self.notify_status(
-                    f"Deduplication: {unique_rows:,} unique rows "
-                    f"({skipped:,} duplicates skipped — "
-                    f"{skipped / max(1, total_rows) * 100:.1f}% savings).",
+                    f"Deduplication: {multi_info[first_sp]['num_rows']:,} unique rows "
+                    f"({skipped:,} duplicates skipped).",
                     OK,
                 )
         self.app.push_screen(LanguageStyleScreen())
@@ -1253,56 +1281,93 @@ class PreviewScreen(WizardMenuScreen):
         elif option.value == "cancel":
             self.app.go_home()
         else:
-            self.app.push_screen(RunScreen(self.build_job()))
+            jobs = build_jobs_from_draft(self.draft, getattr(self.app, "registry", None))
+            self.app.push_screen(RunScreen(job=jobs[0], jobs=jobs))
 
     def build_job(self) -> JobConfig:
-        draft = self.draft
-        preset: RateLimitPreset = draft["preset"]
-        job = JobConfig(
-            provider_id=draft["provider_id"],
-            model_id=draft["model_id"],
-            connection_id=draft.get("connection_id", ""),
-            src_path=os.path.abspath(draft["src_path"]),
-            out_path=os.path.abspath(draft["out_path"]),
-            full_src_path=os.path.abspath(draft.get("full_src_path", "")) if draft.get("full_src_path") else "",
-            full_out_path=os.path.abspath(draft.get("full_out_path", "")) if draft.get("full_out_path") else "",
-            map_path=os.path.abspath(draft.get("map_path", "")) if draft.get("map_path") else "",
-            src_col=draft["src_col"],
-            dst_col=draft["dst_col"],
-            ctx_col=draft.get("ctx_col", 0),
-            repair_col=draft.get("repair_col", 0),
-            start_row=draft["start_row"],
-            num_rows=draft["num_rows"],
-            batch_size=draft["batch_size"],
-            src_lang=draft.get("src_lang", "auto"),
-            tgt_lang=draft.get("tgt_lang", ""),
-            style_prompt=draft.get("style_prompt", ""),
-            op_mode=draft["op_mode"],
-            processing_mode=draft["processing_mode"],
-            n_workers=draft["n_workers"],
-            write_mode=draft.get("write_mode", "safe"),
-            anti_desync=draft.get("anti_desync", "auto"),
-            reasoning_effort=draft.get("reasoning_effort", ""),
-            reasoning_enabled=draft.get("reasoning_enabled"),
-            skip_filled=draft.get("skip_filled", True),
-            debug_log=draft.get("debug_log", False),
-            raw_log=draft.get("raw_log", False),
-            mode=draft.get("mode", "full"),
-        )
-        job.wave_delay = preset.wave_delay
-        job.batch_delay = preset.delay_per_request
+        return build_single_job(self.draft, getattr(self.app, "registry", None))
 
-        resolve_choice(
-            self.app.registry,
-            draft.get("provider_id", ""),
-            draft.get("connection_id", ""),
-            draft.get("model_id", ""),
-        ).apply_to(job)
 
-        if job.debug_log or job.raw_log:
-            base_out = job.full_out_path or job.full_src_path or job.out_path
-            job.log_path = os.path.splitext(base_out)[0] + "_uet.log"
-        return job
+def build_single_job(draft: dict, registry=None) -> JobConfig:
+    preset = draft.get("preset")
+    wave_delay = getattr(preset, "wave_delay", 0.0) if preset else 0.0
+    batch_delay = getattr(preset, "delay_per_request", 0.0) if preset else 0.0
+
+    job = JobConfig(
+        provider_id=draft["provider_id"],
+        model_id=draft["model_id"],
+        connection_id=draft.get("connection_id", ""),
+        src_path=os.path.abspath(draft["src_path"]),
+        out_path=os.path.abspath(draft.get("out_path", "") or translated_path(draft["src_path"])),
+        full_src_path=os.path.abspath(draft.get("full_src_path", "")) if draft.get("full_src_path") else "",
+        full_out_path=os.path.abspath(draft.get("full_out_path", "")) if draft.get("full_out_path") else "",
+        map_path=os.path.abspath(draft.get("map_path", "")) if draft.get("map_path") else "",
+        src_col=draft["src_col"],
+        dst_col=draft["dst_col"],
+        ctx_col=draft.get("ctx_col", 0),
+        repair_col=draft.get("repair_col", 0),
+        start_row=draft.get("start_row", 2),
+        num_rows=draft.get("num_rows", 0),
+        batch_size=draft.get("batch_size", 15),
+        src_lang=draft.get("src_lang", "auto"),
+        tgt_lang=draft.get("tgt_lang", ""),
+        style_prompt=draft.get("style_prompt", ""),
+        op_mode=draft.get("op_mode", "translate"),
+        processing_mode=draft.get("processing_mode", "parallel"),
+        n_workers=draft.get("n_workers", 1),
+        write_mode=draft.get("write_mode", "safe"),
+        anti_desync=draft.get("anti_desync", "auto"),
+        reasoning_effort=draft.get("reasoning_effort", ""),
+        reasoning_enabled=draft.get("reasoning_enabled"),
+        skip_filled=draft.get("skip_filled", True),
+        debug_log=draft.get("debug_log", False),
+        raw_log=draft.get("raw_log", False),
+        mode=draft.get("mode", "full"),
+    )
+    job.wave_delay = wave_delay
+    job.batch_delay = batch_delay
+
+    if registry is not None:
+        try:
+            resolve_choice(
+                registry,
+                draft.get("provider_id", ""),
+                draft.get("connection_id", ""),
+                draft.get("model_id", ""),
+            ).apply_to(job)
+        except Exception:
+            pass
+
+    if job.debug_log or job.raw_log:
+        base_out = job.full_out_path or job.full_src_path or job.out_path
+        job.log_path = os.path.splitext(base_out)[0] + "_uet.log"
+    return job
+
+
+def build_jobs_from_draft(draft: dict, registry=None) -> list[JobConfig]:
+    """Build list of JobConfig instances with smart shared rate limit allocation applied."""
+    from ...core.multi_file import distribute_workers_smart
+    src_paths = draft.get("src_paths")
+    if not src_paths or len(src_paths) <= 1:
+        return [build_single_job(draft, registry)]
+
+    multi_info = draft.get("multi_targets_info", {})
+    per_file_drafts = []
+    for sp in src_paths:
+        f_draft = dict(draft)
+        f_draft["src_path"] = sp
+        f_draft["out_path"] = translated_path(sp)
+        if sp in multi_info:
+            f_draft.update(multi_info[sp])
+        per_file_drafts.append(f_draft)
+
+    # Distribute workers smartly across shared models
+    allocations = distribute_workers_smart(per_file_drafts)
+    jobs = []
+    for f_draft, w in zip(per_file_drafts, allocations):
+        f_draft["n_workers"] = w
+        jobs.append(build_single_job(f_draft, registry))
+    return jobs
 
 
 class _TranslateEditScreen(WizardMenuScreen):

@@ -18,6 +18,7 @@ interval costs one paint, not four (FEATURE-002 NFR-201).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import os
 import threading
 import time
@@ -44,6 +45,7 @@ from ..widgets.activity import (
     EventsPanel,
     WorkerLedger,
 )
+from ..widgets.tab_bar import FileTabBar
 from ..widgets.common import (
     Option,
     TranslationFeed,
@@ -106,6 +108,29 @@ class FeedPane(VerticalScroll):
             attach()
 
 
+@dataclass
+class TranslateSession:
+    index: int
+    job: JobConfig
+    engine: ProcessingEngine | None = None
+    started: float = field(default_factory=time.time)
+    workers: dict[int, WorkerStatus] = field(default_factory=dict)
+    ledger: WorkerLedger = field(default_factory=WorkerLedger)
+    events: list[str] = field(default_factory=list)
+    last_log_body: str = ""
+    last_log_count: int = 0
+    error_tally: dict[str, int] = field(default_factory=dict)
+    switches: list[str] = field(default_factory=list)
+    done_rows: int = 0
+    stats: ProcessStats | None = None
+    plan_total: int | None = None
+    finished: bool = False
+    output_path: str = ""
+    file_total_count: int = 0
+    stop: threading.Event = field(default_factory=threading.Event)
+    feed_lines: list[tuple[int, str, str]] = field(default_factory=list)
+
+
 class RunScreen(BaseScreen):
     breadcrumb = "Running"
 
@@ -125,10 +150,33 @@ class RunScreen(BaseScreen):
         Binding("pagedown", "scroll_feed_page(1)", "page down", show=False),
         Binding("home", "scroll_feed_home", "top", show=False),
         Binding("end", "scroll_feed_end", "bottom", show=False),
+        Binding("1", "switch_tab(0)", "tab 1", show=False),
+        Binding("2", "switch_tab(1)", "tab 2", show=False),
+        Binding("3", "switch_tab(2)", "tab 3", show=False),
+        Binding("4", "switch_tab(3)", "tab 4", show=False),
+        Binding("bracketleft", "prev_tab", "prev tab", show=False),
+        Binding("bracketright", "next_tab", "next tab", show=False),
     ]
 
-    def __init__(self, job: JobConfig, **kwargs) -> None:
+    def __init__(self, job: JobConfig, jobs: list[JobConfig] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self.jobs = list(jobs) if jobs else [job]
+        self.is_multi_tab = len(self.jobs) > 1
+        self.sessions = [
+            TranslateSession(
+                index=i,
+                job=j,
+                stats=ProcessStats(total=j.num_rows),
+                output_path=j.out_path,
+            )
+            for i, j in enumerate(self.jobs)
+        ]
+        self.active_session_index = 0
+        self.tab_bar = FileTabBar(
+            tabs=[j.src_path for j in self.jobs],
+            id="translate-tab-bar",
+            on_tab_switch=self.action_switch_tab,
+        ) if self.is_multi_tab else None
         self.job = job
         self._stop = threading.Event()
         # When the first `c` (graceful stop) landed; a second press within
@@ -176,6 +224,8 @@ class RunScreen(BaseScreen):
     # ── Layout ────────────────────────────────────────────────────────────────
 
     def compose_body(self) -> ComposeResult:
+        if getattr(self, "is_multi_tab", False) and self.tab_bar is not None:
+            yield self.tab_bar
         self.feed = TranslationFeed()
         # Right rail, from top: the fixed state block (progress, rows, model),
         # then the worker panel and the events panel — Worker above Events —
@@ -260,10 +310,94 @@ class RunScreen(BaseScreen):
             pane.display = not narrow
             self.narrow_bar.display = narrow
 
+    # ── Multi-tab session management ──────────────────────────────────────────
+
+    def _save_current_session(self) -> None:
+        if not getattr(self, "is_multi_tab", False) or not (0 <= self.active_session_index < len(self.sessions)):
+            return
+        s = self.sessions[self.active_session_index]
+        s.job = self.job
+        s.engine = self._engine
+        s.started = self._started
+        s.workers = dict(self._workers)
+        s.ledger = self._ledger
+        s.events = list(self._events)
+        s.last_log_body = self._last_log_body
+        s.last_log_count = self._last_log_count
+        s.error_tally = dict(self._error_tally)
+        s.switches = list(self._switches)
+        s.done_rows = self._done_rows
+        s.stats = self._stats
+        s.plan_total = self._plan_total
+        s.finished = self._finished
+        s.output_path = self._output_path
+        s.file_total_count = self._file_total_count
+        s.stop = self._stop
+
+    def _load_session(self, index: int) -> None:
+        if not (0 <= index < len(self.sessions)):
+            return
+        s = self.sessions[index]
+        self.job = s.job
+        self._engine = s.engine
+        self._started = s.started
+        self._workers = dict(s.workers)
+        self._ledger = s.ledger
+        self._events = list(s.events)
+        self._last_log_body = s.last_log_body
+        self._last_log_count = s.last_log_count
+        self._error_tally = dict(s.error_tally)
+        self._switches = list(s.switches)
+        self._done_rows = s.done_rows
+        self._stats = s.stats or ProcessStats(total=s.job.num_rows)
+        self._plan_total = s.plan_total
+        self._finished = s.finished
+        self._output_path = s.output_path
+        self._file_total_count = s.file_total_count
+        self._stop = s.stop
+        self.active_session_index = index
+
+    def action_switch_tab(self, index: int) -> None:
+        if not getattr(self, "is_multi_tab", False) or not (0 <= index < len(self.sessions)):
+            return
+        if index == self.active_session_index:
+            return
+        self._save_current_session()
+        self._load_session(index)
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.switch_tab(index)
+        s = self.sessions[index]
+        if hasattr(self, "feed") and self.feed is not None:
+            self.feed.clear()
+            for rn, src, tr in s.feed_lines:
+                self.feed.add(rn, src, tr)
+        if hasattr(self, "_app") and getattr(self, "sidebar", None) is not None:
+            try:
+                self._render_sidebar()
+            except Exception:
+                pass
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def action_next_tab(self) -> None:
+        if getattr(self, "is_multi_tab", False) and self.sessions:
+            self.action_switch_tab((self.active_session_index + 1) % len(self.sessions))
+
+    def action_prev_tab(self) -> None:
+        if getattr(self, "is_multi_tab", False) and self.sessions:
+            self.action_switch_tab((self.active_session_index - 1) % len(self.sessions))
+
     # ── Engine thread ─────────────────────────────────────────────────────────
 
     @work(thread=True)
     def _run_job(self) -> None:
+        if getattr(self, "is_multi_tab", False):
+            for i in range(len(self.sessions)):
+                self._run_single_session(i)
+            return
+
         app = self._app
         post = app.call_from_thread
 
@@ -287,8 +421,6 @@ class RunScreen(BaseScreen):
                 on_notice=lambda kind, msg: post(self._on_notice, kind, msg),
             )
         except AllConnectionsUnavailable as exc:
-            # A combo whose models have all been deleted, or a provider with no
-            # usable connection. Said plainly rather than crashing the screen.
             post(self._on_notice, "error", str(exc))
             post(self._job_finished, ProcessStats(total=self.job.num_rows))
             return
@@ -313,19 +445,126 @@ class RunScreen(BaseScreen):
                 stats = engine.run_repair()
             else:
                 stats = engine.run_translate()
-        except Exception as exc:                     # never let a crash eat the screen
+        except Exception as exc:
             post(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
             stats = ProcessStats(total=self.job.num_rows)
 
-        # Where the results actually landed: normally job.out_path, but a locked
-        # target may have redirected the writer to a numbered sibling. The
-        # summary must point at the real file, not the name that was refused.
         try:
             self._output_path = engine.output_path
         except Exception:
             self._output_path = self.job.out_path
 
         post(self._job_finished, stats)
+
+    @work(thread=True)
+    def _run_single_session(self, session_idx: int) -> None:
+        app = self._app
+        post = app.call_from_thread
+        session = self.sessions[session_idx]
+        registry = app.registry
+
+        provider = None
+        if not session.job.uses_combo:
+            try:
+                provider = registry.get_provider(session.job.provider_id)
+            except Exception as exc:
+                if session_idx == self.active_session_index:
+                    post(self._on_notice, "error", str(exc))
+                return
+        try:
+            pool = build_pool(
+                session.job,
+                registry,
+                provider=provider,
+                on_switch=lambda event: post(self._session_switch, session_idx, event),
+                on_notice=lambda kind, msg: post(self._session_notice, session_idx, kind, msg),
+            )
+        except AllConnectionsUnavailable as exc:
+            if session_idx == self.active_session_index:
+                post(self._on_notice, "error", str(exc))
+            return
+
+        engine = ProcessingEngine(
+            session.job,
+            provider,
+            connection_pool=pool,
+            on_status=lambda status: post(self._session_status, session_idx, status),
+            on_event=lambda event: post(self._session_event, session_idx, event),
+            on_notice=lambda kind, msg: post(self._session_notice, session_idx, kind, msg),
+            on_batch_start=lambda task, worker: post(self._session_batch_start, session_idx, task),
+            on_result=lambda task, result: post(self._session_result, session_idx, task, result),
+            stop_event=session.stop,
+            registry=registry,
+        )
+        session.engine = engine
+        if session_idx == self.active_session_index:
+            self._engine = engine
+
+        try:
+            if session.job.op_mode == "retranslate_failed":
+                stats, _ = engine.run_retranslate_failed()
+            elif session.job.op_mode.startswith("repair"):
+                stats = engine.run_repair()
+            else:
+                stats = engine.run_translate()
+        except Exception as exc:
+            stats = ProcessStats(total=session.job.num_rows)
+
+        try:
+            session.output_path = engine.output_path
+        except Exception:
+            session.output_path = session.job.out_path
+
+        post(self._session_finished, session_idx, stats)
+
+    def _session_status(self, session_idx: int, status: WorkerStatus) -> None:
+        session = self.sessions[session_idx]
+        session.workers[status.worker_id] = status
+        session.ledger.note(status)
+        if session_idx == self.active_session_index:
+            self._on_status(status)
+
+    def _session_batch_start(self, session_idx: int, task: BatchTask) -> None:
+        if session_idx == self.active_session_index:
+            self._on_batch_start(task)
+
+    def _session_result(self, session_idx: int, task: BatchTask, result: BatchResult) -> None:
+        session = self.sessions[session_idx]
+        for row, text in result.results.items():
+            source = dict(task.rows).get(row, "")
+            session.feed_lines.append((row, source, text))
+            if len(session.feed_lines) > 200:
+                session.feed_lines = session.feed_lines[-200:]
+        session.done_rows += task.size
+        total = session.plan_total or session.job.num_rows or max(1, session.done_rows)
+        pct = min(100, int(session.done_rows / total * 100))
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
+        if session_idx == self.active_session_index:
+            self._on_result(task, result)
+
+    def _session_event(self, session_idx: int, event: ScheduleEvent) -> None:
+        session = self.sessions[session_idx]
+        session.events.append(getattr(event, "message", "") or "")
+        if session_idx == self.active_session_index:
+            self._on_event(event)
+
+    def _session_notice(self, session_idx: int, kind: str, msg: str) -> None:
+        if session_idx == self.active_session_index:
+            self._on_notice(kind, msg)
+
+    def _session_switch(self, session_idx: int, event: SwitchEvent) -> None:
+        if session_idx == self.active_session_index:
+            self._on_switch(event)
+
+    def _session_finished(self, session_idx: int, stats: ProcessStats) -> None:
+        session = self.sessions[session_idx]
+        session.finished = True
+        session.stats = stats
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.update_tab(session_idx, progress_text="100%", status="done")
+        if session_idx == self.active_session_index:
+            self._job_finished(stats)
 
     # ── Callbacks (main thread) ───────────────────────────────────────────────
 

@@ -3156,6 +3156,10 @@ class JudgeRunScreen(BaseScreen):
         if target_workers is not None and target_workers > 0:
             job.n_workers = int(target_workers)
 
+        # Multi-tab smart shared pool: if multiple files share this session's model, split workers
+        if getattr(self, "is_multi_tab", False) and len(self.targets) > 1 and workers is None:
+            job.n_workers = max(1, job.n_workers // len(self.targets))
+
         if job.n_workers <= 1 and job.processing_mode == "parallel":
             job.processing_mode = "sequential"
         job.max_completion_tokens = 4096

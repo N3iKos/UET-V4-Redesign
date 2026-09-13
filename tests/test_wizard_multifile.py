@@ -38,3 +38,24 @@ def test_multiple_targets_built_from_paths():
     assert [t.path for t in targets] == ["test1.csv", "test2.csv", "test3.csv"]
     assert all(t.src_col == 1 for t in targets)
     assert all(t.src_lang == "Japanese" for t in targets)
+
+
+def test_build_jobs_from_translate_draft():
+    from translator.tui.screens.wizard import build_jobs_from_draft
+    draft = {
+        "provider_id": "ag",
+        "model_id": "gemini-3-flash",
+        "src_paths": ["f1.csv", "f2.csv"],
+        "src_path": "f1.csv",
+        "src_col": 1,
+        "dst_col": 2,
+        "n_workers": 20,
+    }
+    jobs = build_jobs_from_draft(draft)
+    assert len(jobs) == 2
+    assert jobs[0].src_path == os.path.abspath("f1.csv")
+    assert jobs[1].src_path == os.path.abspath("f2.csv")
+    # Same model = automatically shared workers! 20 // 2 = 10 each
+    assert jobs[0].n_workers == 10
+    assert jobs[1].n_workers == 10
+

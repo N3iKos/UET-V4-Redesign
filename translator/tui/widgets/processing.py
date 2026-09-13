@@ -233,6 +233,14 @@ class ProcessingForm(Vertical):
             derived += (
                 f" · ~{preset.sustainable_rows_per_minute(rows):,} rows/min sustained"
             )
+        src_paths = self._draft.get("src_paths") or self._draft.get("paths") or []
+        if len(src_paths) > 1:
+            count = len(src_paths)
+            share_w = max(1, workers // count)
+            derived += (
+                f"\nMulti-File Smart Shared Pool: {workers} total workers ÷ {count} files = "
+                f"{share_w} worker(s)/file across all {count} selected files"
+            )
         try:
             self.query_one("#processing-derived", Static).update(derived)
         except Exception:
