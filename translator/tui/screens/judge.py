@@ -324,18 +324,28 @@ class JudgeSetupScreen(JudgeWizardScreen):
         if job is not None:
             # Everything about the file is already known, so the wizard's
             # later steps arrive filled in and can be walked through with Enter.
-            multi_paths = [j.full_out_path or j.out_path for j in self._jobs]
+            multi_paths = []
             multi_info = {}
             for j in self._jobs:
                 p = j.full_out_path or j.out_path
+                if ".uet_cache" in p:
+                    base_name = os.path.basename(p)
+                    clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", base_name)
+                    p = os.path.abspath(clean_name)
+                multi_paths.append(p)
                 multi_info[p] = {
-                    "full_path": j.full_out_path or j.out_path,
-                    "path": j.out_path,
-                    "map_path": j.map_path,
-                    "num_rows": j.num_rows,
+                    "full_path": p,
+                    "path": p,
+                    "map_path": "",
+                    "num_rows": 0,
                 }
+            primary_path = job.full_out_path or job.out_path
+            if ".uet_cache" in primary_path:
+                base_name = os.path.basename(primary_path)
+                clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", base_name)
+                primary_path = os.path.abspath(clean_name)
             draft.update(
-                path=job.out_path,
+                path=primary_path,
                 paths=multi_paths,
                 multi_targets_info=multi_info,
                 src_col=job.src_col,

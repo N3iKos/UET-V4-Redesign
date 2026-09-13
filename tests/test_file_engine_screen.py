@@ -78,3 +78,16 @@ def test_file_engine_custom_manual_paths(tmp_path):
     assert paths == [str(f1), str(f2)]
 
 
+def test_file_engine_ignores_cache_path():
+    from translator.tui.screens.file_engine import FileEngineScreen
+    cache_path = r"D:\proj\.uet_cache\test.unique_Translated.csv"
+    screen = FileEngineScreen(
+        on_accept=lambda p: None,
+        existing_path=cache_path,
+        next_screen=None,
+    )
+    assert screen._existing == ""
+    assert screen.selected_files == []
+
+
+

@@ -47,6 +47,8 @@ class FileEngineScreen(BaseScreen):
                  **kwargs) -> None:
         super().__init__(**kwargs)
         self._title = title
+        if existing_path and ".uet_cache" in existing_path:
+            existing_path = ""
         self._confirm_label = confirm_label
         self._on_accept = on_accept
         self._on_accept_multiple = on_accept_multiple
@@ -54,7 +56,9 @@ class FileEngineScreen(BaseScreen):
         self._next = next_screen
         self._existing = existing_path
         self._sort_translated = sort_translated_first
-        self.selected_files: list[str] = [existing_path] if existing_path and os.path.isfile(existing_path) else []
+        self.selected_files: list[str] = (
+            [existing_path] if existing_path and os.path.isfile(existing_path) and ".uet_cache" not in existing_path else []
+        )
 
     def parse_manual_paths(self, text: str) -> list[str]:
         """Parse single or multiple comma/semicolon-separated paths, checking existence."""
@@ -152,6 +156,8 @@ class FileEngineScreen(BaseScreen):
 
     def on_screen_ready(self) -> None:
         files = ExcelReader.scan_directory(os.getcwd())
+        scanned_paths = {os.path.abspath(os.path.join(os.getcwd(), name)) for name in files}
+        self.selected_files = [p for p in self.selected_files if os.path.abspath(p) in scanned_paths]
         options = []
         selected_set = {os.path.abspath(p) for p in self.selected_files}
         for name in files:

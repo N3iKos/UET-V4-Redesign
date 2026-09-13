@@ -171,7 +171,7 @@ class ProcessingEngine:
         fallback to a numbered sibling, in which case telling the user the
         original name would send them to a file that never received the run.
         """
-        return self._writer.active_path
+        return self._job.full_out_path or self._writer.active_path
 
     def _announce_plan(self, rows: int) -> None:
         """
@@ -770,6 +770,12 @@ class ProcessingEngine:
                 self._job.full_out_path, self._dst_col,
             )
             self.write_log(f"[sync] broadcast {synced} cell(s) to full output")
+            # Clean up temporary unique files in .uet_cache after successful broadcast
+            unique_out = self._output_path()
+            if unique_out and os.path.exists(unique_out) and unique_out != self._job.full_out_path and ".uet_cache" in unique_out:
+                os.remove(unique_out)
+            if self._job.src_path and os.path.exists(self._job.src_path) and self._job.src_path != self._job.full_src_path and ".uet_cache" in self._job.src_path:
+                os.remove(self._job.src_path)
         except Exception as exc:
             self._notice("error", f"Final full-file sync failed: {exc}")
 
