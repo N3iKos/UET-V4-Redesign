@@ -56,9 +56,21 @@ class FileEngineScreen(BaseScreen):
         self._sort_translated = sort_translated_first
         self.selected_files: list[str] = [existing_path] if existing_path and os.path.isfile(existing_path) else []
 
+    def parse_manual_paths(self, text: str) -> list[str]:
+        """Parse single or multiple comma/semicolon-separated paths, checking existence."""
+        import re
+        parts = re.split(r"[,;]+", text or "")
+        paths: list[str] = []
+        for p in parts:
+            cleaned = os.path.abspath(os.path.expanduser(p.strip().strip('"').strip("'")))
+            if cleaned and os.path.isfile(cleaned):
+                if cleaned not in paths:
+                    paths.append(cleaned)
+        return paths[:self._max_files]
+
     def toggle_selection(self, path: str) -> None:
         """Toggle a file in or out of multi-selection up to max_files."""
-        canon = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
+        canon = os.path.abspath(os.path.expanduser((path or "").strip().strip('"').strip("'")))
         if not canon or not os.path.isfile(canon):
             return
         # Compare canonical paths
@@ -69,16 +81,36 @@ class FileEngineScreen(BaseScreen):
         else:
             if len(self.selected_files) < self._max_files:
                 self.selected_files.append(canon)
+            else:
+                try:
+                    error = self.query_one("#file-error", Label)
+                    error.update(f"Maximum {self._max_files} files allowed")
+                except Exception:
+                    pass
+        self._sync_picker_checkboxes()
         self._update_selection_display()
+
+    def _sync_picker_checkboxes(self) -> None:
+        if not hasattr(self, "picker") or self.picker is None:
+            return
+        selected_set = {os.path.abspath(p) for p in self.selected_files}
+        for opt in getattr(self.picker, "options", []):
+            if opt.value:
+                opt.selected = os.path.abspath(str(opt.value)) in selected_set
+        self.picker.refresh()
 
     def confirm_selection(self) -> bool:
         """Confirm selected files or the manual path."""
         valid_paths = [p for p in self.selected_files if os.path.isfile(p)]
         if not valid_paths:
-            raw = (getattr(self, "_path", None) and self._path.input.value or "").strip().strip('"')
-            path = os.path.abspath(os.path.expanduser(raw))
-            if os.path.isfile(path):
-                valid_paths = [path]
+            raw = (getattr(self, "_path", None) and self._path.input.value or "").strip()
+            manual = self.parse_manual_paths(raw)
+            if manual:
+                valid_paths = manual
+            else:
+                path = os.path.abspath(os.path.expanduser(raw.strip('"').strip("'")))
+                if os.path.isfile(path):
+                    valid_paths = [path]
         if not valid_paths:
             return False
         if self._on_accept_multiple is not None:
@@ -96,7 +128,7 @@ class FileEngineScreen(BaseScreen):
             self._path.input.value = self.selected_files[0]
         else:
             names = ", ".join(os.path.basename(p) for p in self.selected_files)
-            self._path.input.value = f"[{count}/{self._max_files} files] {names}"
+            self._path.input.value = f"Selected ({count}/{self._max_files} files): {names}"
 
     def compose_body(self) -> ComposeResult:
         yield Label(self._title, classes="title")
@@ -121,6 +153,7 @@ class FileEngineScreen(BaseScreen):
     def on_screen_ready(self) -> None:
         files = ExcelReader.scan_directory(os.getcwd())
         options = []
+        selected_set = {os.path.abspath(p) for p in self.selected_files}
         for name in files:
             full = os.path.join(os.getcwd(), name)
             try:
@@ -128,7 +161,10 @@ class FileEngineScreen(BaseScreen):
                 size_text = f"{size / 1024:.1f} MB" if size > 1024 else f"{size:.0f} KB"
             except OSError:
                 size_text = "?"
-            options.append(Option(name, full, hint=size_text))
+            opt = Option(name, full, hint=size_text)
+            if os.path.abspath(full) in selected_set:
+                opt.selected = True
+            options.append(opt)
         if self._sort_translated:
             options.sort(key=lambda o: (
                 0 if config.TRANSLATED_SUFFIX.lower() in o.label.lower() else 1,
@@ -137,6 +173,7 @@ class FileEngineScreen(BaseScreen):
         if not options:
             options.append(Option("No spreadsheet found here — type a path below", "",
                                   enabled=False, style=MUTED))
+        self.picker.multi_select = True
         self.picker.set_options(options)
         scroll = self.query_one("#file-scroll", VerticalScroll)
         scroll.styles.height = min(len(options), FILE_BOX_MAX) + 2
@@ -149,8 +186,29 @@ class FileEngineScreen(BaseScreen):
 
     def on_picker_highlighted(self, event: Picker.Highlighted) -> None:
         if event.picker is self.picker and event.option and event.option.value:
-            self._path.input.value = str(event.option.value)
+            if not self.selected_files:
+                self._path.input.value = str(event.option.value)
             self._keep_cursor_visible()
+
+    def on_picker_toggled(self, event: Picker.Toggled) -> None:
+        if event.picker is self.picker and event.option and event.option.value:
+            val = str(event.option.value)
+            canon = os.path.abspath(val)
+            if event.option.selected:
+                if len(self.selected_files) >= self._max_files:
+                    event.option.selected = False
+                    self.picker.refresh()
+                    try:
+                        error = self.query_one("#file-error", Label)
+                        error.update(f"Maximum {self._max_files} files allowed")
+                    except Exception:
+                        pass
+                    return
+                if canon not in [os.path.abspath(p) for p in self.selected_files]:
+                    self.selected_files.append(canon)
+            else:
+                self.selected_files = [p for p in self.selected_files if os.path.abspath(p) != canon]
+            self._update_selection_display()
 
     def _keep_cursor_visible(self) -> None:
         """Scroll the box so the cursor row never leaves view."""
@@ -196,8 +254,19 @@ class FileEngineScreen(BaseScreen):
                 self.app.push_screen(self._next())
             return
 
-        raw = (self._path.input.value or "").strip().strip('"')
-        path = os.path.expanduser(raw)
+        raw = (self._path.input.value or "").strip()
+        manual = self.parse_manual_paths(raw)
+        if manual:
+            if self._on_accept_multiple is not None:
+                self._on_accept_multiple(manual)
+            self._on_accept(manual[0])
+            if self._next is None:
+                self.app.pop_screen()
+            else:
+                self.app.push_screen(self._next())
+            return
+
+        path = os.path.abspath(os.path.expanduser(raw.strip('"').strip("'")))
         error = self.query_one("#file-error", Label)
 
         def accept(path_: str) -> None:

@@ -56,3 +56,25 @@ def test_file_engine_multiple_selection(tmp_path):
     screen.confirm_selection()
     assert selected == [str(f1), str(f2), str(f3)]
 
+
+def test_file_engine_custom_manual_paths(tmp_path):
+    f1 = tmp_path / "custom1.csv"
+    f2 = tmp_path / "custom2.csv"
+    f1.write_text("a,b\n1,2\n", encoding="utf-8")
+    f2.write_text("a,b\n3,4\n", encoding="utf-8")
+
+    from translator.tui.screens.file_engine import FileEngineScreen
+    selected = []
+    screen = FileEngineScreen(
+        on_accept=lambda p: None,
+        on_accept_multiple=lambda paths: selected.extend(paths),
+        max_files=4,
+        next_screen=None,
+    )
+    # User types custom multiple paths separated by comma
+    manual_input = f'"{f1}", "{f2}"'
+    assert hasattr(screen, "parse_manual_paths")
+    paths = screen.parse_manual_paths(manual_input)
+    assert paths == [str(f1), str(f2)]
+
+
