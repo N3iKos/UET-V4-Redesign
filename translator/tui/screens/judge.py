@@ -151,6 +151,7 @@ from ..widgets.common import (
 from ..widgets.compare import Column, CompareGrid
 from ..widgets.model_picker import ModelPicker
 from ..widgets.processing import ProcessingForm
+from ..widgets.tab_bar import FileTabBar
 from ...parsing.columns import detect_columns
 
 # The setup is one length now — Quick/Full is gone (UET_UX §6). Every evaluation
@@ -1902,8 +1903,10 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
         if not go:
             return
         draft = self.draft
+        targets = _targets_from(draft)
         self.app.push_screen(JudgeRunScreen(
-            target=self._target(),
+            target=targets[0],
+            targets=targets,
             model_slot=(draft["provider_id"], draft["connection_id"], draft["model_id"]),
             criteria=self._criteria(),
             # Full mode's pacing step, or None in Quick where nothing was asked.
@@ -2149,6 +2152,49 @@ class GridPane(VerticalScroll):
             attach()
 
 
+@dataclass
+class JudgeSession:
+    index: int
+    target: JudgeTarget
+    report: JudgeReport | None = None
+    runner: JudgeRunner | None = None
+    workers: dict[int, object] = field(default_factory=dict)
+    ledger: WorkerLedger = field(default_factory=WorkerLedger)
+    events: list[str] = field(default_factory=list)
+    busy_batch: bool = False
+    busy_row: int = 0
+    cursor_row: int = 0
+    filter: str = "problems"
+    before: dict[int, str] = field(default_factory=dict)
+    fixed_issue: dict[int, object] = field(default_factory=dict)
+    reviewed_rows: set[int] = field(default_factory=set)
+    flagged_rows: set[int] = field(default_factory=set)
+    flagged_live: list[tuple[int, object]] = field(default_factory=list)
+    fixed_live: list[tuple[int, str, bool]] = field(default_factory=list)
+    fix_seen: set[int] = field(default_factory=set)
+    fix_plan: object = None
+    rejudging: bool = False
+    rejudge_rows: list[int] = field(default_factory=list)
+    rejudge_seen: set[int] = field(default_factory=set)
+    rejudge_flagged_rows: set[int] = field(default_factory=set)
+    rejudge_flagged: list[tuple[int, object]] = field(default_factory=list)
+    rejudged_rows: set[int] = field(default_factory=set)
+    verdict_stable: set[int] = field(default_factory=set)
+    run_state: str = "running"
+    sections_done: int = 0
+    sections_total: int = 0
+    expected_rows: int = 0
+    unique_rows_count: int = 0
+    file_total_count: int = 0
+    live_rows: dict[int, str] = field(default_factory=dict)
+    pending_live: list[tuple[int, object]] = field(default_factory=list)
+    issue_active: bool = False
+    aborted_run: bool = False
+    stop: threading.Event = field(default_factory=threading.Event)
+    started_at: float = 0.0
+    elapsed: float = 0.0
+
+
 class JudgeRunScreen(BaseScreen):
     """
     The grid, the filter bar, the panel, and the actions.
@@ -2224,6 +2270,12 @@ class JudgeRunScreen(BaseScreen):
         Binding("pagedown", "scroll_grid(12)", "page down", show=False),
         Binding("home", "scroll_grid_home", "top", show=False),
         Binding("end", "scroll_grid_end", "bottom", show=False),
+        Binding("1", "switch_tab(0)", "tab 1", show=False),
+        Binding("2", "switch_tab(1)", "tab 2", show=False),
+        Binding("3", "switch_tab(2)", "tab 3", show=False),
+        Binding("4", "switch_tab(3)", "tab 4", show=False),
+        Binding("bracketleft", "prev_tab", "prev tab", show=False),
+        Binding("bracketright", "next_tab", "next tab", show=False),
     ]
 
     def __init__(
@@ -2235,9 +2287,22 @@ class JudgeRunScreen(BaseScreen):
         workers: int | None = None,
         preset=None,
         processing: dict | None = None,
+        targets: list[JudgeTarget] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        self.targets = list(targets) if targets else [target]
+        self.is_multi_tab = len(self.targets) > 1
+        self.sessions = [JudgeSession(index=i, target=t) for i, t in enumerate(self.targets)]
+        self.active_session_index = 0
+        if self.is_multi_tab:
+            self.tab_bar = FileTabBar(
+                tabs=[t.path for t in self.targets],
+                id="judge-tab-bar",
+                on_tab_switch=self.action_switch_tab,
+            )
+        else:
+            self.tab_bar = None
         self._target = target
         self._model_slot = model_slot
         self._criteria = list(criteria)
@@ -2388,6 +2453,8 @@ class JudgeRunScreen(BaseScreen):
     # ── Layout ────────────────────────────────────────────────────────────────
 
     def compose_body(self) -> ComposeResult:
+        if self.is_multi_tab and self.tab_bar is not None:
+            yield self.tab_bar
         self.grid = CompareGrid(id="judge-grid")
         self.activity = ActivityPanel(title="Workers", id="judge-activity")
         self.activity_header = ActivityHeader(self.activity, id="judge-activity-header")
@@ -3159,6 +3226,10 @@ class JudgeRunScreen(BaseScreen):
         on_row=None,
         on_fix=None,
         on_section=None,
+        target: JudgeTarget | None = None,
+        stop_event: threading.Event | None = None,
+        on_status=None,
+        on_event=None,
     ) -> JudgeRunner:
         """
         A runner wired to this screen's callbacks.
@@ -3171,9 +3242,13 @@ class JudgeRunScreen(BaseScreen):
         provider — the runner asks `build_pool`, which needs the registry to
         resolve the combo's members.
         """
+        tgt = target or self._target
+        stp = stop_event or self._stop
+        status_cb = on_status or (lambda status: self._app.call_from_thread(self._on_status, status))
+        event_cb = on_event or (lambda event: self._app.call_from_thread(self._on_event, event))
         target_max_rows = max_rows if max_rows is not None else self._max_rows
         return JudgeRunner(
-            target=self._target,
+            target=tgt,
             job=self._job(model_slot, workers),
             provider=self._provider(model_slot),
             registry=self.app.registry,
@@ -3182,21 +3257,24 @@ class JudgeRunScreen(BaseScreen):
             # saved Settings value as it always has.
             max_rows=target_max_rows,
             grading_mode=self._grading_mode,
-            on_status=lambda status: self._app.call_from_thread(
-                self._on_status, status
-            ),
-            on_event=lambda event: self._app.call_from_thread(self._on_event, event),
+            on_status=status_cb,
+            on_event=event_cb,
             on_notice=lambda kind, msg: self._app.call_from_thread(
                 self._on_notice, kind, msg
             ),
             on_row=on_row,
             on_fix=on_fix,
             on_section=on_section,
-            stop_event=self._stop,
+            stop_event=stp,
         )
 
     @work(thread=True)
     def _evaluate(self) -> None:
+        if getattr(self, "is_multi_tab", False):
+            for i in range(len(self.sessions)):
+                self._evaluate_single_session(i)
+            return
+
         app = self._app
         self._busy_batch = True
         self._flagged_rows.clear()
@@ -3219,6 +3297,101 @@ class JudgeRunScreen(BaseScreen):
             app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
             return
         app.call_from_thread(self._evaluated, report)
+
+    @work(thread=True)
+    def _evaluate_single_session(self, session_idx: int) -> None:
+        app = self._app
+        session = self.sessions[session_idx]
+        session.busy_batch = True
+        session.run_state = "running"
+        session.flagged_rows.clear()
+        session.flagged_live.clear()
+        session.reviewed_rows.clear()
+        if session_idx == self.active_session_index:
+            self._busy_batch = True
+            self._flagged_rows.clear()
+            self._flagged_live.clear()
+            self._reviewed_rows.clear()
+            app.call_from_thread(self._begin_op, "Judge", self._model_slot)
+            app.call_from_thread(self.refresh_keys)
+        try:
+            runner = self._make_runner(
+                target=session.target,
+                stop_event=session.stop,
+                on_row=lambda row, issue: app.call_from_thread(
+                    self._session_row_reviewed, session_idx, row, issue
+                ),
+                on_section=lambda index, total, rows, ok: app.call_from_thread(
+                    self._session_section_done, session_idx, index, total, rows, ok
+                ),
+                on_status=lambda status: app.call_from_thread(
+                    self._session_status, session_idx, status
+                ),
+                on_event=lambda event: app.call_from_thread(
+                    self._session_event, session_idx, event
+                ),
+            )
+            session.runner = runner
+            if session_idx == self.active_session_index:
+                self._runner = runner
+            report = runner.evaluate()
+        except Exception as exc:
+            if session_idx == self.active_session_index:
+                app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
+            session.run_state = "failed"
+            return
+        app.call_from_thread(self._session_evaluated, session_idx, report)
+
+    def _session_row_reviewed(self, session_idx: int, row: int, issue) -> None:
+        session = self.sessions[session_idx]
+        session.reviewed_rows.add(row)
+        session.pending_live.append((row, issue))
+        if issue is not None:
+            session.flagged_rows.add(row)
+            session.flagged_live.append((row, issue))
+            del session.flagged_live[:-200]
+        total = session.unique_rows_count or session.expected_rows or max(1, len(session.reviewed_rows))
+        pct = min(100, int(len(session.reviewed_rows) / total * 100))
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.update_tab(session_idx, progress_text=f"{pct}%")
+        if session_idx == self.active_session_index:
+            self._row_reviewed(row, issue)
+
+    def _session_section_done(self, session_idx: int, index: int, total: int, rows: list[int], ok: bool) -> None:
+        session = self.sessions[session_idx]
+        session.sections_done += 1
+        session.sections_total = max(session.sections_total, total, index)
+        if not ok:
+            session.reviewed_rows.update(rows)
+        if session_idx == self.active_session_index:
+            self._section_done(index, total, rows, ok)
+
+    def _session_status(self, session_idx: int, status) -> None:
+        session = self.sessions[session_idx]
+        session.workers[getattr(status, "worker_id", 0)] = status
+        session.ledger.note(status)
+        if session_idx == self.active_session_index:
+            self._on_status(status)
+
+    def _session_event(self, session_idx: int, event) -> None:
+        session = self.sessions[session_idx]
+        session.events.append(getattr(event, "message", "") or "")
+        if session_idx == self.active_session_index:
+            self._on_event(event)
+
+    def _session_evaluated(self, session_idx: int, report: JudgeReport) -> None:
+        session = self.sessions[session_idx]
+        session.busy_batch = False
+        session.run_state = "paused" if session.aborted_run else "completed"
+        session.report = report
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.update_tab(
+                session_idx,
+                progress_text="100%",
+                status="done" if not session.aborted_run else "failed",
+            )
+        if session_idx == self.active_session_index:
+            self._evaluated(report)
 
     def _row_reviewed(self, row: int, issue) -> None:
         """
@@ -3325,6 +3498,118 @@ class JudgeRunScreen(BaseScreen):
             planned = {row for row, _s, _t in self._report.rows}
         reviewed = set(self._reviewed_rows)
         return sorted(planned - reviewed)
+
+    # ── Multi-tab session switching ───────────────────────────────────────────
+
+    def _save_current_session(self) -> None:
+        if not getattr(self, "is_multi_tab", False) or not (0 <= self.active_session_index < len(self.sessions)):
+            return
+        s = self.sessions[self.active_session_index]
+        s.target = self._target
+        s.report = self._report
+        s.runner = self._runner
+        s.workers = dict(self._workers)
+        s.ledger = self._ledger
+        s.events = list(self._events)
+        s.busy_batch = self._busy_batch
+        s.busy_row = self._busy_row
+        s.cursor_row = self._cursor_row
+        s.filter = self._filter
+        s.before = dict(self._before)
+        s.fixed_issue = dict(self._fixed_issue)
+        s.reviewed_rows = set(self._reviewed_rows)
+        s.flagged_rows = set(self._flagged_rows)
+        s.flagged_live = list(self._flagged_live)
+        s.fixed_live = list(self._fixed_live)
+        s.fix_seen = set(self._fix_seen)
+        s.fix_plan = self._fix_plan
+        s.rejudging = self._rejudging
+        s.rejudge_rows = list(self._rejudge_rows)
+        s.rejudge_seen = set(self._rejudge_seen)
+        s.rejudge_flagged_rows = set(self._rejudge_flagged_rows)
+        s.rejudge_flagged = list(self._rejudge_flagged)
+        s.rejudged_rows = set(self._rejudged_rows)
+        s.verdict_stable = set(self._verdict_stable)
+        s.run_state = self._run_state
+        s.sections_done = self._sections_done
+        s.sections_total = self._sections_total
+        s.expected_rows = getattr(self, "_expected_rows", 0)
+        s.unique_rows_count = getattr(self, "_unique_rows_count", 0)
+        s.file_total_count = getattr(self, "_file_total_count", 0)
+        s.live_rows = dict(self._live_rows)
+        s.pending_live = list(self._pending_live)
+        s.issue_active = self._issue_active
+        s.aborted_run = self._aborted_run
+        s.stop = self._stop
+        s.started_at = getattr(self, "_started_at", 0.0)
+        s.elapsed = getattr(self, "_elapsed", 0.0)
+
+    def _load_session(self, index: int) -> None:
+        if not (0 <= index < len(self.sessions)):
+            return
+        s = self.sessions[index]
+        self._target = s.target
+        self._report = s.report
+        self._runner = s.runner
+        self._workers = dict(s.workers)
+        self._ledger = s.ledger
+        self._events = list(s.events)
+        self._busy_batch = s.busy_batch
+        self._busy_row = s.busy_row
+        self._cursor_row = s.cursor_row
+        self._filter = s.filter
+        self._before = dict(s.before)
+        self._fixed_issue = dict(s.fixed_issue)
+        self._reviewed_rows = set(s.reviewed_rows)
+        self._flagged_rows = set(s.flagged_rows)
+        self._flagged_live = list(s.flagged_live)
+        self._fixed_live = list(s.fixed_live)
+        self._fix_seen = set(s.fix_seen)
+        self._fix_plan = s.fix_plan
+        self._rejudging = s.rejudging
+        self._rejudge_rows = list(s.rejudge_rows)
+        self._rejudge_seen = set(s.rejudge_seen)
+        self._rejudge_flagged_rows = set(s.rejudge_flagged_rows)
+        self._rejudge_flagged = list(s.rejudge_flagged)
+        self._rejudged_rows = set(s.rejudged_rows)
+        self._verdict_stable = set(s.verdict_stable)
+        self._run_state = s.run_state
+        self._sections_done = s.sections_done
+        self._sections_total = s.sections_total
+        self._expected_rows = s.expected_rows
+        self._unique_rows_count = s.unique_rows_count
+        self._file_total_count = s.file_total_count
+        self._live_rows = dict(s.live_rows)
+        self._pending_live = list(s.pending_live)
+        self._issue_active = s.issue_active
+        self._aborted_run = s.aborted_run
+        self._stop = s.stop
+        self._started_at = s.started_at
+        self._elapsed = s.elapsed
+        self.active_session_index = index
+
+    def action_switch_tab(self, index: int) -> None:
+        if not getattr(self, "is_multi_tab", False) or not (0 <= index < len(self.sessions)):
+            return
+        if index == self.active_session_index:
+            return
+        self._save_current_session()
+        self._load_session(index)
+        if getattr(self, "tab_bar", None) is not None:
+            self.tab_bar.switch_tab(index)
+        if getattr(self, "grid", None) is not None:
+            self._rebuild_grid()
+        if getattr(self, "rail", None) is not None:
+            self._paint_rail()
+        self.refresh()
+
+    def action_next_tab(self) -> None:
+        if getattr(self, "is_multi_tab", False) and self.sessions:
+            self.action_switch_tab((self.active_session_index + 1) % len(self.sessions))
+
+    def action_prev_tab(self) -> None:
+        if getattr(self, "is_multi_tab", False) and self.sessions:
+            self.action_switch_tab((self.active_session_index - 1) % len(self.sessions))
 
     def action_retry_unfinished(self) -> None:
         """
