@@ -223,9 +223,12 @@ class RunScreen(BaseScreen):
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
+    def _compose_tab_bar(self):
+        if getattr(self, "is_multi_tab", False) and getattr(self, "tab_bar", None) is not None:
+            return self.tab_bar
+        return None
+
     def compose_body(self) -> ComposeResult:
-        if getattr(self, "is_multi_tab", False) and self.tab_bar is not None:
-            yield self.tab_bar
         self.feed = TranslationFeed()
         # Right rail, from top: the fixed state block (progress, rows, model),
         # then the worker panel and the events panel — Worker above Events —

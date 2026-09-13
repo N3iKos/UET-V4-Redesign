@@ -149,14 +149,71 @@ def _combo_options() -> list[Option]:
 
 
 class WizardScreen(BaseScreen):
-    """Adds `Step N of M` to the header and keeps the draft handy."""
+    """Adds `Step N of M` to the header, top-level browser-like tab bar, and keeps the draft handy."""
 
     step = 1
     step_title = ""
 
+    BINDINGS = [
+        Binding("1", "switch_tab(0)", "tab 1", show=False),
+        Binding("2", "switch_tab(1)", "tab 2", show=False),
+        Binding("3", "switch_tab(2)", "tab 3", show=False),
+        Binding("4", "switch_tab(3)", "tab 4", show=False),
+        Binding("bracketleft", "prev_tab", "prev tab", show=False),
+        Binding("bracketright", "next_tab", "next tab", show=False),
+    ]
+
     @property
     def draft(self) -> dict:
-        return self.app.draft
+        if hasattr(self, "_test_draft") and self._test_draft is not None:
+            return self._test_draft
+        try:
+            return self.app.draft
+        except Exception:
+            return {}
+
+    def _compose_tab_bar(self):
+        paths = self.draft.get("src_paths") or []
+        if len(paths) > 1 and self.step >= 4:
+            from ..widgets.tab_bar import FileTabBar
+            self._wizard_tab_bar = FileTabBar(
+                tabs=[f"{os.path.basename(p)}{' (Leader)' if i == 0 else ''}" for i, p in enumerate(paths)],
+                on_tab_switch=self._on_wizard_tab_switch,
+                id="wizard-tab-bar",
+            )
+            try:
+                active_idx = getattr(self.app, "_wizard_tab_index", 0)
+            except Exception:
+                active_idx = 0
+            self._wizard_tab_bar.active_tab = active_idx
+            return self._wizard_tab_bar
+        return None
+
+    def _on_wizard_tab_switch(self, index: int) -> None:
+        """Switch active file tab in the wizard."""
+        paths = self.draft.get("src_paths") or []
+        if not (0 <= index < len(paths)):
+            return
+        if hasattr(self, "app"):
+            self.app._wizard_tab_index = index
+        self.draft["src_path"] = paths[index]
+        self.on_wizard_file_switched(index)
+
+    def on_wizard_file_switched(self, index: int) -> None:
+        """Hook for wizard step screens to update their view when switching tabs."""
+        pass
+
+    def action_switch_tab(self, index: int) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.switch_tab(index)
+
+    def action_next_tab(self) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.next_tab()
+
+    def action_prev_tab(self) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.prev_tab()
 
     def _header_text(self) -> str:
         left = "UET v4 › Translate"
@@ -442,6 +499,14 @@ class ColumnsScreen(WizardScreen):
     def screen_keys(self) -> list[tuple[str, str]]:
         return [("↑↓", "move"), ("tab", "next field"), ("⏎", "confirm"),
                 ("←", "back"), ("esc", "cancel")]
+
+    def on_wizard_file_switched(self, index: int) -> None:
+        self._grid_key = None
+        self._update_preview()
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def on_screen_ready(self) -> None:
         self._debounce = None

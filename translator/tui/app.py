@@ -58,18 +58,21 @@ class BaseScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(self._header_text(), id="header")
+        tab_bar = self._compose_tab_bar()
+        if tab_bar is not None:
+            yield tab_bar
         # Scrollable so a short terminal scrolls the form instead of
         # squashing every field down to one line.
         with VerticalScroll(id="body"):
             yield from self.compose_body()
         self._status = StatusBar()
-        # One docked strip holds everything at the bottom. Two widgets both
-        # docked to the same edge do not stack in Textual — they are each
-        # placed against it and overlap — so anything that has to sit above
-        # the footer goes inside this with it and is laid out normally.
         with Vertical(id="bottom"):
             yield from self.compose_above_footer()
             yield self._status
+
+    def _compose_tab_bar(self):
+        """Top-level fixed tab bar for multi-file navigation, pinned below header."""
+        return None
 
     def on_mount(self) -> None:
         self._status.set_keys(self.screen_keys())

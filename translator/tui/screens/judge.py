@@ -210,23 +210,77 @@ def _fix_batch_default() -> int:
 
 class JudgeWizardScreen(BaseScreen):
     """
-    Adds `Step N of M` to the header and hands every step the same draft.
+    Adds `Step N of M` to the header, top-level browser-like tab bar, and hands every step the same draft.
 
     Mirrors `WizardScreen` rather than sharing it: the translate wizard's draft
     is a translation job and gets reset when that wizard starts, and an
     evaluation must not be able to trample it.
     """
 
-    #: Position in the sequence. `step_quick` is kept for the base-class shape but
-    #: mirrors `step_full` now that Quick/Full is gone.
     step_full: int = 1
     step_quick: int | None = 1
 
+    BINDINGS = [
+        Binding("1", "switch_tab(0)", "tab 1", show=False),
+        Binding("2", "switch_tab(1)", "tab 2", show=False),
+        Binding("3", "switch_tab(2)", "tab 3", show=False),
+        Binding("4", "switch_tab(3)", "tab 4", show=False),
+        Binding("bracketleft", "prev_tab", "prev tab", show=False),
+        Binding("bracketright", "next_tab", "next tab", show=False),
+    ]
+
     @property
     def draft(self) -> dict:
-        if not hasattr(self.app, "judge_draft") or self.app.judge_draft is None:
-            self.app.judge_draft = {}
-        return self.app.judge_draft
+        if hasattr(self, "_test_draft") and self._test_draft is not None:
+            return self._test_draft
+        try:
+            if not hasattr(self.app, "judge_draft") or self.app.judge_draft is None:
+                self.app.judge_draft = {}
+            return self.app.judge_draft
+        except Exception:
+            return {}
+
+    def _compose_tab_bar(self):
+        paths = self.draft.get("paths") or []
+        if len(paths) > 1 and getattr(self, "step_full", 0) >= 2:
+            self._wizard_tab_bar = FileTabBar(
+                tabs=[f"{os.path.basename(p)}{' (Leader)' if i == 0 else ''}" for i, p in enumerate(paths)],
+                on_tab_switch=self._on_wizard_tab_switch,
+                id="judge-wizard-tab-bar",
+            )
+            try:
+                active_idx = getattr(self.app, "_judge_wizard_tab_index", 0)
+            except Exception:
+                active_idx = 0
+            self._wizard_tab_bar.active_tab = active_idx
+            return self._wizard_tab_bar
+        return None
+
+    def _on_wizard_tab_switch(self, index: int) -> None:
+        paths = self.draft.get("paths") or []
+        if not (0 <= index < len(paths)):
+            return
+        try:
+            self.app._judge_wizard_tab_index = index
+        except Exception:
+            pass
+        self.draft["path"] = paths[index]
+        self.on_wizard_file_switched(index)
+
+    def on_wizard_file_switched(self, index: int) -> None:
+        pass
+
+    def action_switch_tab(self, index: int) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.switch_tab(index)
+
+    def action_next_tab(self) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.next_tab()
+
+    def action_prev_tab(self) -> None:
+        if getattr(self, "_wizard_tab_bar", None) is not None:
+            self._wizard_tab_bar.prev_tab()
 
     @property
     def step(self) -> int:
@@ -1296,6 +1350,14 @@ class JudgeColumnsScreen(JudgeWizardScreen):
 
     def screen_keys(self) -> list[tuple[str, str]]:
         return [("tab", "next field"), ("⏎", "confirm"), ("←", "back"), ("esc", "cancel")]
+
+    def on_wizard_file_switched(self, index: int) -> None:
+        self._grid_key = None
+        self._update_preview()
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def on_screen_ready(self) -> None:
         self._debounce = None
@@ -2452,9 +2514,12 @@ class JudgeRunScreen(BaseScreen):
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
+    def _compose_tab_bar(self):
+        if getattr(self, "is_multi_tab", False) and getattr(self, "tab_bar", None) is not None:
+            return self.tab_bar
+        return None
+
     def compose_body(self) -> ComposeResult:
-        if self.is_multi_tab and self.tab_bar is not None:
-            yield self.tab_bar
         self.grid = CompareGrid(id="judge-grid")
         self.activity = ActivityPanel(title="Workers", id="judge-activity")
         self.activity_header = ActivityHeader(self.activity, id="judge-activity-header")

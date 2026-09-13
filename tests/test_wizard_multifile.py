@@ -59,3 +59,39 @@ def test_build_jobs_from_translate_draft():
     assert jobs[0].n_workers == 10
     assert jobs[1].n_workers == 10
 
+
+def test_wizard_screen_tab_bar_composition():
+    from translator.tui.screens.wizard import ColumnsScreen
+    screen = ColumnsScreen()
+    # Mock draft via _test_draft
+    screen._test_draft = {
+        "src_paths": ["f1.csv", "f2.csv"],
+        "src_path": "f1.csv",
+    }
+    assert hasattr(screen, "_compose_tab_bar")
+    tab_bar = screen._compose_tab_bar()
+    assert tab_bar is not None
+    assert len(tab_bar.tabs) == 2
+    assert "f1.csv" in tab_bar.tabs[0]
+    assert "Leader" in tab_bar.tabs[0]
+    assert "f2.csv" in tab_bar.tabs[1]
+
+
+def test_judge_wizard_screen_tab_bar_composition():
+    from translator.tui.screens.judge import JudgeColumnsScreen
+    screen = JudgeColumnsScreen()
+    screen._test_draft = {
+        "paths": ["test1.csv", "test2.csv"],
+        "path": "test1.csv",
+    }
+    assert hasattr(screen, "_compose_tab_bar")
+    tab_bar = screen._compose_tab_bar()
+    assert tab_bar is not None
+    assert len(tab_bar.tabs) == 2
+    assert "test1.csv" in tab_bar.tabs[0]
+    assert "Leader" in tab_bar.tabs[0]
+    assert "test2.csv" in tab_bar.tabs[1]
+
+
+
+
