@@ -5450,10 +5450,20 @@ class JudgeRunScreen(BaseScreen):
             stop_event=operation.stop if operation else self._stop,
         ) if slot else (operation.runner if operation and operation.runner else self._make_runner(target=target))
         report = operation.report if operation else self._report
+        prior_comment = ""
+        if operation and operation.session_index < len(self.sessions):
+            s = self.sessions[operation.session_index]
+            fixed_iss = s.fixed_issue.get(row)
+            prior_comment = getattr(fixed_iss, "comment", "") or (report.comment_for(row) if report else "")
+        elif hasattr(self, "_fixed_issue"):
+            fixed_iss = self._fixed_issue.get(row)
+            prior_comment = getattr(fixed_iss, "comment", "") or (report.comment_for(row) if report else "")
+
         verdict = runner.judge_again(
             row,
             text=report.translation_for(row) if report else None,
             source=report.source_for(row) if report else None,
+            history=prior_comment,
         )
         if operation is not None:
             app.call_from_thread(self._route_operation, operation, self._rejudged, verdict, operation)
@@ -5666,10 +5676,21 @@ class JudgeRunScreen(BaseScreen):
             # CONTEXT ONLY rows the prompt shows around them.
             from ...data.app_prefs import judge_chain_context
 
+            history_map = {}
+            session = self.sessions[op.session_index] if (op and op.session_index < len(self.sessions)) else None
+            fixed_issues = session.fixed_issue if session else getattr(self, "_fixed_issue", {})
+            orig_report = op.report if op else self._report
+            for entry in subset:
+                r_num = entry[0]
+                iss = fixed_issues.get(r_num)
+                comm = getattr(iss, "comment", "") or (orig_report.comment_for(r_num) if orig_report else "")
+                if comm and comm.strip():
+                    history_map[r_num] = comm.strip()
+
             if judge_chain_context():
-                plan = runner.rechain_plan(subset)
+                plan = runner.rechain_plan(subset, history_map=history_map)
             else:
-                plan = runner.plan(subset)
+                plan = runner.plan(subset, history_map=history_map)
             fresh = runner.evaluate(plan=plan)
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"

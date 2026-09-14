@@ -53,6 +53,9 @@ DEFAULTS: dict = {
     # cross-line false positives.
     "judge_chain_context": False,
     "judge_chain_window": 1,
+    # Context-aware re-judge: provide previous critique / finding history to the arbiter
+    # so the model tests whether the fix satisfied the issue, preventing circular ping-pong.
+    "judge_context_aware_rejudge": True,
     # Judge comment style — how the FIX part of a comment may be written:
     #   auto     — the model picks per finding: exact word replacement when the
     #               fix is unambiguous, direction-only critique for style
@@ -145,6 +148,9 @@ def load_prefs() -> dict:
     prefs["judge_chain_window"] = _clamp_chain_window(
         payload.get("judge_chain_window")
     )
+    prefs["judge_context_aware_rejudge"] = bool(
+        payload.get("judge_context_aware_rejudge", True)
+    )
     prefs["translate_batch_context"] = bool(
         payload.get("translate_batch_context", False)
     )
@@ -210,6 +216,9 @@ def save_prefs(prefs: dict) -> None:
     current["judge_chain_context"] = bool(current.get("judge_chain_context", False))
     current["judge_chain_window"] = _clamp_chain_window(
         current.get("judge_chain_window")
+    )
+    current["judge_context_aware_rejudge"] = bool(
+        current.get("judge_context_aware_rejudge", True)
     )
     current["translate_batch_context"] = bool(
         current.get("translate_batch_context", False)
@@ -619,6 +628,19 @@ def set_judge_chain_window(value: int) -> int:
     clamped = _clamp_chain_window(value)
     save_prefs({"judge_chain_window": clamped})
     return clamped
+
+
+def judge_context_aware_rejudge() -> bool:
+    """
+    Whether Rejudge passes previous critique/finding context to the arbiter.
+    Enabled by default to avoid circular synonym ping-pong.
+    """
+    return bool(load_prefs()["judge_context_aware_rejudge"])
+
+
+def set_judge_context_aware_rejudge(enabled: bool) -> bool:
+    save_prefs({"judge_context_aware_rejudge": bool(enabled)})
+    return bool(enabled)
 
 
 def translate_batch_context() -> bool:

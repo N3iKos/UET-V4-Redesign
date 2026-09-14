@@ -58,9 +58,27 @@ from ..parsing.placeholders import encode_placeholders
 from .models import CRITERIA, SEVERITIES
 
 _JUDGE_SYS = (
-    "You are a strict, impartial translation reviewer. "
+    "You are an impartial, senior translation arbiter and quality evaluator. "
+    "Your mandate is to distinguish genuine translation defects from stylistic preference, "
+    "pedantic nitpicking, or prior reviewer hallucinations. "
     "You review only what is in front of you, you never rewrite the source, "
     "and you report a line only when something is actually wrong with it.\n"
+    "CORE PRINCIPLES OF ARBITRATION:\n"
+    "1. PRESUMPTION OF ADEQUACY: A translation is presumed ACCEPTABLE unless it demonstrates an "
+    "objective failure against its source. The burden of proof is high. Never flag a line simply "
+    "because you would have phrased it differently.\n"
+    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional "
+    "nuance, slang, or dialogue reactions. Differences in synonym choice, colloquial intensity, or "
+    "phrasing preference are NOT translation errors. Do NOT debate stylistic alternatives.\n"
+    "3. ARBITRATION OF PREVIOUS FINDINGS: When a row includes a PREVIOUS FINDING:\n"
+    "   - Treat it as an unverified claim, not established fact.\n"
+    "   - Test whether the previous critique was valid, or if it was pedantic nitpicking / reviewer hallucination.\n"
+    "   - If the CURRENT TRANSLATION conveys the source accurately and resolves the core issue (or was already acceptable), "
+    "DISMISS the finding entirely by omitting the row.\n"
+    "   - Never engage in circular critique (recommending Word A when Word B is used, then recommending Word B when Word A is used). "
+    "If a phrasing is defensible in context, DISMISS the claim.\n"
+    "4. OBJECTIVE ERROR THRESHOLD: Report a line ONLY if it commits an objective defect (meaning reversed, "
+    "key facts/numbers/clauses omitted or hallucinated, broken technical placeholders, or gross register violation).\n"
     "Judge every line purely against its OWN source. Several lines are batched "
     "into one request for efficiency only: they are not a passage, they are not "
     "context for one another, and they may come from unrelated parts of the "
@@ -77,9 +95,27 @@ _JUDGE_SYS = (
 # pair of neighbours re-invents the 'Missing Black Cat' bug this file's
 # isolation rule was written to kill.
 _JUDGE_SYS_CHAIN = (
-    "You are a strict, impartial translation reviewer. "
+    "You are an impartial, senior translation arbiter and quality evaluator. "
+    "Your mandate is to distinguish genuine translation defects from stylistic preference, "
+    "pedantic nitpicking, or prior reviewer hallucinations. "
     "You review only what is in front of you, you never rewrite the source, "
     "and you report a line only when something is actually wrong with it.\n"
+    "CORE PRINCIPLES OF ARBITRATION:\n"
+    "1. PRESUMPTION OF ADEQUACY: A translation is presumed ACCEPTABLE unless it demonstrates an "
+    "objective failure against its source. The burden of proof is high. Never flag a line simply "
+    "because you would have phrased it differently.\n"
+    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional "
+    "nuance, slang, or dialogue reactions. Differences in synonym choice, colloquial intensity, or "
+    "phrasing preference are NOT translation errors. Do NOT debate stylistic alternatives.\n"
+    "3. ARBITRATION OF PREVIOUS FINDINGS: When a row includes a PREVIOUS FINDING:\n"
+    "   - Treat it as an unverified claim, not established fact.\n"
+    "   - Test whether the previous critique was valid, or if it was pedantic nitpicking / reviewer hallucination.\n"
+    "   - If the CURRENT TRANSLATION conveys the source accurately and resolves the core issue (or was already acceptable), "
+    "DISMISS the finding entirely by omitting the row.\n"
+    "   - Never engage in circular critique (recommending Word A when Word B is used, then recommending Word B when Word A is used). "
+    "If a phrasing is defensible in context, DISMISS the claim.\n"
+    "4. OBJECTIVE ERROR THRESHOLD: Report a line ONLY if it commits an objective defect (meaning reversed, "
+    "key facts/numbers/clauses omitted or hallucinated, broken technical placeholders, or gross register violation).\n"
     "The rows below are CONSECUTIVE lines of the same work, in file order: a "
     "dialogue stream or narrative sequence. Use the surrounding lines as "
     "context — pronoun references, speaker reactions, callbacks, terminology "
@@ -395,14 +431,17 @@ def _rows_block(
     rows: list[tuple[int, str, str]],
     context_map: dict[int, str] | None = None,
     fitting_map: dict[int, str] | None = None,
+    history_map: dict[int, str] | None = None,
 ) -> str:
-    """Source and translation per row, numbered, with context where present."""
+    """Source and translation per row, numbered, with context and prior findings where present."""
     blocks: list[str] = []
     for row, source, translation in rows:
         lines = [f"[{row}]"]
         if context_map and (context_map.get(row) or "").strip():
             lines.append(f"  CONTEXT     : {encode_placeholders(context_map[row])}")
         lines.append(f"  SOURCE      : {encode_placeholders(source or '')}")
+        if history_map and (history_map.get(row) or "").strip():
+            lines.append(f"  PREVIOUS FINDING : {encode_placeholders(history_map[row])}")
         lines.append(f"  TRANSLATION : {encode_placeholders(translation or '')}")
         if fitting_map and (fitting_map.get(row) or "").strip():
             lines.append(f"  FITTING     : {fitting_map[row]}")
@@ -507,6 +546,7 @@ def build_judge_prompt(
     chain: bool = False,
     comment_style: str = "auto",
     fitting_map: dict[int, str] | None = None,
+    history_map: dict[int, str] | None = None,
 ) -> str:
     """
     Review one section. The reply is JSON listing only the problem rows.
@@ -593,7 +633,7 @@ def build_judge_prompt(
         f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
         f"{example}\n"
         f'If every line is acceptable, reply exactly: {{"lines": []}}\n'
-        f"\nLines:\n{_rows_block(rows, context_map, fitting_map)}\n\n"
+        f"\nLines:\n{_rows_block(rows, context_map, fitting_map, history_map)}\n\n"
         f"CRITICAL: Output ONLY the JSON object starting with {{ and ending with }}. "
         f"Do not write any preamble, introduction, markdown code fence, or explanation. "
         f'If all lines are acceptable, reply exactly: {{"lines": []}}.\n'
@@ -612,6 +652,7 @@ def build_judge_single_prompt(
     custom_placeholders: str = "",
     grading_mode: str = "severity",
     fitting: str = "",
+    history: str = "",
 ) -> str:
     """
     Re-check one row after a fix (FR-112).
@@ -624,8 +665,13 @@ def build_judge_single_prompt(
     tells the model to quote measured data, so a prompt that lists the
     criterion without the data is hallucination bait (the model would either
     pass an overflowing line or invent a measurement).
+
+    `history` is the previous critique/finding for this row, if known. Providing
+    it enables the arbiter to test whether the fix satisfied the issue rather
+    than shifting goalposts or ping-ponging synonyms.
     """
     fitting_map = {row: fitting} if (fitting or "").strip() else None
+    history_map = {row: history} if (history or "").strip() else None
     return build_judge_prompt(
         rows=[(row, source, translation)],
         criteria=criteria,
@@ -636,6 +682,7 @@ def build_judge_single_prompt(
         custom_placeholders=custom_placeholders,
         grading_mode=grading_mode,
         fitting_map=fitting_map,
+        history_map=history_map,
     )
 
 
@@ -650,6 +697,7 @@ def build_judge_rechain_prompt(
     grading_mode: str = "severity",
     comment_style: str = "auto",
     fitting_map: dict[int, str] | None = None,
+    history_map: dict[int, str] | None = None,
 ) -> str:
     """
     Re-check flagged rows with their physical neighbours as context.
@@ -694,12 +742,17 @@ def build_judge_rechain_prompt(
     entries: list[tuple[int, str]] = []
     for row, source, translation in rows:
         fitting_line_txt = (fitting_map or {}).get(row, "")
-        entries.append((row, (
-            f"[{row}] — UNDER REVIEW\n"
-            f"  SOURCE      : {encode_placeholders(source or '')}\n"
-            f"  TRANSLATION : {encode_placeholders(translation or '')}"
-            + (f"\n  FITTING     : {fitting_line_txt}" if fitting_line_txt.strip() else "")
-        )))
+        prev_finding = (history_map or {}).get(row, "")
+        lines = [
+            f"[{row}] — UNDER REVIEW",
+            f"  SOURCE      : {encode_placeholders(source or '')}",
+        ]
+        if prev_finding and prev_finding.strip():
+            lines.append(f"  PREVIOUS FINDING : {encode_placeholders(prev_finding.strip())}")
+        lines.append(f"  TRANSLATION : {encode_placeholders(translation or '')}")
+        if fitting_line_txt and fitting_line_txt.strip():
+            lines.append(f"  FITTING     : {fitting_line_txt.strip()}")
+        entries.append((row, "\n".join(lines)))
     for row, (source, translation) in neighbours.items():
         if row in review_numbers:
             continue

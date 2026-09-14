@@ -136,6 +136,7 @@ class EvaluationPlan:
     rechain: bool = False
     rechain_neighbours: dict[int, tuple[str, str]] = field(default_factory=dict)
     unique_count: int = 0
+    history_map: dict[int, str] = field(default_factory=dict)
 
     @property
     def total_rows(self) -> int:
@@ -456,7 +457,11 @@ class JudgeRunner:
             unique_count=len(askable) + len(prejudged),
         )
 
-    def rechain_plan(self, rows: list[tuple[int, str, str]]) -> EvaluationPlan:
+    def rechain_plan(
+        self,
+        rows: list[tuple[int, str, str]],
+        history_map: dict[int, str] | None = None,
+    ) -> EvaluationPlan:
         """
         A re-judge plan in dialogue-chain mode: flagged rows under review,
         their file neighbours injected as CONTEXT ONLY.
@@ -501,6 +506,7 @@ class JudgeRunner:
             max_tokens=self._max_tokens,
             rechain=True,
             rechain_neighbours=neighbours,
+            history_map=dict(history_map or {}),
         )
 
     # ── Evaluation ────────────────────────────────────────────────────────────
@@ -566,6 +572,7 @@ class JudgeRunner:
 
         def build_prompt(task: BatchTask) -> str:
             rows = task.extra["rows"]
+            h_map = plan.history_map if _saved_context_aware_rejudge() else None
             if plan.rechain:
                 # Chain-mode re-judge: the section's rows are the flagged ones
                 # under review, and their physical neighbours from the file are
@@ -583,6 +590,7 @@ class JudgeRunner:
                     grading_mode=self._grading_mode,
                     comment_style=self._comment_style(),
                     fitting_map=self._fitting_map(rows),
+                    history_map=h_map,
                 )
             return build_judge_prompt(
                 rows=rows,
@@ -596,6 +604,7 @@ class JudgeRunner:
                 chain=self._chain_enabled(),
                 comment_style=self._comment_style(),
                 fitting_map=self._fitting_map(rows),
+                history_map=h_map,
             )
 
         def apply_result(index: int, task: BatchTask, result: JudgeResult) -> None:
@@ -1331,6 +1340,7 @@ class JudgeRunner:
         criteria: list[str] | None = None,
         text: str | None = None,
         source: str | None = None,
+        history: str | None = None,
     ) -> RejudgeVerdict:
         """
         Re-check one row after a fix (FR-112).
@@ -1354,6 +1364,7 @@ class JudgeRunner:
             text = text if text is not None else file_text
 
         fitting_info = self._fitting_map([(row, source or "", text or "")]).get(row, "")
+        h_text = history if (history and _saved_context_aware_rejudge()) else ""
         prompt = build_judge_single_prompt(
             row=row,
             source=source,
@@ -1366,6 +1377,7 @@ class JudgeRunner:
             custom_placeholders=self._target.custom_placeholders,
             grading_mode=self._grading_mode,
             fitting=fitting_info,
+            history=h_text,
         )
         content, error = self._one_request(prompt, label=f"judge row {row}")
         if error:
@@ -1675,8 +1687,9 @@ class JudgeRunner:
         return getattr(self._job, "model_id", "") if self._job else ""
 
     def _temperature(self) -> float:
-        return getattr(self._job, "temperature", config.DEFAULT_TEMPERATURE) \
-            if self._job else config.DEFAULT_TEMPERATURE
+        if self._job and getattr(self._job, "temperature", None) is not None:
+            return float(self._job.temperature)
+        return 0.0
 
     def _chain_enabled(self) -> bool:
         """The dialogue-chain setting, read once per prompt build."""
@@ -1839,6 +1852,16 @@ def _saved_chain_window() -> int:
         return judge_chain_window()
     except Exception:
         return 1
+
+
+def _saved_context_aware_rejudge() -> bool:
+    """Whether Rejudge passes prior critique/finding context (Settings, default True)."""
+    try:
+        from ..data.app_prefs import judge_context_aware_rejudge
+
+        return judge_context_aware_rejudge()
+    except Exception:
+        return True
 
 
 def _saved_comment_style() -> str:
