@@ -537,17 +537,64 @@ def test_multifile_summary_lists_every_session(tmp_path):
     from translator.judge.models import JudgeReport, RowIssue
     from translator.tui.screens.judge import JudgeSummaryScreen
 
-    a = JudgeTarget(path=str(tmp_path / "alpha.csv"), src_col=1, dst_col=2)
-    b = JudgeTarget(path=str(tmp_path / "beta.csv"), src_col=1, dst_col=2)
+    a = JudgeTarget(
+        path=str(tmp_path / ".uet_cache" / "alpha.1234abcd.unique.csv"),
+        full_path=str(tmp_path / "alpha.csv"),
+        src_col=1, dst_col=2
+    )
+    b = JudgeTarget(
+        path=str(tmp_path / ".uet_cache" / "beta.5678ef01.unique.csv"),
+        full_path=str(tmp_path / "beta.csv"),
+        src_col=1, dst_col=2
+    )
     reports = [
         JudgeReport(rows=[(1, "a", "A")]),
         JudgeReport(rows=[(1, "b", "B")], issues={1: RowIssue(1, ["style"], "bad", "minor")}),
     ]
     summary = JudgeSummaryScreen(reports[0], a, sessions=[(a, reports[0], "completed"), (b, reports[1], "paused")])
     text = summary._summary()
+    # Must display clean original filenames without cache hashes or .unique!
     assert "alpha.csv" in text and "beta.csv" in text
+    assert "unique.csv" not in text
     assert "completed" in text and "paused" in text
     assert "flagged" in text
+
+
+def test_judge_smart_shared_workers_allocation(tmp_path, monkeypatch):
+    f1 = tmp_path / "a.csv"
+    f2 = tmp_path / "b.csv"
+    f3 = tmp_path / "c.csv"
+    f4 = tmp_path / "d.csv"
+    for f in [f1, f2, f3, f4]:
+        f.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+
+    class FakeApp:
+        class FakeRegistry:
+            providers = []
+        registry = FakeRegistry()
+
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: FakeApp()))
+
+    targets = [JudgeTarget(path=str(f), src_col=2, dst_col=3) for f in [f1, f2, f3, f4]]
+    # User entered 100 workers in Processing for 4 files with the same model
+    screen = JudgeRunScreen(
+        target=targets[0],
+        targets=targets,
+        model_slot=("prov1", "conn1", "model1"),
+        criteria=["mistranslation"],
+        workers=100,
+    )
+    # Each session should receive 100 // 4 = 25 workers!
+    assert hasattr(screen, "_target_workers")
+    assert screen._target_workers == [25, 25, 25, 25]
+    runner0 = screen._make_runner(target=targets[0])
+    assert runner0._job.n_workers == 25
+    runner3 = screen._make_runner(target=targets[3])
+    assert runner3._job.n_workers == 25
+    # When Fix All passes explicit workers (e.g. 10), it overrides the shared allocation
+    fix_runner = screen._make_runner(target=targets[0], workers=10)
+    assert fix_runner._job.n_workers == 10
+
 
 
 def test_fix_all_respects_dont_ask_and_rejudge_isolated(tmp_path, monkeypatch):

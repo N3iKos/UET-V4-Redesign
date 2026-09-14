@@ -9,6 +9,7 @@ Highlights the currently active tab and supports keyboard/mouse switching.
 from __future__ import annotations
 
 import os
+import re
 from typing import Callable
 from rich.text import Text
 from textual import events
@@ -129,6 +130,31 @@ class FileTabBar(Widget):
             result += character
         return result + "…"
 
+    @staticmethod
+    def _middle_ellipsize(text: str, width: int) -> str:
+        if Text(text).cell_len <= width:
+            return text
+        if width <= 1:
+            return "…"[:width]
+        ellipsis = "..." if width >= 10 else "…"
+        el_len = Text(ellipsis).cell_len
+        avail = width - el_len
+        if avail <= 0:
+            return ellipsis[:width]
+        head_len = avail // 2 + (avail % 2)
+        tail_len = avail // 2
+        head = ""
+        for ch in text:
+            if Text(head + ch).cell_len > head_len:
+                break
+            head += ch
+        tail = ""
+        for ch in reversed(text):
+            if Text(ch + tail).cell_len > tail_len:
+                break
+            tail = ch + tail
+        return head + ellipsis + tail
+
     def render_for_width(self, width: int) -> Text:
         out = Text()
         self._click_regions.clear()
@@ -143,9 +169,34 @@ class FileTabBar(Widget):
             is_active = i == self.active_tab
             inner = max(2, tab_width - 2)
             prefix = f"{i + 1}."
-            suffix_width = max(0, inner - Text(prefix).cell_len)
-            suffix = self.get_tab_label(i)[len(prefix):].lstrip()
-            label = prefix + self._ellipsize(suffix, suffix_width)
+
+            t = self._tabs_data[i]
+            status_parts = []
+            if t["progress"]:
+                status_parts.append(t["progress"])
+            if t["status"] == "done":
+                status_parts.append("✓")
+            elif t["status"] == "failed":
+                status_parts.append("✗")
+            elif t["status"] == "paused":
+                status_parts.append("⏸")
+            status_str = (" " + " ".join(status_parts)) if status_parts else ""
+
+            prefix_len = Text(prefix).cell_len
+            status_len = Text(status_str).cell_len
+
+            clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", t["name"])
+            available_for_name = inner - prefix_len - status_len
+            if available_for_name >= 4:
+                short_name = self._middle_ellipsize(clean_name, available_for_name)
+                label = f"{prefix}{short_name}{status_str}"
+            elif available_for_name > 0:
+                short_name = self._ellipsize(clean_name, available_for_name)
+                label = f"{prefix}{short_name}{status_str}"
+            else:
+                avail_status = max(0, inner - prefix_len)
+                label = prefix + self._ellipsize(status_str.strip(), avail_status)
+
             decorated = tab_width >= 4
             tab_text = f"[{label}]" if is_active and decorated else label
             if not is_active and decorated:

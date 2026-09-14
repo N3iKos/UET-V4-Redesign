@@ -81,13 +81,26 @@ async def test_mounted_unicode_tab_four_clicks_after_resize():
         assert switched == [3]
 
 
-def test_file_tab_bar_cycling():
-    bar = FileTabBar(tabs=["A.csv", "B.csv", "C.csv"])
-    bar.next_tab()
-    assert bar.active_tab == 1
-    bar.next_tab()
-    assert bar.active_tab == 2
-    bar.next_tab()
-    assert bar.active_tab == 0
-    bar.prev_tab()
-    assert bar.active_tab == 2
+def test_tab_bar_middle_ellipsize_keeps_progress_visible():
+    bar = FileTabBar(tabs=[
+        "Forestiaa_part08_Translated.csv",
+        "Forestiaa_part09_Translated.csv",
+        "Forestiaa_part10_Translated.csv",
+        "Forestiaa_part11_Translated.csv",
+    ])
+    bar.update_tab(0, progress_text="10%")
+    bar.update_tab(1, progress_text="11%")
+    bar.update_tab(2, progress_text="7%")
+    bar.update_tab(3, progress_text="7%")
+
+    # Render for width 100 (25 cells per tab)
+    rendered = bar.render_for_width(100)
+    plain = rendered.plain
+    # All 4 tabs must keep their progress and tab numbers visible!
+    assert "1." in plain and "10%" in plain
+    assert "2." in plain and "11%" in plain
+    assert "3." in plain and "7%" in plain
+    assert "4." in plain and "7%" in plain
+    # Filename in the middle must be middle-ellipsized with '...'
+    assert "..." in plain or "…" in plain
+

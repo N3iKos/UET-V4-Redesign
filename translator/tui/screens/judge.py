@@ -2444,6 +2444,15 @@ class JudgeRunScreen(BaseScreen):
         self._max_rows = int(max_rows) if max_rows else None
         self._chosen_workers = int(workers) if workers else None
         self._chosen_preset = preset
+        if self.is_multi_tab and self._chosen_workers:
+            from ...core.multi_file import distribute_workers_smart
+            drafts = [
+                {"provider_id": self._model_slot[0], "model_id": self._model_slot[2], "n_workers": self._chosen_workers}
+                for _ in self.targets
+            ]
+            self._target_workers = distribute_workers_smart(drafts)
+        else:
+            self._target_workers = [self._chosen_workers] * len(self.targets)
         # A snapshot of the processing choices made on the setup wizard's
         # Processing step. `JudgeRunScreen` is a plain screen with no wizard
         # draft of its own, so the execution mode, write mode and logging flags
@@ -3314,7 +3323,9 @@ class JudgeRunScreen(BaseScreen):
 
         # Manual worker override logic: if the user typed an override during
         # setup or Fix All, it MUST override the derived figure (bug #3 fix).
-        target_workers = workers if workers is not None else self._chosen_workers
+        target_idx = self.targets.index(tgt) if (hasattr(self, "targets") and tgt in self.targets) else getattr(self, "active_session_index", 0)
+        assigned_w = self._target_workers[target_idx] if hasattr(self, "_target_workers") and target_idx < len(self._target_workers) else self._chosen_workers
+        target_workers = workers if workers is not None else assigned_w
         if target_workers is not None and target_workers > 0:
             job.n_workers = int(target_workers)
 
@@ -6850,7 +6861,9 @@ class JudgeSummaryScreen(MenuScreen):
         if len(self._sessions) > 1:
             lines = [f"[bold {ACCENT}]Files[/]"]
             for target, session_report, status in self._sessions:
-                name = escape_markup(os.path.basename(target.path))
+                raw_path = target.full_path or target.path
+                clean_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", os.path.basename(raw_path))
+                name = escape_markup(clean_name)
                 if session_report is None:
                     lines.append(f"  {name}  [{WARN}]{escape_markup(status)}[/] · no report")
                     continue
@@ -6905,9 +6918,11 @@ class JudgeSummaryScreen(MenuScreen):
         else:
             lines.append(f"[{OK}]No issues were reported.[/]")
 
+        single_path = self._target.full_path or self._target.path
+        single_name = re.sub(r"\.[0-9a-fA-F]+\.unique", "", os.path.basename(single_path))
         lines += [
             "",
-            f"[{MUTED}]file        {escape_markup(os.path.basename(self._target.path))}[/]",
+            f"[{MUTED}]file        {escape_markup(single_name)}[/]",
             f"[{MUTED}]column      {ExcelReader.col_letter(self._target.dst_col)}[/]",
             f"[{MUTED}]criteria    {escape_markup(', '.join(report.criteria))}[/]",
             f"[{MUTED}]grading     {report.grading_mode}[/]",
