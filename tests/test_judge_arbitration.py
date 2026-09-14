@@ -136,3 +136,14 @@ def test_judge_fix_review_screen_unselects_identical_before_after():
     assert opt1.selected is False
     assert opt2.selected is True
 
+
+def test_judge_runner_plan_accepts_history_map(tmp_path):
+    csv_file = tmp_path / "dummy.csv"
+    csv_file.write_text("id,src,dst\n1,cat,kucing\n", encoding="utf-8")
+    target = JudgeTarget(path=str(csv_file), src_col=2, dst_col=3)
+    runner = JudgeRunner(target=target)
+    history = {1: "WHAT: previous error · FIX: do X"}
+    plan = runner.plan([(1, "cat", "kucing")], history_map=history)
+    assert plan.history_map == history
+
+

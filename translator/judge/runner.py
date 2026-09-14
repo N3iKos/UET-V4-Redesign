@@ -418,7 +418,11 @@ class JudgeRunner:
         ]
         return rows, contexts
 
-    def plan(self, rows: list[tuple[int, str, str]] | None = None) -> EvaluationPlan:
+    def plan(
+        self,
+        rows: list[tuple[int, str, str]] | None = None,
+        history_map: dict[int, str] | None = None,
+    ) -> EvaluationPlan:
         """
         Split the work and cost it, without sending anything.
 
@@ -455,6 +459,7 @@ class JudgeRunner:
             estimated_tokens=estimator.estimate_sections(sections),
             max_tokens=self._max_tokens,
             unique_count=len(askable) + len(prejudged),
+            history_map=dict(history_map or {}),
         )
 
     def rechain_plan(
