@@ -714,6 +714,7 @@ class ColumnsScreen(WizardScreen):
             src_paths = self.draft.get("src_paths") or [self.draft["src_path"]]
             multi_info = {}
             for sp in src_paths:
+                canon_sp = os.path.abspath(sp)
                 f_out = translated_path(sp)
                 try:
                     f_total = ExcelReader.row_count(sp)
@@ -724,8 +725,8 @@ class ColumnsScreen(WizardScreen):
                     )
                     if mapping:
                         unique_out = translated_path(unique)
-                        multi_info[sp] = {
-                            "full_src_path": os.path.abspath(sp),
+                        multi_info[canon_sp] = {
+                            "full_src_path": canon_sp,
                             "full_out_path": os.path.abspath(f_out),
                             "src_path": os.path.abspath(unique),
                             "out_path": os.path.abspath(unique_out),
@@ -733,10 +734,28 @@ class ColumnsScreen(WizardScreen):
                             "num_rows": unique_rows,
                             "file_total_rows": total_rows,
                         }
+                    else:
+                        multi_info[canon_sp] = {
+                            "full_src_path": canon_sp,
+                            "full_out_path": os.path.abspath(f_out),
+                            "src_path": canon_sp,
+                            "out_path": os.path.abspath(f_out),
+                            "map_path": "",
+                            "num_rows": unique_rows,
+                            "file_total_rows": total_rows,
+                        }
                 except Exception:
-                    pass
+                    multi_info[canon_sp] = {
+                        "full_src_path": canon_sp,
+                        "full_out_path": os.path.abspath(f_out),
+                        "src_path": canon_sp,
+                        "out_path": os.path.abspath(f_out),
+                        "map_path": "",
+                        "num_rows": num_rows,
+                        "file_total_rows": 0,
+                    }
             self.draft["multi_targets_info"] = multi_info
-            first_sp = src_paths[0]
+            first_sp = os.path.abspath(src_paths[0])
             if first_sp in multi_info:
                 self.draft.update(multi_info[first_sp])
                 skipped = multi_info[first_sp]["file_total_rows"] - multi_info[first_sp]["num_rows"]
@@ -1422,8 +1441,15 @@ def build_jobs_from_draft(draft: dict, registry=None) -> list[JobConfig]:
         f_draft = dict(draft)
         f_draft["src_path"] = sp
         f_draft["out_path"] = translated_path(sp)
-        if sp in multi_info:
+        canon_sp = os.path.abspath(sp)
+        if canon_sp in multi_info:
+            f_draft.update(multi_info[canon_sp])
+        elif sp in multi_info:
             f_draft.update(multi_info[sp])
+        else:
+            f_draft["full_src_path"] = canon_sp
+            f_draft["full_out_path"] = os.path.abspath(translated_path(sp))
+            f_draft["map_path"] = ""
         per_file_drafts.append(f_draft)
 
     # Distribute workers smartly across shared models

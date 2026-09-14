@@ -93,5 +93,32 @@ def test_judge_wizard_screen_tab_bar_composition():
     assert "test2.csv" in tab_bar.tabs[1]
 
 
+def test_targets_from_does_not_leak_map_path_to_unmapped_files():
+    # File 1 has deduplication mapping, File 2 has NO duplicates (no mapping)
+    draft = {
+        "path": "file1.csv",
+        "paths": ["file1.csv", "file2.csv"],
+        "src_col": 1,
+        "dst_col": 2,
+        "map_path": "/cache/file1.map.json",
+        "multi_targets_info": {
+            os.path.abspath("file1.csv"): {
+                "full_path": os.path.abspath("file1.csv"),
+                "path": "/cache/file1.unique.csv",
+                "map_path": "/cache/file1.map.json",
+            }
+            # Notice file2.csv has NO map_path because it has 0 duplicates
+        }
+    }
+    targets = _targets_from(draft)
+    assert len(targets) == 2
+    # File 1 has map_path
+    assert targets[0].map_path == "/cache/file1.map.json"
+    # File 2 MUST NOT inherit File 1's map_path! It must have empty map_path!
+    assert targets[1].map_path == ""
+    assert targets[1].path == "file2.csv"
+
+
+
 
 

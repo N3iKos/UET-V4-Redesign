@@ -1279,12 +1279,13 @@ class JudgeRunner:
             # so a lock or a permission error surfaces here rather than being
             # lost in a background thread.
             writer.commit()
-        if self._target.map_path and self._target.full_path:
-            from ..core.dedup_file import sync_unique_to_full
-            sync_unique_to_full(
-                self._target.map_path, writer.active_path,
-                self._target.full_path, self._target.dst_col,
-            )
+        if self._target.map_path and self._target.full_path and os.path.exists(self._target.map_path):
+            if os.path.abspath(writer.active_path) != os.path.abspath(self._target.full_path):
+                from ..core.dedup_file import sync_unique_to_full
+                sync_unique_to_full(
+                    self._target.map_path, writer.active_path,
+                    self._target.full_path, self._target.dst_col,
+                )
         self._clear_staged_cache()
         return len(payload)
 

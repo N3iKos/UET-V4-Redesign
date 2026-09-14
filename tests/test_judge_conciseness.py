@@ -101,4 +101,51 @@ def test_staged_fix_cache_autosaves_and_loads(tmp_path):
     assert loaded.texts.get(2) == "anjing setia"
 
 
+def test_judge_runner_apply_fix_without_unique_mapping_writes_successfully(tmp_path):
+    csv_file = tmp_path / "Main_Story_Translated.csv"
+    csv_file.write_text("id,source,trans\n1,scars,luka\n", encoding="utf-8")
+
+    # Target has path == full_path, and map_path is empty or points to a non-existent map
+    target = JudgeTarget(
+        path=str(csv_file),
+        full_path=str(csv_file),
+        map_path="",
+        src_col=2,
+        dst_col=3,
+        start_row=2,
+    )
+    runner = JudgeRunner(target)
+    # Apply fix should write directly to the CSV file without ValueError: Unique file does not match mapping
+    applied_count = runner.apply_fix({2: "bekas luka"})
+    assert applied_count == 1
+    content = csv_file.read_text(encoding="utf-8")
+    assert "bekas luka" in content
+
+
+def test_judge_runner_apply_fix_ignores_stale_leaked_map_path(tmp_path):
+    # If target has a leaked map_path from another file, but target.path == target.full_path,
+    # it must NOT crash with ValueError: Unique file does not match mapping!
+    csv_file = tmp_path / "Main_Story_Translated.csv"
+    csv_file.write_text("id,source,trans\n1,scars,luka\n", encoding="utf-8")
+
+    fake_map = tmp_path / "other_file.map.json"
+    fake_map.write_text("{}", encoding="utf-8")
+
+    target = JudgeTarget(
+        path=str(csv_file),
+        full_path=str(csv_file),
+        map_path=str(fake_map),
+        src_col=2,
+        dst_col=3,
+        start_row=2,
+    )
+    runner = JudgeRunner(target)
+    applied_count = runner.apply_fix({2: "bekas luka"})
+    assert applied_count == 1
+    content = csv_file.read_text(encoding="utf-8")
+    assert "bekas luka" in content
+
+
+
+
 

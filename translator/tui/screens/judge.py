@@ -1575,6 +1575,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             paths_to_dedup = self.draft.get("paths") or [self.draft["path"]]
             multi_info = {}
             for fp in paths_to_dedup:
+                canon_fp = os.path.abspath(fp)
                 try:
                     f_total = ExcelReader.row_count(fp)
                     f_avail = max(0, f_total - start + 1)
@@ -1587,17 +1588,31 @@ class JudgeColumnsScreen(JudgeWizardScreen):
                         unique_output = translated_path(unique)
                         if os.path.exists(unique_output):
                             unique = unique_output
-                        multi_info[fp] = {
-                            "full_path": os.path.abspath(fp),
+                        multi_info[canon_fp] = {
+                            "full_path": canon_fp,
                             "path": os.path.abspath(unique),
                             "map_path": os.path.abspath(mapping),
                             "num_rows": unique_rows,
                             "file_total_rows": total_rows,
                         }
+                    else:
+                        multi_info[canon_fp] = {
+                            "full_path": canon_fp,
+                            "path": canon_fp,
+                            "map_path": "",
+                            "num_rows": unique_rows,
+                            "file_total_rows": total_rows,
+                        }
                 except Exception as exc:
-                    pass
+                    multi_info[canon_fp] = {
+                        "full_path": canon_fp,
+                        "path": canon_fp,
+                        "map_path": "",
+                        "num_rows": num_rows,
+                        "file_total_rows": 0,
+                    }
             self.draft["multi_targets_info"] = multi_info
-            first_p = paths_to_dedup[0]
+            first_p = os.path.abspath(paths_to_dedup[0])
             if first_p in multi_info:
                 self.draft.update(multi_info[first_p])
                 skipped = multi_info[first_p]["file_total_rows"] - multi_info[first_p]["num_rows"]
@@ -1709,8 +1724,14 @@ def _targets_from(draft: dict) -> list[JudgeTarget]:
         for p in paths:
             t_draft = dict(draft)
             t_draft["path"] = p
-            if p in multi_info:
+            canon_p = os.path.abspath(p)
+            if canon_p in multi_info:
+                t_draft.update(multi_info[canon_p])
+            elif p in multi_info:
                 t_draft.update(multi_info[p])
+            else:
+                t_draft["full_path"] = canon_p
+                t_draft["map_path"] = ""
             targets.append(_target_from(t_draft))
         return targets
     return [_target_from(draft)]
