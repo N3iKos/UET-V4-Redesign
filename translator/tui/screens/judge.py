@@ -6693,12 +6693,21 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
                     ("e", "edit"), ("⏎", "apply"), ("esc", "discard"),
                 ])
 
+    def _build_review_options(self) -> list[Option]:
+        options = []
+        for row in self._staged.rows:
+            after_text = (self._staged.texts.get(row) or "").strip()
+            before_text = ""
+            if self._report:
+                before_text = (self._report.translation_for(row) or "").strip()
+            # If after text is effectively identical to before, unselect by default so user doesn't apply a no-op fix
+            is_same = bool(before_text and (after_text == before_text or " ".join(after_text.split()) == " ".join(before_text.split())))
+            options.append(Option(self._row_label(row), row, selected=not is_same))
+        return options
+
     def on_mount(self) -> None:
         self._app = self.app
-        self.picker.set_options([
-            Option(self._row_label(row), row, selected=True)
-            for row in self._staged.rows
-        ])
+        self.picker.set_options(self._build_review_options())
         self.picker.focus()
         self._show_detail()
 

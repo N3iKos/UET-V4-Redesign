@@ -107,3 +107,32 @@ def test_judge_runner_temperature_is_zero_deterministic(tmp_path):
     target = JudgeTarget(path=str(csv_file), src_col=2, dst_col=3)
     runner = JudgeRunner(target=target)
     assert runner._temperature() == 0.0
+
+
+def test_fix_sys_contains_mandatory_defect_and_placeholder_preservation():
+    from translator.judge.prompts import _FIX_SYS, build_fix_prompt
+    assert "MANDATORY DEFECT RESOLUTION" in _FIX_SYS
+    assert "ABSOLUTE PLACEHOLDER PRESERVATION" in _FIX_SYS
+    assert "code tokens, NOT prose" in _FIX_SYS
+
+    prompt = build_fix_prompt([(4494, "src", "dst")], {4494: "note"}, tgt_lang="Indonesian")
+    assert "Each line MUST be on its own separate line as: [ROW_NUMBER]" in prompt
+    assert "Always put a real newline before every [ROW_NUMBER]" in prompt
+
+
+def test_judge_fix_review_screen_unselects_identical_before_after():
+    from translator.judge.models import StagedFix, JudgeReport, RowIssue
+    from translator.tui.screens.judge import JudgeFixReviewScreen
+    staged = StagedFix()
+    # Row 1 has identical before & after -> should start UNCHECKED
+    # Row 2 has changed after -> should start CHECKED
+    staged.texts = {1: "sudah terbiasa", 2: "baru diubah"}
+    report = JudgeReport(rows=[(1, "src1", "sudah terbiasa"), (2, "src2", "lama")])
+    runner = object()
+    screen = JudgeFixReviewScreen(runner=runner, report=report, staged=staged)
+    options = screen._build_review_options()
+    opt1 = next(o for o in options if o.value == 1)
+    opt2 = next(o for o in options if o.value == 2)
+    assert opt1.selected is False
+    assert opt2.selected is True
+
