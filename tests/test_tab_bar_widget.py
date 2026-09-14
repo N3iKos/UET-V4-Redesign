@@ -9,6 +9,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
+from textual.app import App, ComposeResult
+
 from translator.tui.widgets.tab_bar import FileTabBar
 
 
@@ -40,6 +43,42 @@ def test_four_unicode_tabs_fit_and_keep_fourth_clickable():
     assert [index for _start, _end, index in bar._click_regions] == [0, 1, 2, 3]
     assert "1." in rendered.plain and "4." in rendered.plain
     assert "…" in rendered.plain
+
+
+def test_tab_bar_width_smaller_than_minimum_keeps_regions_inside_width():
+    bar = FileTabBar(tabs=["alpha.csv", "beta.csv", "gamma.csv", "delta.csv"])
+    rendered = bar.render_for_width(12)
+    assert rendered.cell_len <= 12
+    assert len(bar._click_regions) == 4
+    assert all(0 <= start < end <= 12 for start, end, _index in bar._click_regions)
+    assert all(f"{index}." in rendered.plain for index in range(1, 5))
+
+
+@pytest.mark.anyio
+async def test_mounted_unicode_tab_four_clicks_after_resize():
+    switched = []
+    class TabApp(App):
+        def compose(self) -> ComposeResult:
+            yield FileTabBar(
+                tabs=[f"第{i}章_非常に長い名前.csv" for i in range(1, 5)],
+                on_tab_switch=switched.append,
+                id="tabs",
+            )
+
+    app = TabApp()
+    async with app.run_test(size=(40, 8)) as pilot:
+        bar = app.query_one("#tabs", FileTabBar)
+        await pilot.pause()
+        bar.render()
+        start, end, index = bar._click_regions[3]
+        assert index == 3 and end <= bar.size.width
+        await pilot.click("#tabs", offset=((start + end - 1) // 2, 0))
+        await pilot.resize_terminal(28, 8)
+        await pilot.pause()
+        bar.render()
+        assert bar.active_tab == 3
+        assert bar._click_regions[-1][1] <= bar.size.width
+        assert switched == [3]
 
 
 def test_file_tab_bar_cycling():

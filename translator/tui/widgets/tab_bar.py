@@ -135,14 +135,21 @@ class FileTabBar(Widget):
         count = len(self._tabs_data)
         if not count:
             return out
-        available = max(count * 5, width)
-        tab_width = max(5, available // count)
+        available = max(count * 2, width)
+        base_width, remainder = divmod(available, count)
         col = 0
         for i in range(count):
+            tab_width = base_width + (1 if i < remainder else 0)
             is_active = i == self.active_tab
-            inner = max(3, tab_width - 2)
-            label = self._ellipsize(self.get_tab_label(i), inner)
-            tab_text = f"[{label}]" if is_active else f" {label} "
+            inner = max(2, tab_width - 2)
+            prefix = f"{i + 1}."
+            suffix_width = max(0, inner - Text(prefix).cell_len)
+            suffix = self.get_tab_label(i)[len(prefix):].lstrip()
+            label = prefix + self._ellipsize(suffix, suffix_width)
+            decorated = tab_width >= 4
+            tab_text = f"[{label}]" if is_active and decorated else label
+            if not is_active and decorated:
+                tab_text = f" {label} "
             padding = max(0, tab_width - Text(tab_text).cell_len)
             tab_text += " " * padding
             start_col = col

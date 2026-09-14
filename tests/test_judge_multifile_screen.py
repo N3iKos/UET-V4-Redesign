@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from translator.judge.runner import JudgeTarget
@@ -368,6 +370,64 @@ def test_cancel_is_bound_to_origin_session(tmp_path):
     assert screen.sessions[1].operation is op_b
 
 
+def test_operation_start_sets_busy_atomically(tmp_path):
+    target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    screen = JudgeRunScreen(target, ("p", "c", "m"), ["mistranslation"])
+    op = screen._start_operation(0, "Fix All", ("p", "c", "m"), busy_batch=True)
+    assert screen.sessions[0].busy_batch
+    assert screen._busy_batch
+    assert screen.sessions[0].run_state == "running"
+    assert screen.sessions[0].started_at > 0
+    assert screen._stop is op.stop
+
+
+def test_modal_origin_token_rejects_rows_after_generation_changes(tmp_path):
+    from translator.judge.models import JudgeReport, RowIssue
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    report = JudgeReport(rows=[(1, "a", "A")], issues={1: RowIssue(1, ["mistranslation"], "bad", "critical")})
+    screen.sessions[0].report = report
+    token = screen._capture_origin(rows=[1])
+    screen._start_operation(0, "Judge", ("p", "c", "m"))
+    assert not screen._origin_current(token, [1])
+    assert not screen._origin_current(token, [2])
+
+
+@pytest.mark.anyio
+async def test_fix_all_modal_callback_after_tab_switch_uses_origin(tmp_path, monkeypatch):
+    from translator.judge.models import JudgeReport, RowIssue
+    from translator.tui.screens.judge import FixAllPlan
+
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    report_a = JudgeReport(rows=[(1, "a", "A")], issues={1: RowIssue(1, ["mistranslation"], "bad", "critical")})
+    report_b = JudgeReport(rows=[(1, "b", "B")])
+    screen.sessions[0].report = screen._report = report_a
+    screen.sessions[1].report = report_b
+    from translator.tui.widgets.compare import Column, CompareGrid
+    screen.grid = CompareGrid()
+    screen.grid.set_sources([(1, "a")], [Column("J", "TRANSLATION", "model", "done", {1: "A"})])
+    captured = {}
+    class App:
+        judge_fix_slot = None
+        registry = type("Registry", (), {"providers": []})()
+        def push_screen(self, modal, callback):
+            captured["modal"] = modal
+            captured["callback"] = callback
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: App()))
+    screen.action_fix_all(force=True)
+    screen.grid = None
+    screen.action_switch_tab(1)
+    monkeypatch.setattr(screen, "refresh_keys", lambda: None)
+    monkeypatch.setattr(screen, "notify_status", lambda *args: None)
+    monkeypatch.setattr(screen, "_begin_op", lambda *args: None)
+    monkeypatch.setattr(screen, "_fix_many", lambda plan, operation: captured.update(operation=operation))
+    captured["callback"](FixAllPlan(("p", "c", "m"), rows=[1], criteria=["mistranslation"]))
+    assert captured["operation"].target is targets[0]
+    assert captured["operation"].report is report_a
+    assert screen.sessions[1].report is report_b
+
+
 def test_multifile_summary_lists_every_session(tmp_path):
     from translator.judge.models import JudgeReport, RowIssue
     from translator.tui.screens.judge import JudgeSummaryScreen
@@ -420,7 +480,7 @@ def test_fix_all_respects_dont_ask_and_rejudge_isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: fake_app))
 
     confirmed_plans = []
-    screen._fix_all_confirmed = lambda plan: confirmed_plans.append(plan)
+    screen._fix_all_confirmed = lambda origin, plan: confirmed_plans.append(plan)
 
     # 1. action_fix_all() should respect Don't ask and NOT push FixAllSetupScreen!
     screen.action_fix_all(force=False)

@@ -74,7 +74,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 
 from rich.text import Text
 from textual import events, work
@@ -2263,6 +2263,16 @@ class JudgeOperation:
     stop: threading.Event
 
 
+@dataclass(frozen=True)
+class JudgeOrigin:
+    session_index: int
+    session_id: int
+    generation: int
+    target: JudgeTarget
+    report: JudgeReport | None
+    rows: frozenset[int]
+
+
 @dataclass
 class JudgeSession:
     index: int
@@ -3388,6 +3398,7 @@ class JudgeRunScreen(BaseScreen):
         stop_event: threading.Event | None = None,
         on_status=None,
         on_event=None,
+        on_notice=None,
     ) -> JudgeRunner:
         """
         A runner wired to this screen's callbacks.
@@ -3423,9 +3434,9 @@ class JudgeRunScreen(BaseScreen):
             grading_mode=self._grading_mode,
             on_status=status_cb,
             on_event=event_cb,
-            on_notice=lambda kind, msg: _safe_thread_call(
+            on_notice=on_notice or (lambda kind, msg: _safe_thread_call(
                 self._on_notice, kind, msg
-            ),
+            )),
             on_row=on_row,
             on_fix=on_fix,
             on_section=on_section,
@@ -3577,8 +3588,10 @@ class JudgeRunScreen(BaseScreen):
         session = self.sessions[session_idx]
         if generation is not None and session.generation != generation:
             return
-        session.busy_batch = False
-        session.run_state = "paused" if session.aborted_run else "completed"
+        operation = session.operation
+        terminal = "paused" if session.aborted_run else "completed"
+        if operation is not None:
+            self._finish_operation(operation, terminal)
         session.report = report
         if getattr(self, "tab_bar", None) is not None:
             self.tab_bar.update_tab(
@@ -3671,6 +3684,10 @@ class JudgeRunScreen(BaseScreen):
                 f"F fixes what this filter shows, e edits it by hand.",
                 WARN,
             )
+
+    def _operation_failed(self, operation: JudgeOperation, message: str) -> None:
+        self._finish_operation(operation, "failed")
+        self._failed(message)
 
     def _failed(self, message: str) -> None:
         self._busy_batch = False
@@ -3850,16 +3867,18 @@ class JudgeRunScreen(BaseScreen):
         if not rows:
             self.notify_status("Nothing is unfinished — the run completed.", MUTED)
             return
-        self._busy_batch = True
-        self._run_state = "running"
         self._aborted_run = False
         self._retry_rows = list(rows)
+        operation = self._start_operation(
+            self.active_session_index, "Judge", self._model_slot,
+            report=self._report, busy_batch=True,
+        )
         self._begin_op("Judge", self._model_slot)
         self.refresh_keys()
         self.notify_status(
             f"Retrying {len(rows)} unfinished row(s)…", ACCENT
         )
-        self._retry_unfinished(list(rows))
+        self._retry_unfinished(list(rows), operation)
 
     def _begin_rejudge_filtered(
         self, rows: list[int], slot: tuple[str, str, str],
@@ -3884,34 +3903,52 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_many(list(rows), slot, operation, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
-    def _retry_unfinished(self, rows: list[int]) -> None:
+    def _retry_unfinished(self, rows: list[int], operation: JudgeOperation) -> None:
         app = self._app
         wanted = set(rows)
         try:
             runner = self._make_runner(
+                target=operation.target,
+                stop_event=operation.stop,
+                on_status=lambda status: app.call_from_thread(
+                    self._operation_status, operation, status
+                ),
+                on_event=lambda event: app.call_from_thread(
+                    self._operation_event, operation, event
+                ),
+                on_notice=lambda kind, message: app.call_from_thread(
+                    self._operation_notice, operation, kind, message
+                ),
                 on_row=lambda row, issue: app.call_from_thread(
-                    self._row_reviewed, row, issue
+                    self._route_operation, operation, self._row_reviewed, row, issue
                 ),
                 on_section=lambda index, total, section_rows, ok:
                     app.call_from_thread(
-                        self._section_done, index, total, section_rows, ok
+                        self._route_operation, operation, self._section_done,
+                        index, total, section_rows, ok
                     ),
             )
+            operation = dataclass_replace(operation, runner=runner)
+            self.sessions[operation.session_index].operation = operation
             all_rows, _contexts = runner.load_rows()
             subset = [entry for entry in all_rows if entry[0] in wanted]
             if not subset:
-                app.call_from_thread(self._retry_done, None)
+                app.call_from_thread(self._route_operation, operation, self._retry_done, None, operation)
                 return
             plan = runner.plan(subset)
             fresh = runner.evaluate(plan=plan)
         except Exception as exc:
-            app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
+            app.call_from_thread(
+                self._route_operation, operation, self._operation_failed,
+                operation, f"{type(exc).__name__}: {exc}",
+            )
             return
-        app.call_from_thread(self._retry_done, fresh)
+        app.call_from_thread(self._route_operation, operation, self._retry_done, fresh, operation)
 
-    def _retry_done(self, fresh: "JudgeReport | None") -> None:
-        self._busy_batch = False
-        self._run_state = "completed"
+    def _retry_done(
+        self, fresh: "JudgeReport | None", operation: JudgeOperation,
+    ) -> None:
+        self._finish_operation(operation, "completed")
         self.refresh_keys()
         report = self._report
         if report is None:
@@ -4238,6 +4275,8 @@ class JudgeRunScreen(BaseScreen):
         slot: tuple[str, str, str] | None,
         report: JudgeReport | None = None,
         runner: JudgeRunner | None = None,
+        busy_batch: bool = False,
+        busy_row: int = 0,
     ) -> JudgeOperation:
         session = self.sessions[session_index]
         session.generation += 1
@@ -4247,6 +4286,9 @@ class JudgeRunScreen(BaseScreen):
         session.started_at = time.monotonic()
         session.elapsed = 0.0
         session.cancel_requested_at = 0.0
+        session.busy_batch = busy_batch
+        session.busy_row = busy_row
+        session.run_state = "running"
         session.op_label = label
         session.op_slot = slot or self._model_slot
         operation = JudgeOperation(
@@ -4264,6 +4306,33 @@ class JudgeRunScreen(BaseScreen):
         if session_index == self.active_session_index:
             self._load_session(session_index)
         return operation
+
+    def _capture_origin(self, rows: list[int] | None = None) -> JudgeOrigin:
+        session = self.sessions[self.active_session_index]
+        report = session.report if session.report is not None else self._report
+        return JudgeOrigin(
+            session_index=session.index,
+            session_id=id(session),
+            generation=session.generation,
+            target=session.target,
+            report=report,
+            rows=frozenset(rows or []),
+        )
+
+    def _origin_current(self, origin: JudgeOrigin, rows: list[int] | None = None) -> bool:
+        if not 0 <= origin.session_index < len(self.sessions):
+            return False
+        session = self.sessions[origin.session_index]
+        requested = set(rows or origin.rows)
+        members = {row for row, _source, _translation in origin.report.rows} if origin.report else set()
+        return (
+            id(session) == origin.session_id
+            and session.generation == origin.generation
+            and session.target is origin.target
+            and session.report is origin.report
+            and requested <= origin.rows
+            and requested <= members
+        )
 
     def _operation_current(self, operation: JudgeOperation) -> bool:
         if not 0 <= operation.session_index < len(self.sessions):
@@ -4300,6 +4369,12 @@ class JudgeRunScreen(BaseScreen):
         if operation.session_index == self.active_session_index:
             self._workers = session.workers
             self._ledger = session.ledger
+
+    def _operation_event(self, operation: JudgeOperation, event) -> None:
+        self._route_operation(operation, self._on_event, event)
+
+    def _operation_notice(self, operation: JudgeOperation, kind: str, message: str) -> None:
+        self._route_operation(operation, self._on_notice, kind, message)
 
     def _operation_rejudge_row_landed(self, operation: JudgeOperation, row: int, issue) -> None:
         if not self._operation_current(operation):
@@ -4670,7 +4745,10 @@ class JudgeRunScreen(BaseScreen):
             # Second press inside the window: force. Sever the sockets under
             # every in-flight request; the blocked reads raise in their worker
             # threads, which see the stop flag and give up without retrying.
-            self._force_abort()
+            if active_op is not None:
+                self._force_abort(active_op)
+            else:
+                self._force_abort()
             self._run_state = "cancelled"
             if hasattr(self, "_ledger"):
                 self._ledger.reset_all_idle()
@@ -4711,7 +4789,7 @@ class JudgeRunScreen(BaseScreen):
         )
         self.refresh_keys()
 
-    def _force_abort(self) -> None:
+    def _force_abort(self, operation: JudgeOperation | None = None) -> None:
         """
         Sever every HTTP request this screen's operation has in flight.
 
@@ -4724,9 +4802,10 @@ class JudgeRunScreen(BaseScreen):
         """
         from ...providers.client import abort_all_for
 
-        self._stop.set()
+        stop = operation.stop if operation is not None else self._stop
+        stop.set()
         try:
-            abort_all_for(self._stop)
+            abort_all_for(stop)
         except Exception:
             # The registry is best-effort: with or without it, the stop flag
             # alone still ends the run at the next checkpoint — every result
@@ -4786,31 +4865,34 @@ class JudgeRunScreen(BaseScreen):
         """Repair one row: reuse the session model, or ask for one via popup."""
         if self._busy_batch or self._busy_row:
             return
+        origin = self._capture_origin([row])
         session_slot = getattr(self.app, "judge_fix_slot", None)
         if session_slot is not None:
-            self._begin_fix_row(row, session_slot)
+            self._fix_model_chosen(origin, row, (session_slot, True))
             return
         self.app.push_screen(
             FixModelPopup(model_slot=self._model_slot),
-            lambda result: self._fix_model_chosen(row, result),
+            lambda result, token=origin: self._fix_model_chosen(token, row, result),
         )
 
-    def _fix_model_chosen(self, row: int, result) -> None:
+    def _fix_model_chosen(self, origin: JudgeOrigin, row: int, result) -> None:
         """The Fix popup came back: (slot, remember) or None."""
-        if not result:
+        if not result or not self._origin_current(origin, [row]):
             return
         slot, remember = result
         if remember:
             # Reused for every single fix this Judge session; reset when a new
             # evaluation is set up (JudgeSetupScreen).
             self.app.judge_fix_slot = slot
-        self._begin_fix_row(row, slot)
+        self._begin_fix_row(row, slot, origin)
 
-    def _begin_fix_row(self, row: int, slot: tuple[str, str, str]) -> None:
-        self._busy_row = row
+    def _begin_fix_row(
+        self, row: int, slot: tuple[str, str, str], origin: JudgeOrigin,
+    ) -> None:
         self._fix_row_slot = slot
         operation = self._start_operation(
-            self.active_session_index, "Fix Row", slot, report=self._report,
+            origin.session_index, "Fix Row", slot, report=origin.report,
+            busy_row=row,
         )
         self._begin_op("Fix Row", slot)
         self.indicator.start(f"fixing row {row}...")
@@ -4823,7 +4905,21 @@ class JudgeRunScreen(BaseScreen):
         slot = getattr(self, "_fix_row_slot", None) or self._model_slot
         target = operation.target if operation else self._target
         stop_event = operation.stop if operation else self._stop
-        runner = self._make_runner(model_slot=slot, target=target, stop_event=stop_event)
+        runner = self._make_runner(
+            model_slot=slot, target=target, stop_event=stop_event,
+            on_status=(lambda status: app.call_from_thread(
+                self._operation_status, operation, status
+            )) if operation else None,
+            on_event=(lambda event: app.call_from_thread(
+                self._operation_event, operation, event
+            )) if operation else None,
+            on_notice=(lambda kind, message: app.call_from_thread(
+                self._operation_notice, operation, kind, message
+            )) if operation else None,
+        )
+        if operation is not None:
+            operation = dataclass_replace(operation, runner=runner)
+            self.sessions[operation.session_index].operation = operation
         report = operation.report if operation else self._report
         result = runner.fix_single(
             row,
@@ -4837,6 +4933,8 @@ class JudgeRunScreen(BaseScreen):
             app.call_from_thread(self._fixed_one, result)
 
     def _fixed_one(self, result, operation: JudgeOperation | None = None) -> None:
+        if operation is not None:
+            self._finish_operation(operation, "completed" if result.ok else "failed")
         self._busy_row = 0
         self.indicator.stop()
         self._begin_op("Judge", self._model_slot)
@@ -4920,9 +5018,11 @@ class JudgeRunScreen(BaseScreen):
                     batch_size=remembered["max_rows"],
                     workers=remembered["workers"],
                 )
-                self._fix_all_confirmed(plan)
+                origin = self._capture_origin(fixable)
+                self._fix_all_confirmed(origin, plan)
                 return
 
+        origin = self._capture_origin(fixable)
         self.app.push_screen(
             FixAllSetupScreen(
                 report=report,
@@ -4931,7 +5031,7 @@ class JudgeRunScreen(BaseScreen):
                 target=self._target,
                 scope=self._scope_label(),
             ),
-            self._fix_all_confirmed,
+            lambda plan, token=origin: self._fix_all_confirmed(token, plan),
         )
 
     def action_fix_all_force(self) -> None:
@@ -4950,20 +5050,24 @@ class JudgeRunScreen(BaseScreen):
             return f"rows graded {self._filter[4:]}"
         return f"rows flagged as {self._filter}"
 
-    def _fix_all_confirmed(self, plan: "FixAllPlan | None") -> None:
+    def _fix_all_confirmed(
+        self, origin: JudgeOrigin, plan: "FixAllPlan | None",
+    ) -> None:
         """The wizard came back with a plan, or the user backed out."""
-        if plan is None or self._report is None or self._busy_batch:
+        if plan is None or not self._origin_current(origin, plan.rows):
+            return
+        session = self.sessions[origin.session_index]
+        if session.busy_batch or session.busy_row:
             return
         if not plan.rows:
             self.notify_status("No rows match those filters.", WARN)
             return
-        self._busy_batch = True
-        self._fix_plan = plan
-        self._fixed_live.clear()
-        self._fix_seen.clear()
+        session.fix_plan = plan
+        session.fixed_live.clear()
+        session.fix_seen.clear()
         operation = self._start_operation(
-            self.active_session_index, "Fix All", plan.model_slot,
-            report=self._report,
+            origin.session_index, "Fix All", plan.model_slot,
+            report=origin.report, busy_batch=True,
         )
         self._begin_op("Fix All", plan.model_slot)
         self.refresh_keys()
@@ -4985,6 +5089,15 @@ class JudgeRunScreen(BaseScreen):
                 target=operation.target,
                 stop_event=operation.stop,
                 workers=plan.workers,
+                on_status=lambda status: app.call_from_thread(
+                    self._operation_status, operation, status
+                ),
+                on_event=lambda event: app.call_from_thread(
+                    self._operation_event, operation, event
+                ),
+                on_notice=lambda kind, message: app.call_from_thread(
+                    self._operation_notice, operation, kind, message
+                ),
                 on_fix=lambda row, text, changed: app.call_from_thread(
                     self._route_operation, operation, self._fix_landed, row, text, changed
                 ),
@@ -4992,6 +5105,8 @@ class JudgeRunScreen(BaseScreen):
                     self._route_operation, operation, self._fix_section_done, rows
                 ),
             )
+            operation = dataclass_replace(operation, runner=runner)
+            self.sessions[operation.session_index].operation = operation
             staged = runner.fix_all(
                 plan.rows,
                 report=operation.report,
@@ -5030,6 +5145,8 @@ class JudgeRunScreen(BaseScreen):
         self._fix_seen.update(rows)
 
     def _fixed_many(self, staged: StagedFix, operation: JudgeOperation | None = None) -> None:
+        if operation is not None:
+            self._finish_operation(operation, "completed")
         self._busy_batch = False
         self._fix_plan = None
         self._begin_op("Judge", self._model_slot)
@@ -5184,13 +5301,15 @@ class JudgeRunScreen(BaseScreen):
                 "nothing to re-check.".format(row), MUTED
             )
             return
+        origin = self._capture_origin([row])
         self._with_rejudge_model(
-            lambda slot, rows, workers: self._begin_rejudge_row(
-                row, slot, rows_per_request=rows, workers=workers
-            )
+            lambda slot, rows, workers, token=origin: self._begin_rejudge_row(
+                row, slot, token, rows_per_request=rows, workers=workers
+            ),
+            origin=origin,
         )
 
-    def _with_rejudge_model(self, then) -> None:
+    def _with_rejudge_model(self, then, origin: JudgeOrigin | None = None) -> None:
         """
         Resolve the model a Rejudge should use, asking if necessary.
 
@@ -5201,6 +5320,7 @@ class JudgeRunScreen(BaseScreen):
         """
         from ...data.app_prefs import remembered_rejudge_settings
 
+        token = origin or self._capture_origin()
         candidate_slots = []
         session_slot = getattr(self.app, "judge_rejudge_slot", None)
         if session_slot is not None:
@@ -5212,7 +5332,8 @@ class JudgeRunScreen(BaseScreen):
             remembered = remembered_rejudge_settings(slot)
             if remembered is not None:
                 self.app.judge_rejudge_slot = slot
-                then(slot, remembered["max_rows"], remembered["workers"])
+                if self._origin_current(token):
+                    then(slot, remembered["max_rows"], remembered["workers"])
                 return
 
         self.app.push_screen(
@@ -5220,7 +5341,7 @@ class JudgeRunScreen(BaseScreen):
                 model_slot=getattr(self.app, "judge_rejudge_slot", None) or self._model_slot,
                 scope_label=self._rejudge_scope_label(),
             ),
-            lambda result: self._rejudge_model_chosen(result, then),
+            lambda result, captured=token: self._rejudge_model_chosen(captured, result, then),
         )
 
     def _rejudge_scope_label(self) -> str:
@@ -5231,8 +5352,8 @@ class JudgeRunScreen(BaseScreen):
         row = self._current_row()
         return f"row {row}" if row else ""
 
-    def _rejudge_model_chosen(self, result, then) -> None:
-        if not result:
+    def _rejudge_model_chosen(self, origin: JudgeOrigin, result, then) -> None:
+        if not result or not self._origin_current(origin):
             return
         slot, rows, workers = result
         self.app.judge_rejudge_slot = slot
@@ -5241,13 +5362,15 @@ class JudgeRunScreen(BaseScreen):
         then(slot, rows, workers)
 
     def _begin_rejudge_row(
-        self, row: int, slot: tuple[str, str, str],
+        self, row: int, slot: tuple[str, str, str], origin: JudgeOrigin,
         rows_per_request: int | None = None, workers: int | None = None,
     ) -> None:
-        self._busy_row = row
+        if not self._origin_current(origin, [row]):
+            return
         self._rejudge_row_slot = slot
         operation = self._start_operation(
-            self.active_session_index, "Rejudge", slot, report=self._report,
+            origin.session_index, "Rejudge", slot, report=origin.report,
+            busy_row=row,
         )
         self._begin_op("Rejudge", slot)
         self.indicator.start(f"re-judging row {row}…")
@@ -5272,11 +5395,13 @@ class JudgeRunScreen(BaseScreen):
             source=report.source_for(row) if report else None,
         )
         if operation is not None:
-            app.call_from_thread(self._route_operation, operation, self._rejudged, verdict)
+            app.call_from_thread(self._route_operation, operation, self._rejudged, verdict, operation)
         else:
             app.call_from_thread(self._rejudged, verdict)
 
-    def _rejudged(self, verdict) -> None:
+    def _rejudged(self, verdict, operation: JudgeOperation | None = None) -> None:
+        if operation is not None:
+            self._finish_operation(operation, "completed" if verdict.ok else "failed")
         self._busy_row = 0
         self.indicator.stop()
         self._begin_op("Judge", self._model_slot)
@@ -5389,17 +5514,20 @@ class JudgeRunScreen(BaseScreen):
                 MUTED,
             )
             return
+        origin = self._capture_origin(rows)
         self._with_rejudge_model(
-            lambda slot, batch, workers: self._begin_rejudge_fixed(
-                rows, slot, rows_per_request=batch, workers=workers
-            )
+            lambda slot, batch, workers, token=origin: self._begin_rejudge_fixed(
+                rows, slot, token, rows_per_request=batch, workers=workers
+            ),
+            origin=origin,
         )
 
     def _begin_rejudge_fixed(
-        self, rows: list[int], slot: tuple[str, str, str],
+        self, rows: list[int], slot: tuple[str, str, str], origin: JudgeOrigin,
         rows_per_request: int | None = None, workers: int | None = None,
     ) -> None:
-        self._busy_batch = True
+        if not self._origin_current(origin, rows):
+            return
         self._rejudging = True
         self._rejudge_slot = slot
         self._rejudge_rows = list(rows)
@@ -5407,7 +5535,8 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
         operation = self._start_operation(
-            self.active_session_index, "Rejudge", slot, report=self._report,
+            origin.session_index, "Rejudge", slot, report=origin.report,
+            busy_batch=True,
         )
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
@@ -5437,6 +5566,15 @@ class JudgeRunScreen(BaseScreen):
                 stop_event=stop_event,
                 workers=workers,
                 max_rows=rows_per_request,
+                on_status=(lambda status: app.call_from_thread(
+                    self._operation_status, op, status
+                )) if op else None,
+                on_event=(lambda event: app.call_from_thread(
+                    self._operation_event, op, event
+                )) if op else None,
+                on_notice=(lambda kind, message: app.call_from_thread(
+                    self._operation_notice, op, kind, message
+                )) if op else None,
                 on_row=lambda row, issue: app.call_from_thread(
                     self._operation_rejudge_row_landed, op, row, issue
                 ) if op is not None else app.call_from_thread(
@@ -5449,12 +5587,15 @@ class JudgeRunScreen(BaseScreen):
                         self._rejudge_section_done, section_rows, ok
                     ),
             )
+            if op is not None:
+                op = dataclass_replace(op, runner=runner)
+                self.sessions[op.session_index].operation = op
             # Read from the file: this is a check on what was actually written.
             all_rows, _contexts = runner.load_rows()
             subset = [entry for entry in all_rows if entry[0] in wanted]
             if not subset:
                 if op is not None:
-                    app.call_from_thread(self._route_operation, op, self._rejudged_many, None, [])
+                    app.call_from_thread(self._route_operation, op, self._rejudged_many, None, [], op)
                 else:
                     app.call_from_thread(self._rejudged_many, None, [])
                 return
@@ -5472,13 +5613,13 @@ class JudgeRunScreen(BaseScreen):
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             if op is not None:
-                app.call_from_thread(self._route_operation, op, self._rejudge_failed, message)
+                app.call_from_thread(self._route_operation, op, self._rejudge_failed, message, op)
             else:
                 app.call_from_thread(self._rejudge_failed, message)
             return
         result_rows = [row for row, _s, _t in subset]
         if op is not None:
-            app.call_from_thread(self._route_operation, op, self._rejudged_many, fresh, result_rows)
+            app.call_from_thread(self._route_operation, op, self._rejudged_many, fresh, result_rows, op)
         else:
             app.call_from_thread(self._rejudged_many, fresh, result_rows)
 
@@ -5493,7 +5634,11 @@ class JudgeRunScreen(BaseScreen):
     def _rejudge_section_done(self, rows: list[int], ok: bool) -> None:
         self._rejudge_seen.update(rows)
 
-    def _rejudge_failed(self, message: str) -> None:
+    def _rejudge_failed(
+        self, message: str, operation: JudgeOperation | None = None,
+    ) -> None:
+        if operation is not None:
+            self._finish_operation(operation, "failed")
         self._busy_batch = False
         self._rejudging = False
         self._begin_op("Judge", self._model_slot)
@@ -5501,7 +5646,10 @@ class JudgeRunScreen(BaseScreen):
         self._error.show(message, "re-judge failed")
         self.notify_status("The applied fixes could not be re-judged.", ERROR)
 
-    def _rejudged_many(self, fresh: "JudgeReport | None", rows: list[int]) -> None:
+    def _rejudged_many(
+        self, fresh: "JudgeReport | None", rows: list[int],
+        operation: JudgeOperation | None = None,
+    ) -> None:
         """
         Fold the second verdict into the report already on screen.
 
@@ -5511,6 +5659,8 @@ class JudgeRunScreen(BaseScreen):
         left exactly as it was: it was not judged, and treating that as a pass is
         the false negative this whole path exists to remove.
         """
+        if operation is not None:
+            self._finish_operation(operation, "completed")
         self._busy_batch = False
         self._rejudging = False
         self._begin_op("Judge", self._model_slot)
