@@ -3527,13 +3527,14 @@ class JudgeRunScreen(BaseScreen):
                 self._runner = runner
             report = runner.evaluate()
         except Exception as exc:
-            session.busy_batch = False
-            session.run_state = "failed"
-            safe_call(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
+            msg = f"{type(exc).__name__}: {exc}"
+            session.events.append(msg)
+            safe_call(self._finish_operation, operation, "failed")
             if getattr(self, "tab_bar", None) is not None:
                 safe_call(self.tab_bar.update_tab, session_idx, status="failed")
             if session_idx == self.active_session_index:
-                safe_call(self._failed, f"{type(exc).__name__}: {exc}")
+                safe_call(self._on_notice, "error", msg)
+                safe_call(self._failed, msg)
             return
         safe_call(self._session_evaluated, session_idx, report, operation.generation)
 
@@ -3581,6 +3582,15 @@ class JudgeRunScreen(BaseScreen):
         if generation is not None and session.generation != generation:
             return
         session.events.append(getattr(event, "message", "") or "")
+        if getattr(event, "kind", "") == "aborted":
+            session.aborted_run = True
+            session.run_state = "paused"
+        elif getattr(event, "kind", "") == "retry":
+            if session.run_state == "running":
+                session.run_state = "retrying"
+        elif getattr(event, "kind", "") in ("batch_done", "wave_done"):
+            if session.run_state == "retrying":
+                session.run_state = "running"
         if session_idx == self.active_session_index:
             self._on_event(event)
 
@@ -3715,7 +3725,7 @@ class JudgeRunScreen(BaseScreen):
     # ── Multi-tab session switching ───────────────────────────────────────────
 
     def _save_current_session(self) -> None:
-        if not getattr(self, "is_multi_tab", False) or not (0 <= self.active_session_index < len(self.sessions)):
+        if not (0 <= self.active_session_index < len(self.sessions)):
             return
         s = self.sessions[self.active_session_index]
         s.report = self._report
@@ -4283,6 +4293,8 @@ class JudgeRunScreen(BaseScreen):
         busy_row: int = 0,
     ) -> JudgeOperation:
         session = self.sessions[session_index]
+        if session_index == self.active_session_index:
+            self._save_current_session()
         session.generation += 1
         session.stop = threading.Event()
         session.workers.clear()
@@ -4308,7 +4320,16 @@ class JudgeRunScreen(BaseScreen):
         )
         session.operation = operation
         if session_index == self.active_session_index:
-            self._load_session(session_index)
+            self._stop = session.stop
+            self._busy_batch = session.busy_batch
+            self._busy_row = session.busy_row
+            self._run_state = session.run_state
+            self._workers = session.workers
+            self._ledger = session.ledger
+            self._op_label = session.op_label
+            self._op_slot = session.op_slot
+            self._started_at = session.started_at
+            self._elapsed = session.elapsed
         return operation
 
     def _capture_origin(self, rows: list[int] | None = None) -> JudgeOrigin:
@@ -4351,6 +4372,8 @@ class JudgeRunScreen(BaseScreen):
         if active != operation.session_index:
             self._save_current_session()
             self._load_session(operation.session_index)
+        else:
+            self._save_current_session()
         try:
             callback(*args)
             self._save_current_session()
@@ -4390,7 +4413,9 @@ class JudgeRunScreen(BaseScreen):
             session.rejudge_flagged.append((row, issue))
             del session.rejudge_flagged[:-200]
         if operation.session_index == self.active_session_index:
-            self._load_session(operation.session_index)
+            self._rejudge_seen = session.rejudge_seen
+            self._rejudge_flagged_rows = session.rejudge_flagged_rows
+            self._rejudge_flagged = session.rejudge_flagged
 
     def _cancel_operation(self, operation: JudgeOperation) -> bool:
         if not self._operation_current(operation):
@@ -4423,7 +4448,13 @@ class JudgeRunScreen(BaseScreen):
             if getattr(status, "phase", "") == "idle"
         }
         if operation.session_index == self.active_session_index:
-            self._load_session(operation.session_index)
+            self._run_state = session.run_state
+            self._busy_batch = session.busy_batch
+            self._busy_row = session.busy_row
+            self._elapsed = session.elapsed
+            self._started_at = session.started_at
+            self._workers = session.workers
+            self._ledger = session.ledger
         return True
 
     def _begin_op(self, label: str, slot: tuple[str, str, str] | None) -> None:

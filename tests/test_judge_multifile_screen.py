@@ -449,6 +449,80 @@ def test_row_fix_modal_callback_routes_to_origin_after_tab_switch(tmp_path, monk
     assert report_b.translation_for(1) == "B"
 
 
+def test_active_ui_state_preserved_during_operations(tmp_path):
+    target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    screen = JudgeRunScreen(target, ("p", "c", "m"), ["mistranslation"])
+    screen._cursor_row = 42
+    screen._filter = "sev:critical"
+    screen._before = {42: "original text"}
+
+    op = screen._start_operation(0, "Fix All", ("p", "c", "m"), busy_batch=True)
+    assert screen._cursor_row == 42
+    assert screen._filter == "sev:critical"
+    assert screen._before == {42: "original text"}
+    assert screen.sessions[0].cursor_row == 42
+    assert screen.sessions[0].filter == "sev:critical"
+    assert screen.sessions[0].before == {42: "original text"}
+
+    from translator.judge.models import RowIssue
+    screen._operation_rejudge_row_landed(op, 1, RowIssue(1, ["mistranslation"], "err", "critical"))
+    assert screen._cursor_row == 42
+    assert screen._filter == "sev:critical"
+
+    screen._finish_operation(op, "completed")
+    assert screen._cursor_row == 42
+    assert screen._filter == "sev:critical"
+    assert screen._before == {42: "original text"}
+
+
+def test_session_event_aborted_marks_background_session_paused(tmp_path):
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    op_b = screen._start_operation(1, "Judge", ("p", "c", "m"))
+    assert screen.sessions[1].run_state == "running"
+    assert screen.sessions[1].aborted_run is False
+
+    event = type("Ev", (), {"kind": "aborted", "message": "all models exhausted", "batch_num": 1})()
+    screen._session_event(1, event, generation=op_b.generation)
+    assert screen.sessions[1].aborted_run is True
+    assert screen.sessions[1].run_state == "paused"
+    assert screen.sessions[0].aborted_run is False
+
+
+def test_evaluate_single_session_failure_finishes_op_and_does_not_post_to_other_tab(tmp_path, monkeypatch):
+    from translator.scheduling.scheduler import WorkerStatus
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    class FakeApp:
+        is_running = True
+        def call_from_thread(self, fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+    screen._app = FakeApp()
+
+    notices = []
+    failures = []
+    screen._on_notice = lambda kind, msg: notices.append((kind, msg))
+    screen._failed = lambda msg: failures.append(msg)
+
+    session_1 = screen.sessions[1]
+
+    def failing_runner(**kwargs):
+        session_1.workers[1] = WorkerStatus(worker_id=1, phase="generating")
+        session_1.ledger.note(session_1.workers[1])
+        raise RuntimeError("API crash")
+
+    monkeypatch.setattr(screen, "_make_runner", failing_runner)
+
+    JudgeRunScreen._evaluate_single_session.__wrapped__(screen, 1)
+
+    assert session_1.run_state == "failed"
+    assert session_1.busy_batch is False
+    assert any(s.phase == "idle" for s in session_1.ledger.statuses())
+    assert any("RuntimeError: API crash" in ev for ev in session_1.events)
+    assert notices == []
+    assert failures == []
+
+
 def test_stale_delayed_force_unlock_does_not_finish_new_operation(tmp_path):
     target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
     screen = JudgeRunScreen(target, ("p", "c", "m"), ["mistranslation"])
