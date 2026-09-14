@@ -116,26 +116,43 @@ class FileTabBar(Widget):
         if self._tabs_data:
             self.switch_tab((self.active_tab - 1) % len(self._tabs_data))
 
-    def render(self) -> Text:
+    @staticmethod
+    def _ellipsize(text: str, width: int) -> str:
+        if Text(text).cell_len <= width:
+            return text
+        if width <= 1:
+            return "…"[:width]
+        result = ""
+        for character in text:
+            if Text(result + character + "…").cell_len > width:
+                break
+            result += character
+        return result + "…"
+
+    def render_for_width(self, width: int) -> Text:
         out = Text()
         self._click_regions.clear()
-        col = 1
-        for i, t in enumerate(self._tabs_data):
-            is_active = (i == self.active_tab)
-            label = self.get_tab_label(i)
-
+        count = len(self._tabs_data)
+        if not count:
+            return out
+        available = max(count * 5, width)
+        tab_width = max(5, available // count)
+        col = 0
+        for i in range(count):
+            is_active = i == self.active_tab
+            inner = max(3, tab_width - 2)
+            label = self._ellipsize(self.get_tab_label(i), inner)
+            tab_text = f"[{label}]" if is_active else f" {label} "
+            padding = max(0, tab_width - Text(tab_text).cell_len)
+            tab_text += " " * padding
             start_col = col
-            if is_active:
-                tab_text = f" [{label}] "
-                out.append(tab_text, style=f"bold {ACCENT} reverse")
-            else:
-                tab_text = f"  {label}  "
-                out.append(tab_text, style=MUTED)
-            col += len(tab_text)
+            out.append(tab_text, style=f"bold {ACCENT} reverse" if is_active else MUTED)
+            col += Text(tab_text).cell_len
             self._click_regions.append((start_col, col, i))
-            out.append(" ")
-            col += 1
         return out
+
+    def render(self) -> Text:
+        return self.render_for_width(max(1, self.size.width or 80))
 
     def on_click(self, event: events.Click) -> None:
         click_x = event.x

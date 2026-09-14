@@ -2250,6 +2250,19 @@ class GridPane(VerticalScroll):
             attach()
 
 
+@dataclass(frozen=True)
+class JudgeOperation:
+    session_index: int
+    session_id: int
+    generation: int
+    label: str
+    model_slot: tuple[str, str, str]
+    target: JudgeTarget
+    report: JudgeReport | None
+    runner: JudgeRunner | None
+    stop: threading.Event
+
+
 @dataclass
 class JudgeSession:
     index: int
@@ -2297,6 +2310,11 @@ class JudgeSession:
     stop: threading.Event = field(default_factory=threading.Event)
     started_at: float = 0.0
     elapsed: float = 0.0
+    generation: int = 0
+    operation: JudgeOperation | None = None
+    op_label: str = "Judge"
+    op_slot: tuple[str, str, str] | None = None
+    cancel_requested_at: float = 0.0
 
 
 class JudgeRunScreen(BaseScreen):
@@ -3229,6 +3247,7 @@ class JudgeRunScreen(BaseScreen):
         self,
         model_slot: tuple[str, str, str] | None = None,
         workers: int | None = None,
+        target: JudgeTarget | None = None,
     ) -> JobConfig:
         """
         A JobConfig for the pooled path.
@@ -3240,28 +3259,29 @@ class JudgeRunScreen(BaseScreen):
         """
         provider_id, connection_id, model_id = model_slot or self._model_slot
         proc = self._processing
+        tgt = target or self._target
         job = JobConfig(
             provider_id=provider_id,
             model_id=model_id,
             connection_id=connection_id,
-            src_path=self._target.path,
-            out_path=self._target.path,
-            src_col=self._target.src_col,
-            dst_col=self._target.dst_col,
-            ctx_col=self._target.ctx_col,
-            start_row=self._target.start_row,
-            num_rows=self._target.num_rows,
-            src_lang=self._target.src_lang,
-            tgt_lang=self._target.tgt_lang,
-            style_prompt=self._target.style_prompt,
-            custom_placeholders=self._target.custom_placeholders,
+            src_path=tgt.path,
+            out_path=tgt.path,
+            src_col=tgt.src_col,
+            dst_col=tgt.dst_col,
+            ctx_col=tgt.ctx_col,
+            start_row=tgt.start_row,
+            num_rows=tgt.num_rows,
+            src_lang=tgt.src_lang,
+            tgt_lang=tgt.tgt_lang,
+            style_prompt=tgt.style_prompt,
+            custom_placeholders=tgt.custom_placeholders,
             processing_mode=proc.get("processing_mode") or app_prefs.default_processing_mode(),
             write_mode=proc.get("write_mode", "safe"),
             anti_desync=proc.get("anti_desync", "auto"),
             debug_log=proc.get("debug_log", False),
             raw_log=proc.get("raw_log", False),
             log_path=(
-                os.path.splitext(getattr(self._target, "full_path", "") or self._target.path)[0] + "_judge.log"
+                os.path.splitext(getattr(tgt, "full_path", "") or tgt.path)[0] + "_judge.log"
                 if proc.get("debug_log") or proc.get("raw_log")
                 else ""
             ),
@@ -3272,7 +3292,7 @@ class JudgeRunScreen(BaseScreen):
             preset = choice.preset
             if self._chosen_preset is not None and model_slot is None:
                 preset = self._chosen_preset
-            rows, tokens = self._section_shape()
+            rows, tokens = self._section_shape(tgt)
             job.batch_size = rows
             job.tok_per_row = max(
                 config.TOKEN_EST_MIN_PER_ROW, int(tokens / max(1, rows))
@@ -3293,7 +3313,7 @@ class JudgeRunScreen(BaseScreen):
         job.max_completion_tokens = 4096
         return job
 
-    def _section_shape(self) -> tuple[int, int]:
+    def _section_shape(self, target: JudgeTarget | None = None) -> tuple[int, int]:
         """
         (rows, tokens) of the most expensive request Judge will send.
 
@@ -3309,15 +3329,18 @@ class JudgeRunScreen(BaseScreen):
         only changes when the file is written (a Fix All / hand edit), which
         invalidates the cache explicitly.
         """
-        if self._section_shape_cache is not None:
-            return self._section_shape_cache
+        tgt = target or self._target
+        session = next((item for item in self.sessions if item.target is tgt), None)
+        cached = session.section_shape_cache if session is not None else self._section_shape_cache
+        if cached is not None:
+            return cached
         fallback = (
             config.DEFAULT_BATCH_SIZE,
             config.DEFAULT_BATCH_SIZE * config.DEFAULT_TOK_PER_ROW * 2,
         )
         try:
             runner = JudgeRunner(
-                target=self._target,
+                target=tgt,
                 criteria=self._criteria,
                 max_rows=self._max_rows,
             )
@@ -3330,7 +3353,10 @@ class JudgeRunScreen(BaseScreen):
         biggest = max(plan.sections, key=estimator.estimate_total)
         rows = max(len(section) for section in plan.sections)
         shape = (max(1, rows), max(1, estimator.estimate_total(biggest)))
-        self._section_shape_cache = shape
+        if session is not None:
+            session.section_shape_cache = shape
+        else:
+            self._section_shape_cache = shape
         return shape
 
     def _choice(self, model_slot: tuple[str, str, str] | None = None):
@@ -3387,7 +3413,7 @@ class JudgeRunScreen(BaseScreen):
         target_max_rows = max_rows if max_rows is not None else self._max_rows
         return JudgeRunner(
             target=tgt,
-            job=self._job(model_slot, workers),
+            job=self._job(model_slot, workers, target=tgt),
             provider=self._provider(model_slot),
             registry=self.app.registry,
             criteria=self._criteria,
@@ -3449,6 +3475,7 @@ class JudgeRunScreen(BaseScreen):
         session = self.sessions[session_idx]
         session.busy_batch = True
         session.run_state = "running"
+        operation = self._start_operation(session_idx, "Judge", self._model_slot)
         session.flagged_rows.clear()
         session.flagged_live.clear()
         session.reviewed_rows.clear()
@@ -3472,16 +3499,16 @@ class JudgeRunScreen(BaseScreen):
                 target=session.target,
                 stop_event=session.stop,
                 on_row=lambda row, issue: safe_call(
-                    self._session_row_reviewed, session_idx, row, issue
+                    self._session_row_reviewed, session_idx, row, issue, operation.generation
                 ),
                 on_section=lambda index, total, rows, ok: safe_call(
-                    self._session_section_done, session_idx, index, total, rows, ok
+                    self._session_section_done, session_idx, index, total, rows, ok, operation.generation
                 ),
                 on_status=lambda status: safe_call(
-                    self._session_status, session_idx, status
+                    self._session_status, session_idx, status, operation.generation
                 ),
                 on_event=lambda event: safe_call(
-                    self._session_event, session_idx, event
+                    self._session_event, session_idx, event, operation.generation
                 ),
             )
             session.runner = runner
@@ -3497,10 +3524,12 @@ class JudgeRunScreen(BaseScreen):
             if session_idx == self.active_session_index:
                 safe_call(self._failed, f"{type(exc).__name__}: {exc}")
             return
-        safe_call(self._session_evaluated, session_idx, report)
+        safe_call(self._session_evaluated, session_idx, report, operation.generation)
 
-    def _session_row_reviewed(self, session_idx: int, row: int, issue) -> None:
+    def _session_row_reviewed(self, session_idx: int, row: int, issue, generation: int | None = None) -> None:
         session = self.sessions[session_idx]
+        if generation is not None and session.generation != generation:
+            return
         session.reviewed_rows.add(row)
         session.pending_live.append((row, issue))
         if issue is not None:
@@ -3516,8 +3545,10 @@ class JudgeRunScreen(BaseScreen):
         if session_idx == self.active_session_index:
             self._row_reviewed(row, issue)
 
-    def _session_section_done(self, session_idx: int, index: int, total: int, rows: list[int], ok: bool) -> None:
+    def _session_section_done(self, session_idx: int, index: int, total: int, rows: list[int], ok: bool, generation: int | None = None) -> None:
         session = self.sessions[session_idx]
+        if generation is not None and session.generation != generation:
+            return
         session.sections_done += 1
         session.sections_total = max(session.sections_total, total, index)
         if not ok:
@@ -3525,21 +3556,27 @@ class JudgeRunScreen(BaseScreen):
         if session_idx == self.active_session_index:
             self._section_done(index, total, rows, ok)
 
-    def _session_status(self, session_idx: int, status) -> None:
+    def _session_status(self, session_idx: int, status, generation: int | None = None) -> None:
         session = self.sessions[session_idx]
+        if generation is not None and session.generation != generation:
+            return
         session.workers[getattr(status, "worker_id", 0)] = status
         session.ledger.note(status)
         if session_idx == self.active_session_index:
             self._on_status(status)
 
-    def _session_event(self, session_idx: int, event) -> None:
+    def _session_event(self, session_idx: int, event, generation: int | None = None) -> None:
         session = self.sessions[session_idx]
+        if generation is not None and session.generation != generation:
+            return
         session.events.append(getattr(event, "message", "") or "")
         if session_idx == self.active_session_index:
             self._on_event(event)
 
-    def _session_evaluated(self, session_idx: int, report: JudgeReport) -> None:
+    def _session_evaluated(self, session_idx: int, report: JudgeReport, generation: int | None = None) -> None:
         session = self.sessions[session_idx]
+        if generation is not None and session.generation != generation:
+            return
         session.busy_batch = False
         session.run_state = "paused" if session.aborted_run else "completed"
         session.report = report
@@ -3664,14 +3701,8 @@ class JudgeRunScreen(BaseScreen):
         if not getattr(self, "is_multi_tab", False) or not (0 <= self.active_session_index < len(self.sessions)):
             return
         s = self.sessions[self.active_session_index]
-        s.target = self._target
         s.report = self._report
-        s.runner = self._runner
-        s.workers = dict(self._workers)
-        s.ledger = self._ledger
         s.events = list(self._events)
-        s.busy_batch = self._busy_batch
-        s.busy_row = self._busy_row
         s.cursor_row = self._cursor_row
         s.filter = self._filter
         s.before = dict(self._before)
@@ -3841,13 +3872,16 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_seen = set()
         self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
+        operation = self._start_operation(
+            self.active_session_index, "Rejudge", slot, report=self._report,
+        )
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
         self.notify_status(
-            f"Re-judging {len(rows)} row(s) from '{self._filter}' filter…",
+            f"Re-judging {len(rows)} row(s) from '{self._filter}' filter...",
             ACCENT,
         )
-        self._rejudge_many(list(rows), slot, workers=workers, rows_per_request=rows_per_request)
+        self._rejudge_many(list(rows), slot, operation, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
     def _retry_unfinished(self, rows: list[int]) -> None:
@@ -4197,6 +4231,122 @@ class JudgeRunScreen(BaseScreen):
     # Judge's `ollama/gemma`. Each operation now names itself and its slot, and
     # every status the UI shows reads from *that* rather than from `_model_slot`.
 
+    def _start_operation(
+        self,
+        session_index: int,
+        label: str,
+        slot: tuple[str, str, str] | None,
+        report: JudgeReport | None = None,
+        runner: JudgeRunner | None = None,
+    ) -> JudgeOperation:
+        session = self.sessions[session_index]
+        session.generation += 1
+        session.stop = threading.Event()
+        session.workers.clear()
+        session.ledger.clear()
+        session.started_at = time.monotonic()
+        session.elapsed = 0.0
+        session.cancel_requested_at = 0.0
+        session.op_label = label
+        session.op_slot = slot or self._model_slot
+        operation = JudgeOperation(
+            session_index=session_index,
+            session_id=id(session),
+            generation=session.generation,
+            label=label,
+            model_slot=session.op_slot,
+            target=session.target,
+            report=report if report is not None else session.report,
+            runner=runner,
+            stop=session.stop,
+        )
+        session.operation = operation
+        if session_index == self.active_session_index:
+            self._load_session(session_index)
+        return operation
+
+    def _operation_current(self, operation: JudgeOperation) -> bool:
+        if not 0 <= operation.session_index < len(self.sessions):
+            return False
+        session = self.sessions[operation.session_index]
+        return id(session) == operation.session_id and session.generation == operation.generation
+
+    def _route_operation(self, operation: JudgeOperation, callback, *args) -> bool:
+        if not self._operation_current(operation):
+            return False
+        active = self.active_session_index
+        if active != operation.session_index:
+            self._save_current_session()
+            self._load_session(operation.session_index)
+        try:
+            callback(*args)
+            self._save_current_session()
+        finally:
+            if active != operation.session_index:
+                self._load_session(active)
+        if operation.session_index == self.active_session_index:
+            if getattr(self, "grid", None) is not None:
+                self._fill_grid() if self._report is not None else self._rebuild_live_grid()
+            if getattr(self, "rail", None) is not None:
+                self._paint_rail()
+        return True
+
+    def _operation_status(self, operation: JudgeOperation, status) -> None:
+        if not self._operation_current(operation):
+            return
+        session = self.sessions[operation.session_index]
+        session.workers[getattr(status, "worker_id", 0)] = status
+        session.ledger.note(status)
+        if operation.session_index == self.active_session_index:
+            self._workers = session.workers
+            self._ledger = session.ledger
+
+    def _operation_rejudge_row_landed(self, operation: JudgeOperation, row: int, issue) -> None:
+        if not self._operation_current(operation):
+            return
+        session = self.sessions[operation.session_index]
+        session.rejudge_seen.add(row)
+        if issue is not None:
+            session.rejudge_flagged_rows.add(row)
+            session.rejudge_flagged.append((row, issue))
+            del session.rejudge_flagged[:-200]
+        if operation.session_index == self.active_session_index:
+            self._load_session(operation.session_index)
+
+    def _cancel_operation(self, operation: JudgeOperation) -> bool:
+        if not self._operation_current(operation):
+            return False
+        operation.stop.set()
+        session = self.sessions[operation.session_index]
+        session.run_state = "cancelled"
+        session.cancel_requested_at = time.monotonic()
+        return True
+
+    def _active_operation(self) -> JudgeOperation | None:
+        if not (0 <= self.active_session_index < len(self.sessions)):
+            return None
+        session = self.sessions[self.active_session_index]
+        return session.operation if (session.busy_batch or session.busy_row) else None
+
+    def _finish_operation(self, operation: JudgeOperation, state: str) -> bool:
+        if not self._operation_current(operation):
+            return False
+        session = self.sessions[operation.session_index]
+        if session.started_at:
+            session.elapsed = time.monotonic() - session.started_at
+        session.started_at = 0.0
+        session.run_state = state
+        session.busy_batch = False
+        session.busy_row = 0
+        session.ledger.reset_all_idle()
+        session.workers = {
+            worker_id: status for worker_id, status in session.workers.items()
+            if getattr(status, "phase", "") == "idle"
+        }
+        if operation.session_index == self.active_session_index:
+            self._load_session(operation.session_index)
+        return True
+
     def _begin_op(self, label: str, slot: tuple[str, str, str] | None) -> None:
         self._op_label = label
         self._op_slot = slot or self._model_slot
@@ -4514,7 +4664,8 @@ class JudgeRunScreen(BaseScreen):
         "wait" is sometimes exactly what the user no longer wants.
         """
         now = time.monotonic()
-        pending = (self._busy_batch or self._busy_row) and self._stop.is_set()
+        active_op = self._active_operation()
+        pending = (self._busy_batch or self._busy_row) and (active_op.stop.is_set() if active_op else self._stop.is_set())
         if pending and (now - self._cancel_requested_at) <= 5.0:
             # Second press inside the window: force. Sever the sockets under
             # every in-flight request; the blocked reads raise in their worker
@@ -4547,7 +4698,10 @@ class JudgeRunScreen(BaseScreen):
             return
 
         self._cancel_requested_at = now
-        self._stop.set()
+        if active_op is not None:
+            self._cancel_operation(active_op)
+        else:
+            self._stop.set()
         if self._busy_batch:
             self._run_state = "cancelled"
         self.notify_status(
@@ -4655,26 +4809,34 @@ class JudgeRunScreen(BaseScreen):
     def _begin_fix_row(self, row: int, slot: tuple[str, str, str]) -> None:
         self._busy_row = row
         self._fix_row_slot = slot
+        operation = self._start_operation(
+            self.active_session_index, "Fix Row", slot, report=self._report,
+        )
         self._begin_op("Fix Row", slot)
-        self.indicator.start(f"fixing row {row}…")
+        self.indicator.start(f"fixing row {row}...")
         self.refresh_keys()
-        self._fix_one(row)
+        self._fix_one(row, operation)
 
     @work(thread=True)
-    def _fix_one(self, row: int) -> None:
+    def _fix_one(self, row: int, operation: JudgeOperation | None = None) -> None:
         app = self._app
         slot = getattr(self, "_fix_row_slot", None) or self._model_slot
-        runner = self._make_runner(model_slot=slot)
-        report = self._report
+        target = operation.target if operation else self._target
+        stop_event = operation.stop if operation else self._stop
+        runner = self._make_runner(model_slot=slot, target=target, stop_event=stop_event)
+        report = operation.report if operation else self._report
         result = runner.fix_single(
             row,
             comment=report.comment_for(row) if report else "",
             source=report.source_for(row) if report else None,
             translation=report.translation_for(row) if report else None,
         )
-        app.call_from_thread(self._fixed_one, result)
+        if operation is not None:
+            app.call_from_thread(self._route_operation, operation, self._fixed_one, result, operation)
+        else:
+            app.call_from_thread(self._fixed_one, result)
 
-    def _fixed_one(self, result) -> None:
+    def _fixed_one(self, result, operation: JudgeOperation | None = None) -> None:
         self._busy_row = 0
         self.indicator.stop()
         self._begin_op("Judge", self._model_slot)
@@ -4686,11 +4848,17 @@ class JudgeRunScreen(BaseScreen):
         # Staged, not written: one row is reviewed the same way a hundred are.
         self.app.push_screen(
             JudgeFixReviewScreen(
-                runner=self._runner or self._make_runner(),
-                report=self._report,
+                runner=(operation.runner if operation and operation.runner else self._make_runner(
+                    target=operation.target if operation else self._target,
+                    stop_event=operation.stop if operation else self._stop,
+                )),
+                report=operation.report if operation else self._report,
                 staged=StagedFix(texts={result.row: result.text}),
+                target=operation.target if operation else self._target,
             ),
-            self._fixes_applied,
+            (lambda applied, op=operation: self._route_operation(
+                op, self._fixes_applied, applied
+            )) if operation is not None else self._fixes_applied,
         )
 
     # ── Fix All (batch, worker panel) ─────────────────────────────────────────
@@ -4793,6 +4961,10 @@ class JudgeRunScreen(BaseScreen):
         self._fix_plan = plan
         self._fixed_live.clear()
         self._fix_seen.clear()
+        operation = self._start_operation(
+            self.active_session_index, "Fix All", plan.model_slot,
+            report=self._report,
+        )
         self._begin_op("Fix All", plan.model_slot)
         self.refresh_keys()
         self.notify_status(
@@ -4800,35 +4972,40 @@ class JudgeRunScreen(BaseScreen):
             f"{plan.rows_per_request} per request · {plan.workers} worker(s)…",
             ACCENT,
         )
-        self._fix_many(plan)
+        self._fix_many(plan, operation)
 
     @work(thread=True)
-    def _fix_many(self, plan: "FixAllPlan") -> None:
+    def _fix_many(self, plan: "FixAllPlan", operation: JudgeOperation) -> None:
         app = self._app
         try:
             # A wizard that chose a different model needs its own runner: the
             # cached one is pinned to the Judge model and its pacing.
             runner = self._make_runner(
                 model_slot=plan.model_slot,
+                target=operation.target,
+                stop_event=operation.stop,
                 workers=plan.workers,
                 on_fix=lambda row, text, changed: app.call_from_thread(
-                    self._fix_landed, row, text, changed
+                    self._route_operation, operation, self._fix_landed, row, text, changed
                 ),
                 on_section=lambda index, total, rows, ok: app.call_from_thread(
-                    self._fix_section_done, rows
+                    self._route_operation, operation, self._fix_section_done, rows
                 ),
             )
             staged = runner.fix_all(
                 plan.rows,
-                report=self._report,
+                report=operation.report,
                 criteria=plan.criteria,
                 severities=plan.severities,
                 batch_size=plan.rows_per_request,
             )
         except Exception as exc:
-            app.call_from_thread(self._failed, f"{type(exc).__name__}: {exc}")
+            app.call_from_thread(
+                self._route_operation, operation, self._failed,
+                f"{type(exc).__name__}: {exc}",
+            )
             return
-        app.call_from_thread(self._fixed_many, staged)
+        app.call_from_thread(self._route_operation, operation, self._fixed_many, staged, operation)
 
     def _fix_landed(self, row: int, text: str, changed: bool) -> None:
         """
@@ -4852,7 +5029,7 @@ class JudgeRunScreen(BaseScreen):
         """
         self._fix_seen.update(rows)
 
-    def _fixed_many(self, staged: StagedFix) -> None:
+    def _fixed_many(self, staged: StagedFix, operation: JudgeOperation | None = None) -> None:
         self._busy_batch = False
         self._fix_plan = None
         self._begin_op("Judge", self._model_slot)
@@ -4888,11 +5065,17 @@ class JudgeRunScreen(BaseScreen):
             return
         self.app.push_screen(
             JudgeFixReviewScreen(
-                runner=self._runner or self._make_runner(),
-                report=self._report,
+                runner=(operation.runner if operation and operation.runner else self._make_runner(
+                    target=operation.target if operation else self._target,
+                    stop_event=operation.stop if operation else self._stop,
+                )),
+                report=operation.report if operation else self._report,
                 staged=staged,
+                target=operation.target if operation else self._target,
             ),
-            self._fixes_applied,
+            lambda applied, op=operation: self._route_operation(
+                op, self._fixes_applied, applied
+            ) if op is not None else self._fixes_applied(applied),
         )
 
     def _fixes_applied(self, applied: dict[int, str] | None) -> None:
@@ -5063,23 +5246,35 @@ class JudgeRunScreen(BaseScreen):
     ) -> None:
         self._busy_row = row
         self._rejudge_row_slot = slot
+        operation = self._start_operation(
+            self.active_session_index, "Rejudge", slot, report=self._report,
+        )
         self._begin_op("Rejudge", slot)
         self.indicator.start(f"re-judging row {row}…")
         self.refresh_keys()
-        self._rejudge(row, slot)
+        self._rejudge(row, slot, operation)
 
     @work(thread=True)
-    def _rejudge(self, row: int, slot: tuple[str, str, str] | None = None) -> None:
+    def _rejudge(
+        self, row: int, slot: tuple[str, str, str] | None = None,
+        operation: JudgeOperation | None = None,
+    ) -> None:
         app = self._app
-        runner = self._make_runner(model_slot=slot) if slot else \
-            (self._runner or self._make_runner())
-        report = self._report
+        target = operation.target if operation else self._target
+        runner = self._make_runner(
+            model_slot=slot, target=target,
+            stop_event=operation.stop if operation else self._stop,
+        ) if slot else (operation.runner if operation and operation.runner else self._make_runner(target=target))
+        report = operation.report if operation else self._report
         verdict = runner.judge_again(
             row,
             text=report.translation_for(row) if report else None,
             source=report.source_for(row) if report else None,
         )
-        app.call_from_thread(self._rejudged, verdict)
+        if operation is not None:
+            app.call_from_thread(self._route_operation, operation, self._rejudged, verdict)
+        else:
+            app.call_from_thread(self._rejudged, verdict)
 
     def _rejudged(self, verdict) -> None:
         self._busy_row = 0
@@ -5211,33 +5406,46 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_seen = set()
         self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
+        operation = self._start_operation(
+            self.active_session_index, "Rejudge", slot, report=self._report,
+        )
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
         self.notify_status(
             f"Re-judging {len(rows)} applied fix(es) the same way the first "
-            f"evaluation did — batched, with neighbours…",
+            f"evaluation did — batched, with neighbours...",
             ACCENT,
         )
-        self._rejudge_many(list(rows), slot, workers=workers, rows_per_request=rows_per_request)
+        self._rejudge_many(list(rows), slot, operation, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
     def _rejudge_many(
         self, rows: list[int], slot: tuple[str, str, str] | None = None,
+        operation: JudgeOperation | None = None,
         workers: int | None = None,
         rows_per_request: int | None = None,
     ) -> None:
         app = self._app
         wanted = set(rows)
+        op = operation
+        target = op.target if op else self._target
+        stop_event = op.stop if op else self._stop
         try:
             runner = self._make_runner(
                 model_slot=slot,
+                target=target,
+                stop_event=stop_event,
                 workers=workers,
                 max_rows=rows_per_request,
                 on_row=lambda row, issue: app.call_from_thread(
+                    self._operation_rejudge_row_landed, op, row, issue
+                ) if op is not None else app.call_from_thread(
                     self._rejudge_row_landed, row, issue
                 ),
                 on_section=lambda index, total, section_rows, ok:
                     app.call_from_thread(
+                        self._route_operation, op, self._rejudge_section_done, section_rows, ok
+                    ) if op is not None else app.call_from_thread(
                         self._rejudge_section_done, section_rows, ok
                     ),
             )
@@ -5245,7 +5453,10 @@ class JudgeRunScreen(BaseScreen):
             all_rows, _contexts = runner.load_rows()
             subset = [entry for entry in all_rows if entry[0] in wanted]
             if not subset:
-                app.call_from_thread(self._rejudged_many, None, [])
+                if op is not None:
+                    app.call_from_thread(self._route_operation, op, self._rejudged_many, None, [])
+                else:
+                    app.call_from_thread(self._rejudged_many, None, [])
                 return
             # The same planner the first evaluation used, over these rows only,
             # so the sections are built and priced identically. In chain mode
@@ -5259,13 +5470,17 @@ class JudgeRunScreen(BaseScreen):
                 plan = runner.plan(subset)
             fresh = runner.evaluate(plan=plan)
         except Exception as exc:
-            app.call_from_thread(
-                self._rejudge_failed, f"{type(exc).__name__}: {exc}"
-            )
+            message = f"{type(exc).__name__}: {exc}"
+            if op is not None:
+                app.call_from_thread(self._route_operation, op, self._rejudge_failed, message)
+            else:
+                app.call_from_thread(self._rejudge_failed, message)
             return
-        app.call_from_thread(
-            self._rejudged_many, fresh, [row for row, _s, _t in subset]
-        )
+        result_rows = [row for row, _s, _t in subset]
+        if op is not None:
+            app.call_from_thread(self._route_operation, op, self._rejudged_many, fresh, result_rows)
+        else:
+            app.call_from_thread(self._rejudged_many, fresh, result_rows)
 
     def _rejudge_row_landed(self, row: int, issue) -> None:
         """One re-checked row, live — the same feed the evaluation has."""
@@ -5571,11 +5786,19 @@ class JudgeRunScreen(BaseScreen):
     def _confirm_save_done(self, go: bool | None) -> None:
         if not go or self._report is None:
             return
-        self.app.push_screen(JudgeSummaryScreen(self._report, self._target))
+        self.app.push_screen(JudgeSummaryScreen(
+            self._report,
+            self._target,
+            sessions=[(session.target, session.report, session.run_state) for session in self.sessions],
+        ))
 
     def action_summary(self) -> None:
         if self._report is not None:
-            self.app.push_screen(JudgeSummaryScreen(self._report, self._target))
+            self.app.push_screen(JudgeSummaryScreen(
+            self._report,
+            self._target,
+            sessions=[(session.target, session.report, session.run_state) for session in self.sessions],
+        ))
 
     def action_leave(self) -> None:
         self._stop.set()
@@ -6172,12 +6395,14 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
         runner: JudgeRunner,
         report: JudgeReport | None,
         staged: StagedFix,
+        target: JudgeTarget | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._runner = runner
         self._report = report
         self._staged = staged
+        self._target = target or getattr(runner, "target", None)
         # Rows whose staged text a human changed, so the list can say so: an
         # amended line is no longer the model's proposal and should not be read
         # as one.
@@ -6354,10 +6579,17 @@ class JudgeFixReviewScreen(ModalScreen["dict | None"]):
             else:
                 self.action_discard()
 
+    def _valid_approved_rows(self, approved: list[int]) -> list[int]:
+        if self._report is None:
+            return []
+        members = {row for row, _source, _translation in self._report.rows}
+        staged = set(self._staged.texts)
+        return [row for row in approved if row in members and row in staged]
+
     def _apply(self) -> None:
-        approved = [
+        approved = self._valid_approved_rows([
             option.value for option in self.picker.options if option.selected
-        ]
+        ])
         if not approved:
             self._error.show("Nothing is ticked — tick a row or discard.", "cannot apply")
             return
@@ -6396,10 +6628,17 @@ class JudgeSummaryScreen(MenuScreen):
     breadcrumb = "Judge · summary"
     title_text = "Evaluation summary"
 
-    def __init__(self, report: JudgeReport, target: JudgeTarget, **kwargs) -> None:
+    def __init__(
+        self,
+        report: JudgeReport,
+        target: JudgeTarget,
+        sessions: list[tuple[JudgeTarget, JudgeReport | None, str]] | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._report = report
         self._target = target
+        self._sessions = sessions or [(target, report, "completed")]
 
     def compose_extra(self) -> ComposeResult:
         yield Label("")
@@ -6408,6 +6647,21 @@ class JudgeSummaryScreen(MenuScreen):
     def _summary(self) -> str:
         report = self._report
         summary = report.summary
+        if len(self._sessions) > 1:
+            lines = [f"[bold {ACCENT}]Files[/]"]
+            for target, session_report, status in self._sessions:
+                name = escape_markup(os.path.basename(target.path))
+                if session_report is None:
+                    lines.append(f"  {name}  [{WARN}]{escape_markup(status)}[/] · no report")
+                    continue
+                item = session_report.summary
+                lines.append(
+                    f"  {name}  [{MUTED}]{escape_markup(status)}[/] · "
+                    f"{item.percent:.1f}% · {item.problem_rows:,} flagged / "
+                    f"{item.evaluated:,} evaluated"
+                )
+            lines += ["", f"[{MUTED}]Select Back to the results to continue reviewing any file.[/]"]
+            return "\n".join(lines)
         correct = summary.evaluated - summary.problem_rows
         lines = [
             f"[bold {ACCENT}]Score[/]  {summary.percent:.1f}%   "

@@ -289,6 +289,102 @@ def test_judge_workers_not_divided_across_multi_tab(tmp_path, monkeypatch):
     assert runner._job.n_workers == 20
 
 
+def test_operation_callbacks_stay_with_origin_and_ignore_stale_generation(tmp_path):
+    from translator.judge.models import JudgeReport, RowIssue
+
+    paths = [tmp_path / "a.csv", tmp_path / "b.csv"]
+    for path in paths:
+        path.write_text("id,src,dst\n1,x,y\n", encoding="utf-8")
+    targets = [JudgeTarget(path=str(path), src_col=2, dst_col=3) for path in paths]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    reports = [JudgeReport(rows=[(1, "a", "A")]), JudgeReport(rows=[(1, "b", "B")])]
+    screen.sessions[0].report, screen.sessions[1].report = reports
+
+    old = screen._start_operation(0, "Rejudge", ("p", "c", "m"), report=reports[0])
+    current = screen._start_operation(0, "Rejudge", ("p", "c", "m"), report=reports[0])
+    screen.action_switch_tab(1)
+    issue = RowIssue(1, ["mistranslation"], "wrong", "critical")
+    screen._operation_rejudge_row_landed(old, 1, issue)
+    assert not screen.sessions[0].rejudge_flagged_rows
+    screen._operation_rejudge_row_landed(current, 1, issue)
+    assert screen.sessions[0].rejudge_flagged_rows == {1}
+    assert reports[1].issues == {}
+
+
+def test_make_runner_explicit_target_owns_job_paths_and_columns(tmp_path, monkeypatch):
+    from translator.providers.registry import ProviderRegistry
+
+    a = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    b = JudgeTarget(path=str(tmp_path / "b.csv"), src_col=3, dst_col=4, ctx_col=5)
+    class App:
+        registry = ProviderRegistry()
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: App()))
+    screen = JudgeRunScreen(a, ("p", "c", "m"), ["mistranslation"], targets=[a, b])
+    runner = screen._make_runner(target=b)
+    assert runner.target is b
+    assert runner._job.src_path == b.path
+    assert (runner._job.src_col, runner._job.dst_col, runner._job.ctx_col) == (3, 4, 5)
+
+
+def test_operation_completion_retires_worker_snapshots(tmp_path):
+    from translator.scheduling.scheduler import WorkerStatus
+
+    target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    screen = JudgeRunScreen(target, ("p", "c", "m"), ["mistranslation"])
+    op = screen._start_operation(0, "Judge", ("p", "c", "m"))
+    screen._operation_status(op, WorkerStatus(worker_id=1, phase="generating"))
+    screen._finish_operation(op, "completed")
+    assert screen.sessions[0].run_state == "completed"
+    assert all(status.phase == "idle" for status in screen.sessions[0].ledger.statuses())
+
+
+def test_staged_approval_rejects_rows_outside_origin_report(tmp_path):
+    from translator.judge.models import JudgeReport, StagedFix
+    from translator.tui.screens.judge import JudgeFixReviewScreen
+
+    class Writer:
+        def __init__(self):
+            self.calls = []
+        def apply_fix(self, texts, approved):
+            self.calls.append((texts, approved))
+
+    target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    writer = Writer()
+    report = JudgeReport(rows=[(1, "a", "A")])
+    modal = JudgeFixReviewScreen(writer, report, StagedFix(texts={1: "fixed", 2: "wrong file"}), target=target)
+    assert modal._valid_approved_rows([1, 2]) == [1]
+
+
+def test_cancel_is_bound_to_origin_session(tmp_path):
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    op_a = screen._start_operation(0, "Judge", ("p", "c", "m"))
+    op_b = screen._start_operation(1, "Judge", ("p", "c", "m"))
+    screen._cancel_operation(op_a)
+    assert op_a.stop.is_set()
+    assert not op_b.stop.is_set()
+    screen._finish_operation(op_a, "cancelled")
+    assert screen.sessions[0].run_state == "cancelled"
+    assert screen.sessions[1].operation is op_b
+
+
+def test_multifile_summary_lists_every_session(tmp_path):
+    from translator.judge.models import JudgeReport, RowIssue
+    from translator.tui.screens.judge import JudgeSummaryScreen
+
+    a = JudgeTarget(path=str(tmp_path / "alpha.csv"), src_col=1, dst_col=2)
+    b = JudgeTarget(path=str(tmp_path / "beta.csv"), src_col=1, dst_col=2)
+    reports = [
+        JudgeReport(rows=[(1, "a", "A")]),
+        JudgeReport(rows=[(1, "b", "B")], issues={1: RowIssue(1, ["style"], "bad", "minor")}),
+    ]
+    summary = JudgeSummaryScreen(reports[0], a, sessions=[(a, reports[0], "completed"), (b, reports[1], "paused")])
+    text = summary._summary()
+    assert "alpha.csv" in text and "beta.csv" in text
+    assert "completed" in text and "paused" in text
+    assert "flagged" in text
+
+
 def test_fix_all_respects_dont_ask_and_rejudge_isolated(tmp_path, monkeypatch):
     from translator.data import app_prefs
     from translator.judge.models import JudgeReport, RowIssue

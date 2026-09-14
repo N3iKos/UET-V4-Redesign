@@ -27,6 +27,21 @@ def test_file_tab_bar_state():
     assert "✓" in bar.get_tab_label(1) or "done" in bar.get_tab_label(1).lower()
 
 
+def test_four_unicode_tabs_fit_and_keep_fourth_clickable():
+    bar = FileTabBar(tabs=[
+        "第一章_非常に長いファイル名.csv",
+        "第二章_非常に長いファイル名.csv",
+        "第三章_非常に長いファイル名.csv",
+        "第四章_非常に長いファイル名.csv",
+    ])
+    rendered = bar.render_for_width(48)
+    assert len(bar._click_regions) == 4
+    assert all(start < end <= 48 for start, end, _index in bar._click_regions)
+    assert [index for _start, _end, index in bar._click_regions] == [0, 1, 2, 3]
+    assert "1." in rendered.plain and "4." in rendered.plain
+    assert "…" in rendered.plain
+
+
 def test_file_tab_bar_cycling():
     bar = FileTabBar(tabs=["A.csv", "B.csv", "C.csv"])
     bar.next_tab()
