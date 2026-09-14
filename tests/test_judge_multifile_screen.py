@@ -428,6 +428,37 @@ async def test_fix_all_modal_callback_after_tab_switch_uses_origin(tmp_path, mon
     assert screen.sessions[1].report is report_b
 
 
+def test_row_fix_modal_callback_routes_to_origin_after_tab_switch(tmp_path, monkeypatch):
+    from translator.judge.models import JudgeReport, RowIssue
+    targets = [JudgeTarget(path=str(tmp_path / name), src_col=1, dst_col=2) for name in ("a.csv", "b.csv")]
+    screen = JudgeRunScreen(targets[0], ("p", "c", "m"), ["mistranslation"], targets=targets)
+    report_a = JudgeReport(rows=[(1, "a", "A")], issues={1: RowIssue(1, ["mistranslation"], "bad", "critical")})
+    report_b = JudgeReport(rows=[(1, "b", "B")])
+    screen.sessions[0].report = screen._report = report_a
+    screen.sessions[1].report = report_b
+    captured = {}
+    class App:
+        def push_screen(self, modal, callback):
+            captured["callback"] = callback
+    monkeypatch.setattr(JudgeRunScreen, "app", property(lambda self: App()))
+    screen._open_row(1)
+    screen._load_session(1)
+    monkeypatch.setattr(screen, "_edited", lambda row, text: captured.update(row=row, text=text, target=screen._target))
+    captured["callback"](("edit", "fixed A"))
+    assert captured["target"] is targets[0]
+    assert report_b.translation_for(1) == "B"
+
+
+def test_stale_delayed_force_unlock_does_not_finish_new_operation(tmp_path):
+    target = JudgeTarget(path=str(tmp_path / "a.csv"), src_col=1, dst_col=2)
+    screen = JudgeRunScreen(target, ("p", "c", "m"), ["mistranslation"])
+    old = screen._start_operation(0, "Fix All", ("p", "c", "m"), busy_batch=True)
+    current = screen._start_operation(0, "Rejudge", ("p", "c", "m"), busy_batch=True)
+    assert not screen._force_unlock_operation(old)
+    assert screen.sessions[0].operation is current
+    assert screen.sessions[0].busy_batch
+
+
 def test_multifile_summary_lists_every_session(tmp_path):
     from translator.judge.models import JudgeReport, RowIssue
     from translator.tui.screens.judge import JudgeSummaryScreen

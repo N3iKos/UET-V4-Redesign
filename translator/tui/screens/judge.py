@@ -3857,10 +3857,12 @@ class JudgeRunScreen(BaseScreen):
             visible = self._visible_problems()
             if visible:
                 rows = sorted(visible)
+                origin = self._capture_origin(rows)
                 self._with_rejudge_model(
-                    lambda slot, batch, workers: self._begin_rejudge_filtered(
-                        rows, slot, rows_per_request=batch, workers=workers
-                    )
+                    lambda slot, batch, workers, token=origin: self._begin_rejudge_filtered(
+                        rows, slot, token, rows_per_request=batch, workers=workers
+                    ),
+                    origin=origin,
                 )
                 return
         rows = self._unfinished_rows()
@@ -3881,10 +3883,11 @@ class JudgeRunScreen(BaseScreen):
         self._retry_unfinished(list(rows), operation)
 
     def _begin_rejudge_filtered(
-        self, rows: list[int], slot: tuple[str, str, str],
+        self, rows: list[int], slot: tuple[str, str, str], origin: JudgeOrigin,
         rows_per_request: int | None = None, workers: int | None = None,
     ) -> None:
-        self._busy_batch = True
+        if not self._origin_current(origin, rows):
+            return
         self._rejudging = True
         self._rejudge_slot = slot
         self._rejudge_rows = list(rows)
@@ -3892,7 +3895,8 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_flagged_rows.clear()
         self._rejudge_flagged = []
         operation = self._start_operation(
-            self.active_session_index, "Rejudge", slot, report=self._report,
+            origin.session_index, "Rejudge", slot, report=origin.report,
+            busy_batch=True,
         )
         self._begin_op("Rejudge", slot)
         self.refresh_keys()
@@ -4619,6 +4623,7 @@ class JudgeRunScreen(BaseScreen):
         report = self._report
         if report is None or self._busy_batch or self._busy_row:
             return
+        origin = self._capture_origin([row])
         self.app.push_screen(
             RowFixModal(
                 row=row,
@@ -4628,23 +4633,32 @@ class JudgeRunScreen(BaseScreen):
                 issue=report.issues.get(row),
                 before=self._before.get(row, ""),
             ),
-            lambda result, row=row: self._row_action(row, result),
+            lambda result, token=origin, row=row: self._row_action(token, row, result),
         )
 
-    def _row_action(self, row: int, result) -> None:
+    def _row_action(self, origin: JudgeOrigin, row: int, result) -> None:
         """
         The row popup came back with an action:
           ("edit", text) — a hand edit, applied immediately as a manual Fixed.
           ("fix", None)  — repair with a model, via the usual model popup.
           None           — closed with no change.
         """
-        if not result:
+        if not result or not self._origin_current(origin, [row]):
             return
-        kind, payload = result
-        if kind == "edit":
-            self._edited(row, payload)
-        elif kind == "fix":
-            self._fix_row_for(row)
+        active = self.active_session_index
+        if active != origin.session_index:
+            self._save_current_session()
+            self._load_session(origin.session_index)
+        try:
+            kind, payload = result
+            if kind == "edit":
+                self._edited(row, payload)
+            elif kind == "fix":
+                self._fix_row_for(row)
+            self._save_current_session()
+        finally:
+            if active != origin.session_index:
+                self._load_session(active)
 
     def action_scroll_grid(self, lines: int) -> None:
         """
@@ -4757,21 +4771,11 @@ class JudgeRunScreen(BaseScreen):
             self.notify_status(
                 "Force-cancelling — aborting immediately…", ERROR,
             )
-            def _force_unlock_judge() -> None:
-                if self._busy_batch or self._busy_row:
-                    self._busy_batch = False
-                    self._busy_row = 0
-                    self.indicator.stop()
-                    self._fix_seen.clear()
-                    self._fixed_live.clear()
-                    if hasattr(self, "_ledger"):
-                        self._ledger.reset_all_idle()
-                    if hasattr(self, "activity"):
-                        self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
-                    self._paint_rail()
-                    self.refresh_keys()
-                    self.notify_status("Operation cancelled.", ERROR)
-            self.set_timer(1.0, _force_unlock_judge)
+            if active_op is not None:
+                self.set_timer(
+                    1.0,
+                    lambda operation=active_op: self._force_unlock_operation(operation),
+                )
             self.refresh_keys()
             return
 
@@ -4788,6 +4792,21 @@ class JudgeRunScreen(BaseScreen):
             WARN,
         )
         self.refresh_keys()
+
+    def _force_unlock_operation(self, operation: JudgeOperation) -> bool:
+        if not self._operation_current(operation):
+            return False
+        self._finish_operation(operation, "cancelled")
+        if operation.session_index == self.active_session_index:
+            self.indicator.stop()
+            self._fix_seen.clear()
+            self._fixed_live.clear()
+            if hasattr(self, "activity"):
+                self.activity.set_statuses(self._ledger.statuses(), self._anim_tick)
+            self._paint_rail()
+            self.refresh_keys()
+            self.notify_status("Operation cancelled.", ERROR)
+        return True
 
     def _force_abort(self, operation: JudgeOperation | None = None) -> None:
         """
