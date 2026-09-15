@@ -22,6 +22,17 @@ from .. import config
 
 SCHEMA_VERSION = 1
 
+
+def _prefs_dir() -> str | None:
+    return None
+
+
+def _prefs_file() -> str:
+    custom_dir = _prefs_dir() if callable(_prefs_dir) else _prefs_dir
+    if custom_dir:
+        return os.path.join(str(custom_dir), "app_prefs.json")
+    return config.APP_PREFS_FILE
+
 # The domain of `processing_mode_default`. Kept here rather than imported from
 # core.models so this module stays leaf-level (config only).
 PROCESSING_MODES = ("sequential", "parallel", "wave")
@@ -37,6 +48,11 @@ DEFAULT_JUDGE_CRITERIA = ["mistranslation", "context", "placeholder", "style"]
 
 # Deduplication / Translation Memory modes.
 DEDUP_MODES = ("unique_file", "persistent", "disabled")
+
+# Translation fallback modes for failed rows:
+#   copy_source — keeps original text so the game never displays errors/crashes
+#   fail_marker — puts [TRANSLATE_FAILED] so missing lines are obvious
+FALLBACK_MODES = ("copy_source", "fail_marker")
 
 DEFAULTS: dict = {
     "processing_mode_default": config.DEFAULT_PROCESSING_MODE,
@@ -86,6 +102,7 @@ DEFAULTS: dict = {
     #   persistent  — unique working file plus persistent translation memory
     #   disabled    — translate every row independently
     "dedup_mode": "unique_file",
+    "failed_fallback_mode": "copy_source",
 }
 
 
@@ -98,7 +115,7 @@ def load_prefs() -> dict:
     knows how to render.
     """
     try:
-        with open(config.APP_PREFS_FILE, encoding="utf-8") as handle:
+        with open(_prefs_file(), encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, ValueError):
         return dict(DEFAULTS)
@@ -164,6 +181,9 @@ def load_prefs() -> dict:
         payload.get("failover_retry_threshold")
     )
     prefs["dedup_mode"] = _clean_dedup_mode(payload.get("dedup_mode"))
+    fallback_mode = payload.get("failed_fallback_mode")
+    if isinstance(fallback_mode, str) and fallback_mode in FALLBACK_MODES:
+        prefs["failed_fallback_mode"] = fallback_mode
     return prefs
 
 
@@ -233,6 +253,9 @@ def save_prefs(prefs: dict) -> None:
         current.get("failover_retry_threshold")
     )
     current["dedup_mode"] = _clean_dedup_mode(current.get("dedup_mode"))
+    fallback_mode = current.get("failed_fallback_mode")
+    if fallback_mode not in FALLBACK_MODES:
+        current["failed_fallback_mode"] = DEFAULTS["failed_fallback_mode"]
     try:
         _write(current)
     except OSError:
@@ -583,6 +606,27 @@ def set_dedup_mode(mode: str) -> str:
     return cleaned
 
 
+# ── Translation Fallback Mode ───────────────────────────────────────────────
+
+def failed_fallback_mode() -> str:
+    """Fallback value when translation fails: 'copy_source' (game-safe) or 'fail_marker' ([TRANSLATE_FAILED])."""
+    val = _load().get("failed_fallback_mode", "copy_source")
+    return val if val in FALLBACK_MODES else "copy_source"
+
+
+def set_failed_fallback_mode(mode: str) -> None:
+    if mode in FALLBACK_MODES:
+        _update("failed_fallback_mode", mode)
+
+
+def _load() -> dict:
+    return load_prefs()
+
+
+def _update(key: str, val) -> None:
+    save_prefs({key: val})
+
+
 def _clamp_chain_window(value) -> int:
     """
     Neighbour rows per side for the Judge dialogue-chain context, 1–5.
@@ -771,7 +815,8 @@ def _clamp_request_timeout(value) -> int:
 
 def _write(prefs: dict) -> None:
     """Replace the file in one step, so a crash mid-write cannot truncate it."""
-    directory = os.path.dirname(config.APP_PREFS_FILE)
+    target_file = _prefs_file()
+    directory = os.path.dirname(target_file)
     if directory:
         os.makedirs(directory, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
@@ -781,7 +826,7 @@ def _write(prefs: dict) -> None:
         with handle:
             json.dump({"version": SCHEMA_VERSION, **prefs},
                       handle, ensure_ascii=False, indent=2)
-        os.replace(handle.name, config.APP_PREFS_FILE)
+        os.replace(handle.name, target_file)
     except Exception:
         try:
             os.unlink(handle.name)
