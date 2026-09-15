@@ -434,6 +434,11 @@ class JudgeRunner:
         if rows is None:
             rows, _contexts = self.load_rows()
 
+        from ..core.failed_cache import load_failed_rows
+        failed_set = load_failed_rows(self._target.path, self._target.dst_col)
+        if getattr(self._target, "full_path", None):
+            failed_set.update(load_failed_rows(self._target.full_path, self._target.dst_col))
+
         prejudged: dict[int, RowIssue] = {}
         askable: list[tuple[int, str, str]] = []
         for row, source, translation in rows:
@@ -443,10 +448,15 @@ class JudgeRunner:
                     row=row, error_types=["empty"],
                     comment="The target cell is empty — nothing was translated.",
                 )
-            elif text == config.FAIL_MARKER:
+            elif text == config.FAIL_MARKER or row in failed_set:
+                comment = (
+                    f"Translation failed and was written as {config.FAIL_MARKER}."
+                    if text == config.FAIL_MARKER
+                    else "Translation failed and was preserved from source."
+                )
                 prejudged[row] = RowIssue(
                     row=row, error_types=["failed"],
-                    comment=f"Translation failed and was written as {config.FAIL_MARKER}.",
+                    comment=comment,
                 )
             else:
                 askable.append((row, source, translation))
@@ -482,11 +492,38 @@ class JudgeRunner:
         Only meaningful when the chain setting is on; the caller decides, the
         plan simply carries the mode.
         """
+        from ..core.failed_cache import load_failed_rows
+        failed_set = load_failed_rows(self._target.path, self._target.dst_col)
+        if getattr(self._target, "full_path", None):
+            failed_set.update(load_failed_rows(self._target.full_path, self._target.dst_col))
+
+        prejudged: dict[int, RowIssue] = {}
+        askable: list[tuple[int, str, str]] = []
+        for row, source, translation in rows:
+            text = (translation or "").strip()
+            if not text:
+                prejudged[row] = RowIssue(
+                    row=row, error_types=["empty"],
+                    comment="The target cell is empty — nothing was translated.",
+                )
+            elif text == config.FAIL_MARKER or row in failed_set:
+                comment = (
+                    f"Translation failed and was written as {config.FAIL_MARKER}."
+                    if text == config.FAIL_MARKER
+                    else "Translation failed and was preserved from source."
+                )
+                prejudged[row] = RowIssue(
+                    row=row, error_types=["failed"],
+                    comment=comment,
+                )
+            else:
+                askable.append((row, source, translation))
+
         sections = estimator.split_sections(
-            rows, max_tokens=self._max_tokens, max_rows=self._max_rows
+            askable, max_tokens=self._max_tokens, max_rows=self._max_rows
         )
         window = self._chain_window()
-        flagged = {row for row, _s, _t in rows}
+        flagged = {row for row, _s, _t in askable}
         neighbours: dict[int, tuple[str, str]] = {}
         try:
             all_rows, _contexts = self.load_rows()
@@ -507,6 +544,7 @@ class JudgeRunner:
         return EvaluationPlan(
             rows=rows,
             sections=sections,
+            prejudged=prejudged,
             estimated_tokens=estimator.estimate_sections(sections),
             max_tokens=self._max_tokens,
             rechain=True,
