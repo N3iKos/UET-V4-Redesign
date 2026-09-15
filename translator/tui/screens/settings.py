@@ -98,9 +98,21 @@ def _dedup_hint(prefs: dict) -> str:
     }.get(mode, mode)
 
 
+def _failed_fallback_hint(prefs: dict) -> str:
+    mode = prefs.get("failed_fallback_mode", "copy_source")
+    return {
+        "copy_source": "Copy source (Game-safe) — keep original line on error",
+        "fail_marker": "Fail marker ([TRANSLATE_FAILED]) — clearly mark failed lines",
+    }.get(mode, mode)
+
+
 class SettingsScreen(MenuScreen):
     breadcrumb = "Settings"
     title_text = "Settings"
+
+    @property
+    def _options(self) -> list[Option]:
+        return self.build_options()
 
     def build_options(self) -> list[Option]:
         prefs = app_prefs.load_prefs()
@@ -116,6 +128,8 @@ class SettingsScreen(MenuScreen):
                    hint=_translate_chain_hint(prefs)),
             Option("  Deduplication & TM", "dedup_mode",
                    hint=_dedup_hint(prefs)),
+            Option("  Failed rows output", "failed_fallback",
+                   hint=_failed_fallback_hint(prefs)),
             Option("  Preferred rows/request", "preferred_rows",
                    hint=f"{prefs['preferred_rows_per_request']} rows — what Processing aims for"),
             Option("  Maximum rows/request", "max_rows_cap",
@@ -187,6 +201,11 @@ class SettingsScreen(MenuScreen):
                 DedupModeModal(app_prefs.dedup_mode()),
                 self._dedup_mode_done,
             )
+        elif option.value == "failed_fallback":
+            self.app.push_screen(
+                FailedFallbackModal(app_prefs.failed_fallback_mode()),
+                self._failed_fallback_done,
+            )
         elif option.value == "rows":
             self.app.push_screen(MaxRowsModal(), self._rows_done)
         elif option.value == "preferred_rows":
@@ -226,6 +245,18 @@ class SettingsScreen(MenuScreen):
         stored = app_prefs.set_dedup_mode(mode)
         self.picker.set_options(self.build_options(), keep_index=True)
         self.notify_status(f"Deduplication mode set to {stored}.", OK)
+
+    def _failed_fallback_done(self, mode: str | None) -> None:
+        if not mode:
+            return
+        app_prefs.set_failed_fallback_mode(mode)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        label = (
+            "Copy source (Game-safe)"
+            if mode == "copy_source"
+            else "Fail marker ([TRANSLATE_FAILED])"
+        )
+        self.notify_status(f"Failed rows output set to: {label}.", OK)
 
     def _grading_done(self, mode: str | None) -> None:
         if not mode:
@@ -498,6 +529,63 @@ class DedupModeModal(ModalScreen[str]):
         for index, name in enumerate(app_prefs.DEDUP_MODES):
             if name == self._current:
                 self.picker.index = index
+                break
+        self.picker.focus()
+
+    def on_picker_selected(self, event: Picker.Selected) -> None:
+        self.dismiss(str(event.option.value))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+FAILED_FALLBACK_CHOICES = [
+    (
+        "copy_source",
+        "Copy source (Game-safe)",
+        "keep original text on error — safe for games, prevents crashes",
+    ),
+    (
+        "fail_marker",
+        "Fail marker ([TRANSLATE_FAILED])",
+        "insert [TRANSLATE_FAILED] — clearly mark failed lines for review",
+    ),
+]
+
+
+class FailedFallbackModal(ModalScreen[str]):
+    """
+    Fallback output mode for permanently failed translation rows.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def __init__(self, current: str | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._current = current or app_prefs.failed_fallback_mode()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Failed rows output", classes="title")
+            yield Label(
+                "Choose what to output when translation of a row permanently fails:",
+                classes="hint",
+            )
+            self.picker = Picker([
+                Option(
+                    label + ("   (current)" if val == self._current else ""),
+                    val,
+                    hint=hint,
+                )
+                for val, label, hint in FAILED_FALLBACK_CHOICES
+            ])
+            yield self.picker
+            yield KeyHints([("↑↓", "move"), ("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        for idx, (val, _, _) in enumerate(FAILED_FALLBACK_CHOICES):
+            if val == self._current:
+                self.picker.index = idx
                 break
         self.picker.focus()
 
