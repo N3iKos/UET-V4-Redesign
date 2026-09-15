@@ -1,3 +1,4 @@
+import json
 import os
 from unittest.mock import MagicMock
 from translator.core.engine import ProcessingEngine
@@ -121,4 +122,52 @@ def test_engine_writes_fail_marker_when_configured(tmp_path, monkeypatch):
     content = out_file.read_text(encoding="utf-8")
     assert "[TRANSLATE_FAILED]" in content
     assert 2 in load_failed_rows(str(out_file), 3)
+
+
+def test_engine_dedup_row_mapping_for_full_path(tmp_path):
+    cache_dir = tmp_path / ".uet_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    full_out = tmp_path / "game_Translated.csv"
+    full_out.write_text("id,src,dst\n1,apple,\n2,banana,\n3,orange,\n4,apple,\n", encoding="utf-8")
+
+    unique_out = cache_dir / "game.1234abcd.unique.csv"
+    unique_out.write_text("id,src,dst\n1,apple,\n2,banana,\n3,orange,\n", encoding="utf-8")
+
+    map_file = cache_dir / "game.1234abcd.map.json"
+    map_file.write_text(
+        json.dumps({
+            "rep_to_full": {
+                "2": [2, 5],
+                "3": [3],
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    job = JobConfig(
+        src_path=str(unique_out),
+        out_path=str(unique_out),
+        full_out_path=str(full_out),
+        map_path=str(map_file),
+        src_col=2,
+        dst_col=3,
+        start_row=2,
+        num_rows=2,
+    )
+    engine = ProcessingEngine(job)
+
+    # 1. Fail unique row 2 (corresponds to full rows 2 and 5)
+    res_failed = BatchResult(results={}, failed_rows=[2])
+    engine._write_result(res_failed, {2: "apple"})
+
+    assert load_failed_rows(str(unique_out), 3) == {2}
+    assert load_failed_rows(str(full_out), 3) == {2, 5}
+
+    # 2. Succeed unique row 2 -> should clear row 2 from unique cache and rows 2, 5 from full cache
+    res_ok = BatchResult(results={2: "apel"}, failed_rows=[])
+    engine._write_result(res_ok, {2: "apple"})
+
+    assert load_failed_rows(str(unique_out), 3) == set()
+    assert load_failed_rows(str(full_out), 3) == set()
 

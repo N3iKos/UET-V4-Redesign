@@ -28,7 +28,7 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Callable, TextIO
+from typing import Callable, Iterable, TextIO
 
 from .. import config
 from ..data import app_prefs
@@ -740,11 +740,14 @@ class ProcessingEngine:
         if result.failed_rows:
             record_failed_rows(out_path_target, self.job.dst_col, result.failed_rows)
             if self.job.full_out_path and self.job.full_out_path != out_path_target:
-                record_failed_rows(self.job.full_out_path, self.job.dst_col, result.failed_rows)
+                full_failed = self._map_rows_to_full(result.failed_rows)
+                record_failed_rows(self.job.full_out_path, self.job.dst_col, full_failed)
         if result.results:
-            clear_failed_rows(out_path_target, self.job.dst_col, list(result.results.keys()))
+            resolved = list(result.results.keys())
+            clear_failed_rows(out_path_target, self.job.dst_col, resolved)
             if self.job.full_out_path and self.job.full_out_path != out_path_target:
-                clear_failed_rows(self.job.full_out_path, self.job.dst_col, list(result.results.keys()))
+                full_resolved = self._map_rows_to_full(resolved)
+                clear_failed_rows(self.job.full_out_path, self.job.dst_col, full_resolved)
 
         if payload:
             self._writer.flush(payload, self._dst_col)
@@ -768,6 +771,28 @@ class ProcessingEngine:
                 f"batch {batch_num}: wrote {len(payload)} row(s), "
                 f"{len(result.failed_rows)} failed"
             )
+
+    def _map_rows_to_full(self, rows: Iterable[int]) -> list[int]:
+        if not (self.job.map_path and os.path.exists(self.job.map_path)):
+            return list(rows)
+        cached_path = getattr(self, "_cached_map_path", None)
+        if cached_path != self.job.map_path:
+            try:
+                import json
+                with open(self.job.map_path, "r", encoding="utf-8") as f:
+                    self._cached_map_data = json.load(f)
+                    self._cached_map_path = self.job.map_path
+            except Exception:
+                return list(rows)
+        rep_to_full = getattr(self, "_cached_map_data", {}).get("rep_to_full", {})
+        full_rows: list[int] = []
+        for r in rows:
+            mapped = rep_to_full.get(str(r)) or rep_to_full.get(r)
+            if mapped:
+                full_rows.extend(mapped)
+            else:
+                full_rows.append(r)
+        return full_rows
 
     def request_stop(self) -> None:
         self._stop.set()

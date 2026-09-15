@@ -448,7 +448,7 @@ class JudgeRunner:
                     row=row, error_types=["empty"],
                     comment="The target cell is empty — nothing was translated.",
                 )
-            elif text == config.FAIL_MARKER or row in failed_set:
+            elif text == config.FAIL_MARKER or (row in failed_set and text == (source or "").strip()):
                 comment = (
                     f"Translation failed and was written as {config.FAIL_MARKER}."
                     if text == config.FAIL_MARKER
@@ -506,7 +506,7 @@ class JudgeRunner:
                     row=row, error_types=["empty"],
                     comment="The target cell is empty — nothing was translated.",
                 )
-            elif text == config.FAIL_MARKER or row in failed_set:
+            elif text == config.FAIL_MARKER or (row in failed_set and text == (source or "").strip()):
                 comment = (
                     f"Translation failed and was written as {config.FAIL_MARKER}."
                     if text == config.FAIL_MARKER
@@ -1324,6 +1324,28 @@ class JudgeRunner:
                     self._target.map_path, writer.active_path,
                     self._target.full_path, self._target.dst_col,
                 )
+        from ..core.failed_cache import clear_failed_rows
+        fixed_rows = list(payload.keys())
+        clear_failed_rows(self._target.path, self._target.dst_col, fixed_rows)
+        if getattr(self._target, "full_path", None) and self._target.full_path != self._target.path:
+            full_rows = list(fixed_rows)
+            if getattr(self._target, "map_path", None) and os.path.exists(self._target.map_path):
+                try:
+                    import json
+                    with open(self._target.map_path, "r", encoding="utf-8") as f:
+                        mapping = json.load(f)
+                    rep_to_full = mapping.get("rep_to_full", {})
+                    mapped_keys: list[int] = []
+                    for k in fixed_rows:
+                        mapped = rep_to_full.get(str(k)) or rep_to_full.get(k)
+                        if mapped:
+                            mapped_keys.extend(mapped)
+                        else:
+                            mapped_keys.append(k)
+                    full_rows = mapped_keys
+                except Exception:
+                    full_rows = list(fixed_rows)
+            clear_failed_rows(self._target.full_path, self._target.dst_col, set(full_rows) | set(fixed_rows))
         self._clear_staged_cache()
         return len(payload)
 
