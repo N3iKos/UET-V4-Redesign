@@ -50,3 +50,15 @@ def test_fix_solo_prompt_carries_fitting():
     out = build_fix_solo_prompt(4, "Halo", "Hello world",
                                 fitting="5 lines/131% · SINKING · tag: [r]")
     assert "FITTING" in out
+
+
+def test_fix_prompt_preserves_intentional_glitch_text():
+    out = build_fix_prompt(
+        rows=[(824, "g l i t c h\\n  t e x t", "[TRANSLATE_FAILED]")],
+        comments={824: "Translation failed."},
+        criteria=["failed"],
+    )
+    assert "intentional glitch" in out.lower()
+    assert "spacing" in out.lower()
+    assert "\\n" in out
+    assert "do not sanitize" in out.lower() or "do not normalize" in out.lower() or "do not normalise" in out.lower()

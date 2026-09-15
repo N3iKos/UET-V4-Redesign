@@ -175,6 +175,7 @@ _FIX_SYS = (
     "   If you are certain the suggested wording is unnatural in context, you may adjust it minimally — but the flagged words still must not survive.\n"
     "4. When the FIX suggestion is a direction only — register, tone, style — choose the wording yourself, in the natural voice of the target language for this line and its context. Never output a line that sounds machine-translated or dictionary-literal.\n"
     "5. The corrected line must accurately reflect the meaning of SOURCE in the target language. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
+    "   SOURCE may contain intentional glitch text, corrupted-looking fragments, unusual spacing, repeated characters, symbols, or literal escape sequences such as \\n. Preserve that authored effect in the translation: do not sanitize, normalize, reconstruct, or omit it. Translate readable language while retaining its spacing pattern, escapes, symbols, fragmentation, and visual corruption as closely as the target language permits.\n"
     "6. CLEAN OUTPUT CONTRACT:\n"
     "   Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks.\n"
     "   Change only what is wrong. A line's register, tone and terminology must stay consistent with the surrounding work."

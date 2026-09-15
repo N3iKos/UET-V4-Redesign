@@ -11,8 +11,27 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from translator.judge.models import JudgeReport, RowIssue
 from translator.judge.runner import JudgeTarget
-from translator.tui.screens.judge import JudgeRunScreen
+from translator.tui.screens.judge import FixAllSetupScreen, JudgeRunScreen
+
+
+def test_fix_all_setup_offers_failed_rows_as_repairable():
+    report = JudgeReport(
+        rows=[(824, "g l i t c h", "[TRANSLATE_FAILED]")],
+        issues={824: RowIssue(824, ["failed"], "Translation failed.")},
+    )
+    report.summary.distribution["failed"] = 1
+    screen = FixAllSetupScreen(
+        report=report,
+        rows=[824],
+        model_slot=("p", "c", "m"),
+        target=JudgeTarget(path="game.csv", src_col=2, dst_col=3),
+    )
+
+    options = screen._criteria_options()
+
+    assert any(option.value == "failed" and option.selected for option in options)
 
 
 def test_judge_run_screen_multi_tab_initialization(tmp_path):

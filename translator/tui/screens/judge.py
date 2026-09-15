@@ -5092,10 +5092,13 @@ class JudgeRunScreen(BaseScreen):
         if not force and getattr(self.app, "judge_fix_slot", None) is not None:
             remembered = remembered_fix_settings(slot)
             if remembered is not None:
+                repair_criteria = list(self._criteria)
+                if any("failed" in report.issues[row].error_types for row in fixable):
+                    repair_criteria.append("failed")
                 plan = FixAllPlan(
                     model_slot=slot,
                     rows=fixable,
-                    criteria=list(self._criteria),
+                    criteria=repair_criteria,
                     severities=None,
                     batch_size=remembered["max_rows"],
                     workers=remembered["workers"],
@@ -6340,12 +6343,18 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         """
         distribution = self._report.summary.distribution
         options: list[Option] = []
-        for name in CRITERIA:
+        repairable = (*CRITERIA, "failed")
+        for name in repairable:
             count = distribution.get(name, 0)
             if not count:
                 continue
+            label = (
+                "Failed translation — translate the original source"
+                if name == "failed"
+                else CRITERION_LABELS[name]
+            )
             options.append(Option(
-                f"{CRITERION_LABELS[name]}",
+                label,
                 name,
                 hint=f"{count} row(s)",
                 selected=True,
