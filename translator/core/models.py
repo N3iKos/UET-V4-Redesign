@@ -41,8 +41,8 @@ ConfigMode     = Literal["quick", "full"]
 @dataclass
 class JobConfig:
     # Provider / model — registry IDs, never hardcoded provider names
-    provider_id:     str
-    model_id:        str
+    provider_id:     str = ""
+    model_id:        str = ""
     connection_id:   str = ""     # "" = let ConnectionPool pick per strategy
     repair_model_id: str = ""     # "" = same as model_id
     # A combo instead of a single model (FEATURE-005). Set together with

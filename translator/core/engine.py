@@ -70,7 +70,7 @@ class ProcessingEngine:
     def __init__(
         self,
         job: JobConfig,
-        provider: Provider | None,
+        provider: Provider | None = None,
         connection_pool: ConnectionPool | None = None,
         on_status: Callable[[WorkerStatus], None] | None = None,
         on_event: Callable[[ScheduleEvent], None] | None = None,
@@ -98,12 +98,7 @@ class ProcessingEngine:
                 connection_ids=[job.connection_id] if job.connection_id else None,
             )
         else:
-            # A combo job has no single provider, so the pool has to be supplied
-            # by the caller that holds the registry (`scheduling/pools.py` builds
-            # it). Refusing here beats running against a pool that does not exist.
-            raise ValueError(
-                "ProcessingEngine needs either a provider or a connection pool."
-            )
+            self._pool = None
 
         self._parser = ParseRecoveryPipeline()
         # Seed the output file before the writer opens it: results go to
@@ -163,6 +158,14 @@ class ProcessingEngine:
         return self._writer.active_path
 
     @property
+    def _active_output_path(self) -> str:
+        return self._output_path()
+
+    @property
+    def job(self) -> JobConfig:
+        return self._job
+
+    @property
     def output_path(self) -> str:
         """
         The file this job's results ended up in, for the summary to report.
@@ -216,14 +219,18 @@ class ProcessingEngine:
         # Resume: skip rows already filled, but never skip FAIL_MARKER rows —
         # those must be retried on every re-run.
         if job.skip_filled:
+            from .failed_cache import load_failed_rows
             dst_values = dict(
                 ExcelReader.load_column(
                     job.out_path, job.dst_col, job.start_row, job.num_rows
                 )
             )
+            cached_failed = load_failed_rows(job.out_path, job.dst_col)
+            if job.full_out_path and job.full_out_path != job.out_path:
+                cached_failed.update(load_failed_rows(job.full_out_path, job.dst_col))
             filled = {
                 rn for rn, val in dst_values.items()
-                if val.strip() and val.strip() != config.FAIL_MARKER
+                if val.strip() and val.strip() != config.FAIL_MARKER and rn not in cached_failed
             }
             skipped = [rn for rn, _ in to_process if rn in filled]
             to_process = [(rn, txt) for rn, txt in to_process if rn not in filled]
@@ -360,6 +367,13 @@ class ProcessingEngine:
             ExcelReader.load_column(job.src_path, job.src_col, job.start_row, job.num_rows)
         )
 
+        from .failed_cache import load_failed_rows
+        cached_failed = load_failed_rows(self._output_path(), job.dst_col)
+        if job.out_path and job.out_path != self._output_path():
+            cached_failed.update(load_failed_rows(job.out_path, job.dst_col))
+        if getattr(job, "full_out_path", None) and job.full_out_path != self._output_path():
+            cached_failed.update(load_failed_rows(job.full_out_path, job.dst_col))
+
         failed_rows: list[tuple[int, str]] = []
         scan_results: list[tuple[int, str, str]] = []
         # Rows with a source and an acceptable translation: the only rows this
@@ -375,6 +389,8 @@ class ProcessingEngine:
             if not dst_val or not dst_val.strip():
                 issue = "empty"
             elif dst_val.strip() == config.FAIL_MARKER:
+                issue = "TRANSLATE_FAILED"
+            elif rn in cached_failed and (dst_val.strip() == src_val.strip() or dst_val.strip() == config.FAIL_MARKER or not dst_val.strip()):
                 issue = "TRANSLATE_FAILED"
             elif include_too_short and len(dst_val.strip()) < 3 and len(src_val.strip()) >= 3:
                 issue = "too_short"
@@ -640,6 +656,10 @@ class ProcessingEngine:
     # ── Scheduler wiring ──────────────────────────────────────────────────────
 
     def _make_scheduler(self, prompt_builder, parse_response, solo_prompt_builder) -> Scheduler:
+        if self._pool is None:
+            raise ValueError(
+                "ProcessingEngine needs either a provider or a connection pool."
+            )
         return Scheduler(
             job=self._job,
             connection_pool=self._pool,
@@ -687,28 +707,65 @@ class ProcessingEngine:
             },
         }
 
-    def _write_result(self, task: BatchTask, result: BatchResult) -> None:
+    def _write_result(
+        self,
+        task: BatchTask | BatchResult,
+        result: BatchResult | dict[int, str] | None = None,
+    ) -> None:
         """Hand finished rows to the async writer. Never blocks on disk."""
+        direct_call = False
+        if isinstance(task, BatchResult):
+            direct_call = True
+            res = task
+            direct_source_map = result if isinstance(result, dict) else {}
+            task = None
+            result = res
+        else:
+            direct_source_map = None
+
+        from .failed_cache import clear_failed_rows, record_failed_rows
+        from ..data.app_prefs import failed_fallback_mode
+
+        source_map = direct_source_map if direct_source_map is not None else getattr(self, "_source_map", {})
         payload = dict(result.results)
+        mode = failed_fallback_mode()
         for row_num in result.failed_rows:
-            payload.setdefault(row_num, config.FAIL_MARKER)
+            if mode == "copy_source":
+                fallback_val = source_map.get(row_num, "")
+                payload.setdefault(row_num, fallback_val)
+            else:
+                payload.setdefault(row_num, config.FAIL_MARKER)
+
+        out_path_target = self._active_output_path or self.job.out_path
+        if result.failed_rows:
+            record_failed_rows(out_path_target, self.job.dst_col, result.failed_rows)
+            if self.job.full_out_path and self.job.full_out_path != out_path_target:
+                record_failed_rows(self.job.full_out_path, self.job.dst_col, result.failed_rows)
+        if result.results:
+            clear_failed_rows(out_path_target, self.job.dst_col, list(result.results.keys()))
+            if self.job.full_out_path and self.job.full_out_path != out_path_target:
+                clear_failed_rows(self.job.full_out_path, self.job.dst_col, list(result.results.keys()))
+
         if payload:
             self._writer.flush(payload, self._dst_col)
             self._maybe_sync_full()
+            if direct_call:
+                self._writer.sync()
+
         if getattr(self, "_dedup_mode", "unique_file") == "persistent" and result.results:
             from .tm import store_tm_batch
-            source_map = getattr(self, "_source_map", {})
             pairs = [
                 (source_map.get(r, ""), t)
                 for r, t in result.results.items()
                 if source_map.get(r) and t != config.FAIL_MARKER
             ]
             store_tm_batch(self._job.src_lang, self._job.tgt_lang, pairs)
-        if self._on_result_hook is not None:
+        if task is not None and self._on_result_hook is not None:
             self._on_result_hook(task, result)
         if self._job.debug_log:
+            batch_num = getattr(task, "batch_num", "?")
             self.write_log(
-                f"batch {task.batch_num}: wrote {len(payload)} row(s), "
+                f"batch {batch_num}: wrote {len(payload)} row(s), "
                 f"{len(result.failed_rows)} failed"
             )
 
@@ -804,9 +861,10 @@ class ProcessingEngine:
         """
         if self._provider is not None:
             return self._provider.name
-        combo = getattr(self._pool, "combo", None)
-        if combo is not None:
-            return f"combo {combo.label} ({combo.strategy})"
+        if self._pool is not None:
+            combo = getattr(self._pool, "combo", None)
+            if combo is not None:
+                return f"combo {combo.label} ({combo.strategy})"
         return "(combo)"
 
     def _open_log(self) -> TextIO | None:
@@ -862,7 +920,8 @@ class ProcessingEngine:
         except Exception as exc:
             self._notice("error", f"Final Excel write failed: {exc}")
 
-        stats.tokens_consumed = max(stats.tokens_consumed, self._pool.total_tokens_consumed())
+        if self._pool is not None:
+            stats.tokens_consumed = max(stats.tokens_consumed, self._pool.total_tokens_consumed())
 
         if self._log_file:
             try:
