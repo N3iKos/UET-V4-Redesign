@@ -58,27 +58,30 @@ from ..parsing.placeholders import encode_placeholders
 from .models import CRITERIA, SEVERITIES
 
 _JUDGE_SYS = (
-    "You are an impartial, senior translation arbiter and quality evaluator. "
-    "Your mandate is to distinguish genuine translation defects from stylistic preference, "
-    "pedantic nitpicking, or prior reviewer hallucinations. "
+    "You are a rigorous and impartial senior translation arbiter and quality evaluator. "
+    "Your mandate is to maintain high translation standards and detect genuine defects—including "
+    "clear typos, grammatical errors, mistranslations, broken nuance, and placeholder corruption—while "
+    "distinguishing real issues from pedantic nitpicking or prior reviewer hallucinations. "
     "You review only what is in front of you, you never rewrite the source, "
-    "and you report a line only when something is actually wrong with it.\n"
+    "and you report a line whenever something is actually wrong with it.\n"
     "CORE PRINCIPLES OF ARBITRATION:\n"
-    "1. PRESUMPTION OF ADEQUACY: A translation is presumed ACCEPTABLE unless it demonstrates an "
-    "objective failure against its source. The burden of proof is high. Never flag a line simply "
-    "because you would have phrased it differently.\n"
-    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional "
-    "nuance, slang, or dialogue reactions. Differences in synonym choice, colloquial intensity, or "
-    "phrasing preference are NOT translation errors. Do NOT debate stylistic alternatives.\n"
-    "3. ARBITRATION OF PREVIOUS FINDINGS: When a row includes a PREVIOUS FINDING:\n"
-    "   - Treat it as an unverified claim, not established fact.\n"
-    "   - Test whether the previous critique was valid, or if it was pedantic nitpicking / reviewer hallucination.\n"
-    "   - If the CURRENT TRANSLATION conveys the source accurately and resolves the core issue (or was already acceptable), "
-    "DISMISS the finding entirely by omitting the row.\n"
-    "   - Never engage in circular critique (recommending Word A when Word B is used, then recommending Word B when Word A is used). "
-    "If a phrasing is defensible in context, DISMISS the claim.\n"
-    "4. OBJECTIVE ERROR THRESHOLD: Report a line ONLY if it commits an objective defect (meaning reversed, "
-    "key facts/numbers/clauses omitted or hallucinated, broken technical placeholders, or gross register violation).\n"
+    "1. PRESUMPTION OF ADEQUACY & DEFECT SENSITIVITY: While natural alternative phrasings are allowed, "
+    "you MUST actively catch and flag genuine defects. Typographical errors (typos), misspelled words, "
+    "reversed meanings, inaccurate terminology, and unnatural machine translation phrasing are NOT acceptable "
+    "and must be flagged.\n"
+    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional nuance. "
+    "Legitimate synonym alternatives with identical meaning are acceptable, but do NOT confuse a mistranslation, "
+    "awkward translation, or register clash with acceptable synonym choice.\n"
+    "3. ARBITRATION OF PREVIOUS FINDINGS (HIGH SCRUTINY FOR RE-JUDGE): When a row includes a PREVIOUS FINDING or is under review:\n"
+    "   - Rigorously inspect whether the identified flaw has TRULY been resolved in the current text.\n"
+    "   - If the defect (or a new defect such as a typo, dropped word, or mistranslation) is STILL present, "
+    "YOU MUST FLAG IT AGAIN. Do NOT prematurely pass lines that remain defective.\n"
+    "   - Only DISMISS the finding (by omitting the row) if the current translation conveys the source accurately, "
+    "flawlessly, and naturally without remaining errors.\n"
+    "   - Avoid circular critique (recommending Word A when Word B is used, then Word B when Word A is used) "
+    "only when both wordings are equally correct and accurate.\n"
+    "4. OBJECTIVE ERROR THRESHOLD: Any line with a clear typo, misspelling, grammar fault, reversed meaning, "
+    "omitted/hallucinated content, broken placeholder/tag, or incorrect tone is an objective defect and MUST be reported.\n"
     "Judge every line purely against its OWN source. Several lines are batched "
     "into one request for efficiency only: they are not a passage, they are not "
     "context for one another, and they may come from unrelated parts of the "
@@ -95,27 +98,30 @@ _JUDGE_SYS = (
 # pair of neighbours re-invents the 'Missing Black Cat' bug this file's
 # isolation rule was written to kill.
 _JUDGE_SYS_CHAIN = (
-    "You are an impartial, senior translation arbiter and quality evaluator. "
-    "Your mandate is to distinguish genuine translation defects from stylistic preference, "
-    "pedantic nitpicking, or prior reviewer hallucinations. "
+    "You are a rigorous and impartial senior translation arbiter and quality evaluator. "
+    "Your mandate is to maintain high translation standards and detect genuine defects—including "
+    "clear typos, grammatical errors, mistranslations, broken nuance, and placeholder corruption—while "
+    "distinguishing real issues from pedantic nitpicking or prior reviewer hallucinations. "
     "You review only what is in front of you, you never rewrite the source, "
-    "and you report a line only when something is actually wrong with it.\n"
+    "and you report a line whenever something is actually wrong with it.\n"
     "CORE PRINCIPLES OF ARBITRATION:\n"
-    "1. PRESUMPTION OF ADEQUACY: A translation is presumed ACCEPTABLE unless it demonstrates an "
-    "objective failure against its source. The burden of proof is high. Never flag a line simply "
-    "because you would have phrased it differently.\n"
-    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional "
-    "nuance, slang, or dialogue reactions. Differences in synonym choice, colloquial intensity, or "
-    "phrasing preference are NOT translation errors. Do NOT debate stylistic alternatives.\n"
-    "3. ARBITRATION OF PREVIOUS FINDINGS: When a row includes a PREVIOUS FINDING:\n"
-    "   - Treat it as an unverified claim, not established fact.\n"
-    "   - Test whether the previous critique was valid, or if it was pedantic nitpicking / reviewer hallucination.\n"
-    "   - If the CURRENT TRANSLATION conveys the source accurately and resolves the core issue (or was already acceptable), "
-    "DISMISS the finding entirely by omitting the row.\n"
-    "   - Never engage in circular critique (recommending Word A when Word B is used, then recommending Word B when Word A is used). "
-    "If a phrasing is defensible in context, DISMISS the claim.\n"
-    "4. OBJECTIVE ERROR THRESHOLD: Report a line ONLY if it commits an objective defect (meaning reversed, "
-    "key facts/numbers/clauses omitted or hallucinated, broken technical placeholders, or gross register violation).\n"
+    "1. PRESUMPTION OF ADEQUACY & DEFECT SENSITIVITY: While natural alternative phrasings are allowed, "
+    "you MUST actively catch and flag genuine defects. Typographical errors (typos), misspelled words, "
+    "reversed meanings, inaccurate terminology, and unnatural machine translation phrasing are NOT acceptable "
+    "and must be flagged.\n"
+    "2. SYNONYM AND REGISTER TOLERANCE: Natural languages have multiple valid ways to render emotional nuance. "
+    "Legitimate synonym alternatives with identical meaning are acceptable, but do NOT confuse a mistranslation, "
+    "awkward translation, or register clash with acceptable synonym choice.\n"
+    "3. ARBITRATION OF PREVIOUS FINDINGS (HIGH SCRUTINY FOR RE-JUDGE): When a row includes a PREVIOUS FINDING or is under review:\n"
+    "   - Rigorously inspect whether the identified flaw has TRULY been resolved in the current text.\n"
+    "   - If the defect (or a new defect such as a typo, dropped word, or mistranslation) is STILL present, "
+    "YOU MUST FLAG IT AGAIN. Do NOT prematurely pass lines that remain defective.\n"
+    "   - Only DISMISS the finding (by omitting the row) if the current translation conveys the source accurately, "
+    "flawlessly, and naturally without remaining errors.\n"
+    "   - Avoid circular critique (recommending Word A when Word B is used, then Word B when Word A is used) "
+    "only when both wordings are equally correct and accurate.\n"
+    "4. OBJECTIVE ERROR THRESHOLD: Any line with a clear typo, misspelling, grammar fault, reversed meaning, "
+    "omitted/hallucinated content, broken placeholder/tag, or incorrect tone is an objective defect and MUST be reported.\n"
     "The rows below are CONSECUTIVE lines of the same work, in file order: a "
     "dialogue stream or narrative sequence. Use the surrounding lines as "
     "context — pronoun references, speaker reactions, callbacks, terminology "
@@ -165,6 +171,7 @@ _FIX_SYS = (
     "1. MANDATORY DEFECT RESOLUTION FIRST:\n"
     "   Read the CORRECTION NOTE carefully. It is written as: WHAT is wrong, WHY it is wrong, and a FIX suggestion. The suggestion names the reviewer's recommended wording — treat it as the preferred answer, not as one option among many.\n"
     "   Your absolute highest priority is to resolve the primary defect identified in the note (missing placeholders, inverted meaning, or dropped clauses). Do NOT get distracted making subjective stylistic edits to unrelated words if the primary defect remains unaddressed.\n"
+    "   When TRANSLATION is empty (or failed/missing), generate a fresh and accurate translation directly from SOURCE into the target language.\n"
     "   A repair that returns the flagged wording unchanged is a failed repair: the flagged words may NOT survive into your output.\n"
     "2. ABSOLUTE PLACEHOLDER PRESERVATION:\n"
     "   Text contains programmatic tokens, engine codes, or format placeholders (e.g. \\n[1], [2], {name}, %s, %d, <tag>, [BR][...]).\n"
@@ -175,6 +182,7 @@ _FIX_SYS = (
     "   If you are certain the suggested wording is unnatural in context, you may adjust it minimally — but the flagged words still must not survive.\n"
     "4. When the FIX suggestion is a direction only — register, tone, style — choose the wording yourself, in the natural voice of the target language for this line and its context. Never output a line that sounds machine-translated or dictionary-literal.\n"
     "5. The corrected line must accurately reflect the meaning of SOURCE in the target language. OUTPUT LANGUAGE must exactly match the Translated text language. Do NOT translate into another language.\n"
+    "   When TRANSLATION is empty or failed, generate a fresh translation directly from SOURCE into the target language.\n"
     "   SOURCE may contain intentional glitch text, corrupted-looking fragments, unusual spacing, repeated characters, symbols, or literal escape sequences such as \\n. Preserve that authored effect in the translation: do not sanitize, normalize, reconstruct, or omit it. Translate readable language while retaining its spacing pattern, escapes, symbols, fragmentation, and visual corruption as closely as the target language permits.\n"
     "6. CLEAN OUTPUT CONTRACT:\n"
     "   Return ONLY the corrected text. Do NOT explain, do NOT add notes or conversational remarks.\n"
@@ -428,12 +436,32 @@ def _chosen_criteria(criteria: list[str], with_context: bool) -> list[str]:
     return chosen
 
 
-def _criteria_block(criteria: list[str], with_context: bool) -> str:
+def _criteria_block(
+    criteria: list[str],
+    with_context: bool,
+    fitting_mode: str = "normal",
+    fitting_tolerance: int = 3,
+) -> str:
     """The instruction list for the criteria in play."""
-    return "\n".join(
-        f"  - {_CRITERION_RULES[name]}"
-        for name in _chosen_criteria(criteria, with_context)
-    )
+    out = []
+    for name in _chosen_criteria(criteria, with_context):
+        if name == "fitting" and fitting_mode == "strict":
+            rule = (
+                f"fitting (STRICT / UI COMPACT) — the translation is too long or violates strict UI/dialog bounds.\n"
+                f"    When FITTING data is printed with a row, it is measured mechanically: rows marked "
+                f"OVERFLOW, SINKING, STRICT_1WORD_LIMIT, or STRICT_LENGTH_LIMIT must be reported.\n"
+                f"    * For 1-WORD source texts (UI buttons, menu labels, item names, stats): translation must remain concise "
+                f"(maximum +{fitting_tolerance} characters longer than source) and stay 1 word. "
+                f"If translating into the target language is naturally too long or becomes multiple words (e.g. 'Sunset' -> 'Matahari terbenam'), "
+                f"do NOT force a lengthy translation. In FIX, KEEP the familiar English or original term (e.g. 'Sunset'). For Japanese source texts, "
+                f"ALWAYS use standard familiar English gaming terms (e.g. 'Equip', 'Config', 'Save', 'Load') if the target language is too long or multi-word; "
+                f"NEVER leave raw Japanese Kanji/Katakana intact if target language is Indonesian/English.\n"
+                f"    * For DIALOGUE / MULTI-WORD lines: tighten phrasing and grammar so the translation length is equal to or shorter than the source text (≤ 1.0x length) without losing core facts, numbers, or names."
+            )
+        else:
+            rule = _CRITERION_RULES[name]
+        out.append(f"  - {rule}")
+    return "\n".join(out)
 
 
 def _rows_block(
@@ -515,7 +543,9 @@ def _fix_style_rule(style_prompt: str) -> str:
 
 
 def _fix_scope_rule(
-    criteria: list[str] | None, severities: list[str] | None
+    criteria: list[str] | None,
+    severities: list[str] | None,
+    allow_leave_intact: bool = True,
 ) -> str:
     """
     What this repair run is allowed to touch.
@@ -526,11 +556,21 @@ def _fix_scope_rule(
     untrustworthy.
     """
     parts: list[str] = []
-    chosen = [name for name in CRITERIA if name in set(criteria or ())]
+    allowed = set(CRITERIA) | {"other", "failed", "empty", "unjudged"}
+    chosen = [name for name in criteria or () if name in allowed]
     if chosen:
+        if allow_leave_intact:
+            parts.append(
+                "Fix ONLY these error categories: " + ", ".join(chosen) + ". "
+                "Leave anything else about the line exactly as it is."
+            )
+        else:
+            parts.append(
+                "Fix ONLY these error categories: " + ", ".join(chosen) + "."
+            )
+    if "empty" in chosen:
         parts.append(
-            "Fix ONLY these error categories: " + ", ".join(chosen) + ". "
-            "Leave anything else about the line exactly as it is."
+            "- For empty rows (or rows where translation is missing): translate the SOURCE directly into the target language."
         )
     levels = [name for name in SEVERITIES if name in set(severities or ())]
     if levels:
@@ -556,6 +596,8 @@ def build_judge_prompt(
     comment_style: str = "auto",
     fitting_map: dict[int, str] | None = None,
     history_map: dict[int, str] | None = None,
+    fitting_mode: str = "normal",
+    fitting_tolerance: int = 3,
 ) -> str:
     """
     Review one section. The reply is JSON listing only the problem rows.
@@ -621,7 +663,7 @@ def build_judge_prompt(
         f"{_lang_line(src_lang, tgt_lang)}"
         f"{_style_line(style_prompt)}"
         f"\nJudge each line ONLY on these criteria:\n"
-        f"{_criteria_block(criteria, has_context)}\n"
+        f"{_criteria_block(criteria, has_context, fitting_mode=fitting_mode, fitting_tolerance=fitting_tolerance)}\n"
         f"{_style_guidance(style_prompt, chosen)}"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
@@ -662,6 +704,8 @@ def build_judge_single_prompt(
     grading_mode: str = "severity",
     fitting: str = "",
     history: str = "",
+    fitting_mode: str = "normal",
+    fitting_tolerance: int = 3,
 ) -> str:
     """
     Re-check one row after a fix (FR-112).
@@ -692,6 +736,8 @@ def build_judge_single_prompt(
         grading_mode=grading_mode,
         fitting_map=fitting_map,
         history_map=history_map,
+        fitting_mode=fitting_mode,
+        fitting_tolerance=fitting_tolerance,
     )
 
 
@@ -707,6 +753,8 @@ def build_judge_rechain_prompt(
     comment_style: str = "auto",
     fitting_map: dict[int, str] | None = None,
     history_map: dict[int, str] | None = None,
+    fitting_mode: str = "normal",
+    fitting_tolerance: int = 3,
 ) -> str:
     """
     Re-check flagged rows with their physical neighbours as context.
@@ -782,7 +830,7 @@ def build_judge_rechain_prompt(
         f"{_lang_line(src_lang, tgt_lang)}"
         f"{_style_line(style_prompt)}"
         f"\nJudge each UNDER REVIEW line ONLY on these criteria:\n"
-        f"{_criteria_block(criteria, False)}\n"
+        f"{_criteria_block(criteria, False, fitting_mode=fitting_mode, fitting_tolerance=fitting_tolerance)}\n"
         f"{_style_guidance(style_prompt, _chosen_criteria(criteria, False))}"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
@@ -803,6 +851,7 @@ def build_judge_rechain_prompt(
         f"in the lines array with a comment saying it is fine. A verdict of "
         f"\"acceptable\" means OMIT, not report.\n"
         f"- Do not penalise a valid alternative wording that means the same thing.\n"
+        f"- RE-JUDGE STRICTNESS: Inspect UNDER REVIEW lines with high scrutiny. If a line still has a typo, misspelling, mistranslation, unnatural grammar, or unresolved defect, you MUST flag it. Do NOT overlook remaining flaws or assume a fix succeeded without verifying.\n"
         f"- Do not rewrite the line here; describe what is wrong, briefly.\n"
         f"- Use the row numbers exactly as given.\n"
         f"\nReply with ONLY a JSON object, no prose around it and no code fence:\n"
@@ -828,6 +877,8 @@ def build_fix_prompt(
     custom_placeholders: str = "",
     severities: list[str] | None = None,
     fitting_map: dict[int, str] | None = None,
+    fitting_mode: str = "normal",
+    fitting_tolerance: int = 3,
 ) -> str:
     """
     Repair the flagged rows, guided by the comments the evaluation produced.
@@ -843,6 +894,7 @@ def build_fix_prompt(
     "helpfully" rewriting a line's register when it was sent to fix a
     placeholder.
     """
+    target = (tgt_lang or "").strip() or "the target language"
     blocks: list[str] = []
     for row, source, translation in rows:
         lines = [f"[{row}]"]
@@ -851,13 +903,18 @@ def build_fix_prompt(
         lines.append(f"  SOURCE      : {encode_placeholders(source or '')}")
         lines.append(f"  TRANSLATION : {encode_placeholders(translation or '')}")
         note = ((comments or {}).get(row) or "").strip()
+        from ..parsing.recovery import is_error_output
+        if not (translation or "").strip():
+            if not note or "empty" in note.lower() or is_error_output(note):
+                note = f"Empty cell — translate the original SOURCE into {target}."
+        elif note and is_error_output(note):
+            note = "Translate accurately and naturally from the SOURCE text."
         if note:
             lines.append(f"  CORRECTION NOTE : {note}")
         if fitting_map and (fitting_map.get(row) or "").strip():
             lines.append(f"  FITTING         : {fitting_map[row]}")
         blocks.append("\n".join(lines))
 
-    target = (tgt_lang or "").strip() or "the target language"
     numbers = ", ".join(str(row) for row, _s, _t in rows)
     example = rows[0][0] if rows else 1
 
@@ -871,6 +928,7 @@ def build_fix_prompt(
         f"\nEach line below provides the SOURCE, the flawed TRANSLATION, and the CORRECTION NOTE.\n"
         f"Apply the correction specified in the note, in the wording a native speaker of "
         f"{target} would actually use for this line.\n"
+        f"- If a line has an empty TRANSLATION (or note indicates an empty cell or failed translation), translate the SOURCE text directly into {target} following the style and context rules.\n"
         f"\n{_PLACEHOLDER_RULE}\n"
         f"{_extra_placeholders(custom_placeholders)}"
         f"\nOutput format:\n"
@@ -886,12 +944,22 @@ def build_fix_prompt(
     # to insert "the line-break tag shown in that row" for rows that show no
     # tag — and with no profile there is no gate to catch the invention.
     if fitting_map and any((fitting_map.get(row) or "").strip() for row, _s, _t in rows):
-        prompt += (
-            f"- A FITTING line means the text must end up within the window: "
-            f"shorten it naturally or insert the line-break tag shown in that "
-            f"row at a natural pause; the result must not exceed 4 lines and "
-            f"must never split a control code or invent a tag\n"
-        )
+        if fitting_mode == "strict":
+            prompt += (
+                f"- A FITTING note (STRICT) requires strictly compact output:\n"
+                f"  * For 1-word source texts (UI/buttons/terms): must stay 1 single word and within +{fitting_tolerance} characters of source length. "
+                f"If translating into the target language is naturally too long or becomes multiple words (e.g. 'Sunset' -> 'Matahari terbenam'), "
+                f"do NOT force a lengthy translation: KEEP the familiar English or original term (e.g. 'Sunset'). For Japanese source texts, "
+                f"use standard international English gaming terms (e.g. 'Equip', 'Config', 'Save', 'Load'), NEVER leave raw Japanese Kanji/Katakana intact if target is Indonesian/English.\n"
+                f"  * For dialogue / multi-word lines: tighten phrasing and grammar so length does not exceed the source text (≤ 1.0x length), without dropping core facts or names.\n"
+            )
+        else:
+            prompt += (
+                f"- A FITTING line means the text must end up within the window: "
+                f"shorten it naturally or insert the line-break tag shown in that "
+                f"row at a natural pause; the result must not exceed 4 lines and "
+                f"must never split a control code or invent a tag\n"
+            )
     prompt += f"\nLines:\n" + "\n".join(blocks) + "\n\nOutput:"
     return prompt
 
@@ -909,6 +977,7 @@ def build_fix_solo_prompt(
     criteria: list[str] | None = None,
     severities: list[str] | None = None,
     fitting: str = "",
+    fitting_tolerance: int = 3,
 ) -> str:
     """
     Repair one row (Fix It).
@@ -918,26 +987,48 @@ def build_fix_solo_prompt(
     asking for one would only give the model something else to get wrong.
     """
     target = (tgt_lang or "").strip() or "the target language"
+    is_empty = not (translation or "").strip()
+    scope_rule = _fix_scope_rule(criteria, severities, allow_leave_intact=not is_empty)
+    if is_empty:
+        scope_rule = scope_rule.replace(" Leave anything else about the line exactly as it is.", "")
+        scope_rule = scope_rule.replace("Leave anything else about the line exactly as it is.", "")
+
     parts = [f"{_FIX_SYS}\n", _lang_line(src_lang, tgt_lang), _style_line(style_prompt),
-             _fix_style_rule(style_prompt), _fix_scope_rule(criteria, severities)]
+             _fix_style_rule(style_prompt), scope_rule]
     if (context or "").strip():
         parts.append(f"Context    : {encode_placeholders(context)}\n")
     parts.append(f"Source     : {encode_placeholders(source or '')}\n")
     parts.append(f"Translation: {encode_placeholders(translation or '')}\n")
-    if (comment or "").strip():
-        parts.append(f"Correction Note: {comment.strip()}\n")
+    from ..parsing.recovery import is_error_output
+    note = (comment or "").strip()
+    if is_empty:
+        if not note or "empty" in note.lower() or is_error_output(note):
+            note = f"Empty cell — translate the original SOURCE into {target}."
+    elif note and is_error_output(note):
+        note = "Translate accurately and naturally from the SOURCE text."
+    if note:
+        parts.append(f"Correction Note: {note}\n")
     if (fitting or "").strip():
         parts.append(f"FITTING    : {fitting.strip()}\n")
     parts.append(f"\n{_PLACEHOLDER_RULE}\n")
     parts.append(_extra_placeholders(custom_placeholders))
     fit_rule = ""
     if (fitting or "").strip():
-        fit_rule = (
-            "The Fitting note means the text must end up within the game's dialog "
-            "window: shorten it naturally or insert the line-break tag shown in the note "
-            "at a natural pause; the result must not exceed 4 lines and must never split "
-            "a control code or invent a tag.\n"
-        )
+        if "STRICT" in fitting:
+            fit_rule = (
+                f"The Fitting note (STRICT) requires strictly compact output: "
+                f"For 1-word source texts, stay 1 word and within +{fitting_tolerance} chars of source length; "
+                f"if the translation is too long or becomes multi-word (e.g. 'Sunset' -> 'Matahari terbenam'), keep the familiar English or original term (e.g. 'Sunset'). "
+                f"For Japanese source texts, use standard international English gaming terms (e.g. 'Equip', 'Config', 'Save', 'Load'), never leave raw Kanji. "
+                f"For dialogue / multi-word lines, tighten phrasing and grammar so length does not exceed the source text without dropping core facts or names.\n"
+            )
+        else:
+            fit_rule = (
+                "The Fitting note means the text must end up within the game's dialog "
+                "window: shorten it naturally or insert the line-break tag shown in the note "
+                "at a natural pause; the result must not exceed 4 lines and must never split "
+                "a control code or invent a tag.\n"
+            )
     parts.append(
         f"\nInstruction:\n"
         f"Apply the correction from the Correction Note, in the wording a native "
@@ -945,6 +1036,7 @@ def build_fix_solo_prompt(
         f"suggested wording is stiff or unnatural, write the natural {target} "
         f"wording yourself while still fixing the problem the note identified.\n"
         f"Do not keep the wrong words that were flagged.\n"
+        f"- If a line has an empty TRANSLATION (or note indicates an empty cell or failed translation), translate the SOURCE text directly into {target} following the style and context rules.\n"
         f"{fit_rule}"
         f"Return ONLY the corrected translation — no prefix, no quotes, no explanation.\n"
         f"Keep every placeholder byte-for-byte.\n"

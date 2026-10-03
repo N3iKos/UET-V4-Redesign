@@ -430,144 +430,198 @@ class RunScreen(BaseScreen):
 
     @work(thread=True)
     def _run_job(self) -> None:
+        self._run_job_impl()
+
+    def _run_job_impl(self) -> None:
         if getattr(self, "is_multi_tab", False):
             for i in range(len(self.sessions)):
                 self._run_single_session(i)
             return
 
-        app = self._app
+        app = getattr(self, "_app", None)
+        if app is None:
+            try:
+                app = self.app
+            except Exception:
+                app = None
+
         def safe_post(fn, *args, **kwargs):
             try:
-                if getattr(app, "is_running", True):
+                if app is not None and getattr(app, "is_running", True):
                     app.call_from_thread(fn, *args, **kwargs)
+                else:
+                    fn(*args, **kwargs)
             except Exception:
-                pass
+                try:
+                    fn(*args, **kwargs)
+                except Exception:
+                    pass
 
-        registry = app.registry
-        # A combo job has no single provider; `build_pool` is the one place that
-        # decides which pool a job runs on, so the screen does not have to.
-        provider = None
-        if not self.job.uses_combo:
+        try:
+            registry = getattr(app, "registry", None) if app else None
+            # A combo job has no single provider; `build_pool` is the one place that
+            # decides which pool a job runs on, so the screen does not have to.
+            provider = None
+            if not self.job.uses_combo and registry is not None:
+                try:
+                    provider = registry.get_provider(self.job.provider_id)
+                except Exception as exc:
+                    safe_post(self._on_notice, "error", str(exc))
+                    safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
+                    return
             try:
-                provider = registry.get_provider(self.job.provider_id)
-            except Exception as exc:
+                pool = build_pool(
+                    self.job,
+                    registry,
+                    provider=provider,
+                    on_switch=lambda event: safe_post(self._on_switch, event),
+                    on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
+                )
+            except AllConnectionsUnavailable as exc:
                 safe_post(self._on_notice, "error", str(exc))
                 safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
                 return
-        try:
-            pool = build_pool(
-                self.job,
-                registry,
-                provider=provider,
-                on_switch=lambda event: safe_post(self._on_switch, event),
-                on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
-            )
-        except AllConnectionsUnavailable as exc:
-            safe_post(self._on_notice, "error", str(exc))
-            safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
-            return
-        engine = ProcessingEngine(
-            self.job,
-            provider,
-            connection_pool=pool,
-            on_status=lambda status: safe_post(self._on_status, status),
-            on_event=lambda event: safe_post(self._on_event, event),
-            on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
-            on_batch_start=lambda task, worker: safe_post(self._on_batch_start, task),
-            on_result=lambda task, result: safe_post(self._on_result, task, result),
-            stop_event=self._stop,
-            registry=registry,
-        )
-        self._engine = engine
 
-        try:
+            engine = ProcessingEngine(
+                self.job,
+                provider,
+                connection_pool=pool,
+                on_status=lambda status: safe_post(self._on_status, status),
+                on_event=lambda event: safe_post(self._on_event, event),
+                on_notice=lambda kind, msg: safe_post(self._on_notice, kind, msg),
+                on_batch_start=lambda task, worker: safe_post(self._on_batch_start, task),
+                on_result=lambda task, result: safe_post(self._on_result, task, result),
+                stop_event=self._stop,
+                registry=registry,
+            )
+            self._engine = engine
+
             if self.job.op_mode == "retranslate_failed":
                 stats, _ = engine.run_retranslate_failed()
             elif self.job.op_mode.startswith("repair"):
                 stats = engine.run_repair()
             else:
                 stats = engine.run_translate()
+
+            try:
+                self._output_path = engine.output_path
+            except Exception:
+                self._output_path = self.job.out_path
+
+            safe_post(self._job_finished, stats)
         except Exception as exc:
-            safe_post(self._on_notice, "error", f"{type(exc).__name__}: {exc}")
-            stats = ProcessStats(total=self.job.num_rows)
-
-        try:
-            self._output_path = engine.output_path
-        except Exception:
-            self._output_path = self.job.out_path
-
-        safe_post(self._job_finished, stats)
+            from ...core.crash_logger import log_exception
+            log_exception(
+                exc,
+                stage="translation_worker",
+                operation=self.job.op_mode,
+                file_path=self.job.src_path,
+                context={
+                    "stage": "translation_worker",
+                    "operation": self.job.op_mode,
+                    "src_path": self.job.src_path,
+                    "out_path": self.job.out_path,
+                    "model_id": self.job.model_id,
+                },
+            )
+            safe_post(self._on_notice, "error", f"Worker error ({type(exc).__name__}): {exc}")
+            safe_post(self._job_finished, ProcessStats(total=self.job.num_rows))
 
     @work(thread=True)
     def _run_single_session(self, session_idx: int) -> None:
-        app = self._app
+        self._run_single_session_impl(session_idx)
+
+    def _run_single_session_impl(self, session_idx: int) -> None:
+        app = getattr(self, "_app", None)
         if app is None:
-            return
-        post = app.call_from_thread
+            try:
+                app = self.app
+            except Exception:
+                app = None
         session = self.sessions[session_idx]
-        registry = app.registry
 
         def safe_post(fn, *args, **kwargs):
             try:
-                if getattr(app, "is_running", True):
-                    post(fn, *args, **kwargs)
+                if app is not None and getattr(app, "is_running", True):
+                    app.call_from_thread(fn, *args, **kwargs)
+                else:
+                    fn(*args, **kwargs)
             except Exception:
-                pass
+                try:
+                    fn(*args, **kwargs)
+                except Exception:
+                    pass
 
-        provider = None
-        if not session.job.uses_combo:
+        try:
+            registry = getattr(app, "registry", None) if app else None
+            provider = None
+            if not session.job.uses_combo and registry is not None:
+                try:
+                    provider = registry.get_provider(session.job.provider_id)
+                except Exception as exc:
+                    safe_post(self._session_notice, session_idx, "error", str(exc))
+                    safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
+                    return
             try:
-                provider = registry.get_provider(session.job.provider_id)
-            except Exception as exc:
+                pool = build_pool(
+                    session.job,
+                    registry,
+                    provider=provider,
+                    on_switch=lambda event: safe_post(self._session_switch, session_idx, event),
+                    on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
+                )
+            except AllConnectionsUnavailable as exc:
                 safe_post(self._session_notice, session_idx, "error", str(exc))
                 safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
                 return
-        try:
-            pool = build_pool(
+
+            engine = ProcessingEngine(
                 session.job,
-                registry,
-                provider=provider,
-                on_switch=lambda event: safe_post(self._session_switch, session_idx, event),
+                provider,
+                connection_pool=pool,
+                on_status=lambda status: safe_post(self._session_status, session_idx, status),
+                on_event=lambda event: safe_post(self._session_event, session_idx, event),
                 on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
+                on_batch_start=lambda task, worker: safe_post(self._session_batch_start, session_idx, task),
+                on_result=lambda task, result: safe_post(self._session_result, session_idx, task, result),
+                stop_event=session.stop,
+                registry=registry,
             )
-        except AllConnectionsUnavailable as exc:
-            safe_post(self._session_notice, session_idx, "error", str(exc))
-            safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
-            return
+            session.engine = engine
+            if session_idx == self.active_session_index:
+                self._engine = engine
 
-        engine = ProcessingEngine(
-            session.job,
-            provider,
-            connection_pool=pool,
-            on_status=lambda status: safe_post(self._session_status, session_idx, status),
-            on_event=lambda event: safe_post(self._session_event, session_idx, event),
-            on_notice=lambda kind, msg: safe_post(self._session_notice, session_idx, kind, msg),
-            on_batch_start=lambda task, worker: safe_post(self._session_batch_start, session_idx, task),
-            on_result=lambda task, result: safe_post(self._session_result, session_idx, task, result),
-            stop_event=session.stop,
-            registry=registry,
-        )
-        session.engine = engine
-        if session_idx == self.active_session_index:
-            self._engine = engine
-
-        try:
             if session.job.op_mode == "retranslate_failed":
                 stats, _ = engine.run_retranslate_failed()
             elif session.job.op_mode.startswith("repair"):
                 stats = engine.run_repair()
             else:
                 stats = engine.run_translate()
+
+            try:
+                session.output_path = engine.output_path
+            except Exception:
+                session.output_path = session.job.out_path
+
+            safe_post(self._session_finished, session_idx, stats)
         except Exception as exc:
-            safe_post(self._session_notice, session_idx, "error", f"{type(exc).__name__}: {exc}")
-            stats = ProcessStats(total=session.job.num_rows)
-
-        try:
-            session.output_path = engine.output_path
-        except Exception:
-            session.output_path = session.job.out_path
-
-        safe_post(self._session_finished, session_idx, stats)
+            from ...core.crash_logger import log_exception
+            log_exception(
+                exc,
+                stage="translation_worker",
+                operation=session.job.op_mode,
+                file_path=session.job.src_path,
+                context={
+                    "stage": "translation_worker_session",
+                    "session_idx": session_idx,
+                    "operation": session.job.op_mode,
+                    "src_path": session.job.src_path,
+                    "out_path": session.job.out_path,
+                    "model_id": session.job.model_id,
+                },
+            )
+            safe_post(self._session_notice, session_idx, "error", f"Worker error ({type(exc).__name__}): {exc}")
+            safe_post(self._session_finished, session_idx, ProcessStats(total=session.job.num_rows))
 
     def _session_status(self, session_idx: int, status: WorkerStatus) -> None:
         try:
@@ -1105,11 +1159,18 @@ class SummaryScreen(MenuScreen):
                 f_stat = self.sessions[i].stats if i < len(self.sessions) and self.sessions[i].stats else None
                 ok_cnt = f_stat.ok if f_stat else "?"
                 fail_cnt = f_stat.failed if f_stat else 0
-                lines.append(f"  • {i+1}. {escape_markup(f_name)}  (ok: {ok_cnt}, failed: {fail_cnt})")
+                empty_cnt = self._count_job_empty(j)
+                extra = f", missing: {empty_cnt}" if empty_cnt > 0 else ""
+                lines.append(f"  • {i+1}. {escape_markup(f_name)}  (ok: {ok_cnt}, failed: {fail_cnt}{extra})")
+            total_empty = sum(self._count_job_empty(j) for j in self.jobs)
             lines += [
                 "",
                 f"[{OK}]total ok[/]     {total_ok:>8,}",
                 f"[{ERROR}]failed[/]       {total_failed:>8,}",
+            ]
+            if total_empty > 0:
+                lines.append(f"[{WARN}]missing[/]      {total_empty:>8,}")
+            lines += [
                 f"[{MUTED}]skipped[/]      {total_skipped:>8,}",
                 "",
                 f"total tokens  {total_tokens:>8,}",
@@ -1118,6 +1179,7 @@ class SummaryScreen(MenuScreen):
 
         sweeps = [e for e in self.events if "Auto-sweep" in e]
         saved_target = self.job.full_out_path or self.output_path
+        empty_count = self._count_job_empty(self.job)
         lines = [
             f"Finished in {RunScreen._fmt_short(stats.elapsed)}",
             "",
@@ -1125,6 +1187,10 @@ class SummaryScreen(MenuScreen):
             f"[{MUTED}]repaired[/]   {stats.repaired:>8,}",
             f"[{MUTED}]skipped[/]    {stats.skipped:>8,}   already filled",
             f"[{ERROR}]failed[/]     {stats.failed:>8,}   written as {config.FAIL_MARKER}",
+        ]
+        if empty_count > 0:
+            lines.append(f"[{WARN}]missing[/]    {empty_count:>8,}   unfilled destination rows")
+        lines += [
             f"[{MUTED}]───────────────────[/]",
             f"total      {stats.total:>8,}",
             "",
@@ -1137,12 +1203,18 @@ class SummaryScreen(MenuScreen):
         if self.job.full_out_path and self.job.map_path:
             lines.insert(
                 -1,
-                f"[{MUTED}]synced from[/] {escape_markup(os.path.basename(self.output_path))}",
+                f"[{MUTED}]synced from[/] {escape_markup(os.path.basename(self.job.out_path))}",
             )
-        if os.path.abspath(self.output_path) != os.path.abspath(self.job.out_path):
+        if not (self.job.full_out_path and self.job.map_path) and os.path.abspath(self.output_path) != os.path.abspath(self.job.out_path):
             lines.insert(
                 -1,
                 f"[{WARN}]note[/]       {escape_markup(os.path.basename(self.job.out_path))} "
+                f"was open elsewhere — results went to a new file[/]",
+            )
+        elif self.job.full_out_path and os.path.abspath(self.output_path) != os.path.abspath(self.job.full_out_path):
+            lines.insert(
+                -1,
+                f"[{WARN}]note[/]       {escape_markup(os.path.basename(self.job.full_out_path))} "
                 f"was open elsewhere — results went to a new file[/]",
             )
         if sweeps:
@@ -1162,13 +1234,50 @@ class SummaryScreen(MenuScreen):
                 lines.append(f"  [{MUTED}]full detail: {escape_markup(self.job.log_path)}[/]")
         return "\n".join(lines)
 
+    def _count_job_empty(self, job: JobConfig) -> int:
+        if not hasattr(self, "_job_empty_cache"):
+            self._job_empty_cache = {}
+        target_out = job.full_out_path if (job.full_out_path and os.path.exists(job.full_out_path)) else job.out_path
+        target_src = job.full_src_path if (job.full_src_path and os.path.exists(job.full_src_path)) else job.src_path
+        cache_key = (target_out, job.dst_col, job.start_row, getattr(job, "user_row_limit", 0))
+        if cache_key in self._job_empty_cache:
+            return self._job_empty_cache[cache_key]
+
+        if not (target_out and os.path.exists(target_out) and target_src and os.path.exists(target_src)):
+            return 0
+        try:
+            user_limit = getattr(job, "user_row_limit", 0) or 0
+            scan_num_rows = user_limit if user_limit > 0 else 0
+            dst_rows = ExcelReader.load_column(target_out, job.dst_col, job.start_row, scan_num_rows)
+            src_rows = dict(ExcelReader.load_column(target_src, job.src_col, job.start_row, scan_num_rows))
+            empty = 0
+            for rn, dst_val in dst_rows:
+                src_val = src_rows.get(rn, "")
+                if src_val.strip() and not (dst_val and dst_val.strip()):
+                    empty += 1
+            self._job_empty_cache[cache_key] = empty
+            return empty
+        except Exception:
+            return 0
+
     def build_options(self) -> list[Option]:
         options = []
-        if self.stats.failed:
-            options.append(
-                Option(f"Retranslate the {self.stats.failed} failed rows now",
-                       "retry", style=WARN)
-            )
+        target_jobs = self.jobs if self.jobs else [self.job]
+        total_failed = sum(s.stats.failed for s in self.sessions if s.stats) if self.sessions else self.stats.failed
+        empty_count = sum(self._count_job_empty(j) for j in target_jobs)
+
+        if total_failed > 0 or empty_count > 0:
+            if empty_count > 0:
+                count_to_show = total_failed + empty_count if total_failed else empty_count
+                options.append(
+                    Option(f"Translate {count_to_show} missing / failed rows now",
+                           "retry", style=WARN)
+                )
+            else:
+                options.append(
+                    Option(f"Retranslate the {total_failed} failed rows now",
+                           "retry", style=WARN)
+                )
         options += [
             # The second Judge entry point (FR-101): the file and every column
             # are already known here, so a review is one keystroke away instead
@@ -1208,10 +1317,45 @@ class SummaryScreen(MenuScreen):
             # The finished job carries the file, the columns and the languages,
             # so the setup screen only has to ask for criteria and a model.
             self.app.push_screen(JudgeSetupScreen(job=self.job, jobs=self.jobs))
-        else:
+        elif option.value == "retry":
             import copy
 
-            job = copy.copy(self.job)
-            job.op_mode = "retranslate_failed"
+            target_jobs = self.jobs if self.jobs else [self.job]
+            retranslate_jobs: list[JobConfig] = []
+            for idx, j in enumerate(target_jobs):
+                if self.sessions and idx < len(self.sessions):
+                    s = self.sessions[idx]
+                    if s.stats and s.stats.failed == 0 and self._count_job_empty(j) == 0:
+                        continue
+                rj = copy.copy(j)
+                rj.op_mode = "retranslate_failed"
+                if rj.full_src_path and os.path.exists(rj.full_src_path):
+                    rj.src_path = rj.full_src_path
+                    rj.full_src_path = ""
+                if rj.full_out_path and os.path.exists(rj.full_out_path):
+                    rj.out_path = rj.full_out_path
+                    rj.full_out_path = ""
+                rj.map_path = ""
+                rj.user_row_limit = 0
+                rj.num_rows = 0
+                retranslate_jobs.append(rj)
+
+            if not retranslate_jobs:
+                for j in target_jobs:
+                    rj = copy.copy(j)
+                    rj.op_mode = "retranslate_failed"
+                    if rj.full_src_path and os.path.exists(rj.full_src_path):
+                        rj.src_path = rj.full_src_path
+                        rj.full_src_path = ""
+                    if rj.full_out_path and os.path.exists(rj.full_out_path):
+                        rj.out_path = rj.full_out_path
+                        rj.full_out_path = ""
+                    rj.map_path = ""
+                    rj.user_row_limit = 0
+                    rj.num_rows = 0
+                    retranslate_jobs.append(rj)
+
             self.app.pop_screen()
-            self.app.push_screen(RunScreen(job))
+            self.app.push_screen(RunScreen(retranslate_jobs[0], jobs=retranslate_jobs))
+        else:
+            self.app.go_home()

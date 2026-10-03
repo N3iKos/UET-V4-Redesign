@@ -76,3 +76,45 @@ def test_anti_desync_does_not_reject_streak_for_natural_exclamations():
     }
     validated = validate_alignment(parsed, source_map, mode="auto")
     assert len(validated) >= 3, f"Premature rejection: got {validated}"
+
+
+def test_parse_recovery_preserves_leading_asterisks_for_dialogue():
+    pipeline = ParseRecoveryPipeline()
+    raw = (
+        "[3622] *Hela napas*\n"
+        "[3961] *Helaan napas panjang*\n"
+        "[4003] *Pfft* \"Konyol sekali.\"\n"
+        "[5278] *Endus* *Endus*\n"
+        "[6264] *Menguap* \"Aku mau istirahat sebentar.\""
+    )
+    source_map = {
+        3622: "*Sigh*",
+        3961: "*Deep sigh*",
+        4003: "*Pfft* \"That's absurd.\"",
+        5278: "*Sniff* *Sniff*",
+        6264: "*Yawn* \"I'll take a small break.\"",
+    }
+    recovered = pipeline.recover(raw, [3622, 3961, 4003, 5278, 6264], source_map=source_map)
+    assert recovered[3622] == "*Hela napas*"
+    assert recovered[3961] == "*Helaan napas panjang*"
+    assert recovered[4003] == "*Pfft* \"Konyol sekali.\""
+    assert recovered[5278] == "*Endus* *Endus*"
+    assert recovered[6264] == "*Menguap* \"Aku mau istirahat sebentar.\""
+
+
+def test_parse_recovery_preserves_action_asterisks_even_without_source_map():
+    pipeline = ParseRecoveryPipeline()
+    raw = "[1] *Hela napas*\n[2] *abc*"
+    recovered = pipeline.recover(raw, [1, 2])
+    assert recovered[1] == "*Hela napas*"
+    assert recovered[2] == "*abc*"
+
+
+def test_parse_recovery_strips_markdown_bullets_with_space():
+    pipeline = ParseRecoveryPipeline()
+    raw = "[1] * Terjemahan baris 1\n[2] ** Terjemahan baris 2"
+    source_map = {1: "Source line 1", 2: "Source line 2"}
+    recovered = pipeline.recover(raw, [1, 2], source_map=source_map)
+    assert recovered[1] == "Terjemahan baris 1"
+    assert recovered[2] == "Terjemahan baris 2"
+

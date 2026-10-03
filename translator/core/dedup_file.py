@@ -8,7 +8,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .. import config
 from ..io.excel_io import load_workbook, translated_path
+from .failed_cache import load_failed_rows
 
 MAP_VERSION = 2
 
@@ -134,14 +136,17 @@ def prepare_unique_file(
             unique_sheet = unique_book.active
             if output_book:
                 output_sheet = output_book.active
+                cached_failed = load_failed_rows(str(output_source), dst_col)
                 for representative in representatives:
                     completed = ""
                     rep_text = str(sheet.cell(representative, src_col).value).strip()
                     _, rep_clean = _extract_prefix_tag(rep_text)
                     group_key = rep_clean if rep_clean else rep_text
                     for sibling in groups[group_key]:
+                        if sibling in cached_failed:
+                            continue
                         value = output_sheet.cell(sibling, dst_col).value
-                        if value is not None and str(value).strip():
+                        if value is not None and str(value).strip() and str(value).strip() != config.FAIL_MARKER:
                             completed = value
                             break
                     if completed != "":
@@ -202,7 +207,10 @@ def validate_mapping(map_file_path: str, unique_path: str = "") -> dict:
     if unique_path and os.path.abspath(unique_path) != os.path.abspath(mapping["unique_file"]):
         translated = translated_path(mapping["unique_file"])
         if os.path.abspath(unique_path) != os.path.abspath(translated):
-            raise ValueError("Unique file does not match mapping")
+            raise ValueError(
+                f"Unique file does not match mapping: unique_path='{unique_path}', "
+                f"expected '{mapping.get('unique_file')}' or '{translated}'"
+            )
     return mapping
 
 

@@ -101,6 +101,19 @@ class ProcessingEngine:
             self._pool = None
 
         self._parser = ParseRecoveryPipeline()
+        # Fallback from deleted temp dedup cache files if needed
+        if job.full_src_path and (not job.src_path or not os.path.exists(job.src_path)) and os.path.exists(job.full_src_path):
+            job.src_path = job.full_src_path
+            if job.full_out_path:
+                job.out_path = job.full_out_path
+            job.map_path = ""
+        elif job.op_mode == "retranslate_failed":
+            if getattr(job, "full_src_path", None) and os.path.exists(job.full_src_path):
+                job.src_path = job.full_src_path
+            if getattr(job, "full_out_path", None) and os.path.exists(job.full_out_path):
+                job.out_path = job.full_out_path
+            job.map_path = ""
+
         # Seed the output file before the writer opens it: results go to
         # <name>_Translated.<ext> and the source is never written to. An
         # existing output is kept so its filled rows drive resume.
@@ -133,6 +146,7 @@ class ProcessingEngine:
         self._syncing = False
         self._last_sync = 0.0
         self._sync_thread: threading.Thread | None = None
+        self._last_stats: ProcessStats | None = None
 
     @property
     def planned_rows(self) -> int | None:
@@ -360,18 +374,42 @@ class ProcessingEngine:
         put a denominator of 12,000 in front of a queue of 6,000 (BUG-001).
         """
         job = self._job
+        if job.op_mode == "retranslate_failed":
+            if getattr(job, "full_src_path", None) and os.path.exists(job.full_src_path):
+                job.src_path = job.full_src_path
+            if getattr(job, "full_out_path", None) and os.path.exists(job.full_out_path):
+                job.out_path = job.full_out_path
+            job.map_path = ""
+
+        target_out = self._output_path()
+        target_src = job.src_path
+        if not os.path.exists(target_src) and getattr(job, "full_src_path", None) and os.path.exists(job.full_src_path):
+            target_src = job.full_src_path
+        if not os.path.exists(target_out) and getattr(job, "full_out_path", None) and os.path.exists(job.full_out_path):
+            target_out = job.full_out_path
+
+        user_limit = getattr(job, "user_row_limit", 0) or 0
+        if user_limit > 0:
+            scan_num_rows = user_limit
+        elif job.op_mode == "retranslate_failed":
+            scan_num_rows = 0
+        else:
+            scan_num_rows = job.num_rows
+
+        self._writer.sync()
+
         dst_rows = ExcelReader.load_column(
-            self._output_path(), job.dst_col, job.start_row, job.num_rows
+            target_out, job.dst_col, job.start_row, scan_num_rows
         )
         src_rows = dict(
-            ExcelReader.load_column(job.src_path, job.src_col, job.start_row, job.num_rows)
+            ExcelReader.load_column(target_src, job.src_col, job.start_row, scan_num_rows)
         )
 
         from .failed_cache import load_failed_rows
-        cached_failed = load_failed_rows(self._output_path(), job.dst_col)
-        if job.out_path and job.out_path != self._output_path():
+        cached_failed = load_failed_rows(target_out, job.dst_col)
+        if job.out_path and job.out_path != target_out:
             cached_failed.update(load_failed_rows(job.out_path, job.dst_col))
-        if getattr(job, "full_out_path", None) and job.full_out_path != self._output_path():
+        if getattr(job, "full_out_path", None) and job.full_out_path != target_out:
             cached_failed.update(load_failed_rows(job.full_out_path, job.dst_col))
 
         failed_rows: list[tuple[int, str]] = []
@@ -390,7 +428,7 @@ class ProcessingEngine:
                 issue = "empty"
             elif dst_val.strip() == config.FAIL_MARKER:
                 issue = "TRANSLATE_FAILED"
-            elif rn in cached_failed and (dst_val.strip() == src_val.strip() or dst_val.strip() == config.FAIL_MARKER or not dst_val.strip()):
+            elif rn in cached_failed:
                 issue = "TRANSLATE_FAILED"
             elif include_too_short and len(dst_val.strip()) < 3 and len(src_val.strip()) >= 3:
                 issue = "too_short"
@@ -426,6 +464,10 @@ class ProcessingEngine:
         stats.skipped = healthy
         if close_log:
             self._finish(stats)
+        else:
+            self._writer.sync()
+            if self._job.map_path and self._job.full_out_path:
+                self._final_full_sync(cleanup=False, stats=stats)
         return stats, scan_results
 
     # ── Shared run paths ──────────────────────────────────────────────────────
@@ -648,10 +690,14 @@ class ProcessingEngine:
     def _clean_output(self, text: str) -> str:
         if not text:
             return ""
+        from ..parsing.recovery import is_error_output
+        if is_error_output(text):
+            return ""
         text = strip_runaway(text)
         if self._source_symbols:
             text = symbol_diff_sanitize(text, self._source_symbols)
-        return text.strip()
+        cleaned = text.strip()
+        return "" if is_error_output(cleaned) else cleaned
 
     # ── Scheduler wiring ──────────────────────────────────────────────────────
 
@@ -812,6 +858,8 @@ class ProcessingEngine:
         """
         if not (self._job.map_path and self._job.full_out_path):
             return
+        if not self._output_path() or os.path.abspath(self._output_path()) == os.path.abspath(self._job.full_out_path):
+            return
         now = time.monotonic()
         with self._sync_lock:
             if self._syncing or now - self._last_sync < self.FULL_SYNC_INTERVAL:
@@ -822,6 +870,10 @@ class ProcessingEngine:
             try:
                 from .dedup_file import sync_unique_to_full
                 self._writer.sync()
+                if not (self._job.map_path and self._job.full_out_path):
+                    return
+                if not self._output_path() or os.path.abspath(self._output_path()) == os.path.abspath(self._job.full_out_path):
+                    return
                 sync_unique_to_full(
                     self._job.map_path, self._output_path(),
                     self._job.full_out_path, self._dst_col,
@@ -838,9 +890,13 @@ class ProcessingEngine:
         )
         self._sync_thread.start()
 
-    def _final_full_sync(self) -> None:
+    _full_sync_tick = _maybe_sync_full
+
+    def _final_full_sync(self, cleanup: bool = True, stats: ProcessStats | None = None) -> None:
         """One last synchronous broadcast so the full file is complete."""
         if not (self._job.map_path and self._job.full_out_path):
+            return
+        if not self._output_path() or os.path.abspath(self._output_path()) == os.path.abspath(self._job.full_out_path):
             return
         thread = self._sync_thread
         if thread is not None and thread.is_alive():
@@ -852,15 +908,26 @@ class ProcessingEngine:
                 self._job.full_out_path, self._dst_col,
             )
             self.write_log(f"[sync] broadcast {synced} cell(s) to full output")
-            # Clean up temporary unique files in .uet_cache after successful broadcast
-            try:
-                unique_out = self._output_path()
-                if unique_out and os.path.exists(unique_out) and unique_out != self._job.full_out_path and ".uet_cache" in unique_out:
-                    os.remove(unique_out)
-                if self._job.src_path and os.path.exists(self._job.src_path) and self._job.src_path != self._job.full_src_path and ".uet_cache" in self._job.src_path:
-                    os.remove(self._job.src_path)
-            except OSError:
-                pass
+            # Only clean up if all rows in the job completed successfully and no failures or uncompleted rows
+            effective_stats = stats or getattr(self, "_last_stats", None)
+            if cleanup and not self._stop.is_set():
+                if effective_stats is not None:
+                    if (
+                        effective_stats.failed > 0
+                        or effective_stats.skipped > 0
+                        or effective_stats.total == 0
+                        or effective_stats.ok < effective_stats.total
+                    ):
+                        cleanup = False
+                if cleanup:
+                    try:
+                        unique_out = self._output_path()
+                        if unique_out and os.path.exists(unique_out) and unique_out != self._job.full_out_path and ".uet_cache" in unique_out:
+                            os.remove(unique_out)
+                        if self._job.src_path and os.path.exists(self._job.src_path) and self._job.src_path != self._job.full_src_path and ".uet_cache" in self._job.src_path:
+                            os.remove(self._job.src_path)
+                    except OSError:
+                        pass
         except Exception as exc:
             self._notice("error", f"Final full-file sync failed: {exc}")
 
@@ -939,9 +1006,18 @@ class ProcessingEngine:
 
     def _finish(self, stats: ProcessStats) -> None:
         """Commit pending writes and close logs. Safe to call once per job."""
+        self._last_stats = stats
         try:
             self._writer.commit()
-            self._final_full_sync()
+            # Only clean up if all rows in the job completed successfully and no failures or uncompleted rows
+            fully_succeeded = (
+                not self._stop.is_set()
+                and stats.failed == 0
+                and stats.skipped == 0
+                and stats.total > 0
+                and stats.ok >= stats.total
+            )
+            self._final_full_sync(cleanup=fully_succeeded, stats=stats)
         except Exception as exc:
             self._notice("error", f"Final Excel write failed: {exc}")
 

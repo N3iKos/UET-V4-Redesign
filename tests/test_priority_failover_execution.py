@@ -67,7 +67,7 @@ def test_failover_cascades_to_priority_target(monkeypatch):
     job = JobConfig(
         provider_id="p1", model_id="model-primary", connection_id="c1",
         src_path="x", out_path="y", batch_size=1, n_workers=1,
-        max_attempts=3, retry_mode="fixed", retry_delay_err=0,
+        max_attempts=3, retry_mode="fixed", retry_delay_err=0, retry_delay_503=0,
     )
 
     failover_target = FailoverTarget(

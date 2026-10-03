@@ -153,8 +153,13 @@ class ExcelReader:
         materialising every cell — the whole-workbook load costs seconds on
         a 30k-row sheet and this runs before the first batch is even sent.
         Rows past the end of the sheet come back as "", as callers expect.
+        A num_rows <= 0 means all remaining rows up to total row count.
         """
-        end = start_row + num_rows - 1
+        if num_rows <= 0:
+            total_rows = ExcelReader.row_count(filepath)
+            end = max(start_row - 1, total_rows)
+        else:
+            end = start_row + num_rows - 1
         values = _stream_column(filepath, col_idx, start_row, end)
         return [(r, values.get(r, "")) for r in range(start_row, end + 1)]
 
@@ -174,7 +179,11 @@ class ExcelReader:
 
     @staticmethod
     def filled_rows(filepath: str, col_idx: int, start_row: int, num_rows: int) -> set[int]:
-        end = start_row + num_rows - 1
+        if num_rows <= 0:
+            total_rows = ExcelReader.row_count(filepath)
+            end = max(start_row - 1, total_rows)
+        else:
+            end = start_row + num_rows - 1
         return {
             r for r, val in _stream_column(filepath, col_idx, start_row, end).items()
             if val

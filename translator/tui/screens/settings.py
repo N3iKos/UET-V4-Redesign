@@ -148,6 +148,8 @@ class SettingsScreen(MenuScreen):
                    hint=f"{prefs['max_rows_per_request']} rows — Judge batching limit"),
             Option("  Default rows per Fix All", "fix_rows",
                    hint=f"{prefs['fix_batch_rows']} rows — what Fix All opens with"),
+            Option("  Fitting 1-word length tolerance", "fitting_tolerance",
+                   hint=f"+{app_prefs.fitting_tolerance()} chars — max expansion for 1-word UI/terms before fallback"),
             Option("", "_gap2", enabled=False),
 
             # ── 3. Network & System ───────────────────────────────────────────
@@ -216,6 +218,8 @@ class SettingsScreen(MenuScreen):
             self.app.push_screen(MaxTokensModal(), self._tokens_done)
         elif option.value == "fix_rows":
             self.app.push_screen(FixBatchRowsModal(), self._fix_rows_done)
+        elif option.value == "fitting_tolerance":
+            self.app.push_screen(FittingToleranceModal(), self._fitting_tolerance_done)
         elif option.value == "priority_failover":
             self.app.push_screen(PriorityFailoverModal(), self._failover_done)
         elif option.value == "request_timeout":
@@ -346,6 +350,14 @@ class SettingsScreen(MenuScreen):
                 f"{config.MIN_FIX_BATCH_ROWS}-{config.MAX_FIX_BATCH_ROWS}.)"
             )
         self.notify_status(note, OK if stored == value else WARN)
+
+    def _fitting_tolerance_done(self, value: int | None) -> None:
+        if value is None:
+            return
+        stored = app_prefs.set_fitting_tolerance(value)
+        self.picker.set_options(self.build_options(), keep_index=True)
+        note = f"Fitting 1-word length tolerance set to +{stored} character(s)."
+        self.notify_status(note, OK)
 
     def _failover_done(self, result: "tuple[str, int | None] | None") -> None:
         if not result:
@@ -1095,6 +1107,51 @@ class FixBatchRowsModal(ModalScreen[int]):
             number = int(self._value.value)
         except ValueError:
             self.query_one("#fix-rows-error", Label).update("That must be a number.")
+            return
+        self.dismiss(number)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class FittingToleranceModal(ModalScreen[int]):
+    """
+    Max character expansion (+N) allowed for 1-word UI terms before falling back
+    to common/original terms in Strict fitting mode.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_none", "cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label("Fitting 1-word length tolerance", classes="title")
+            yield Label(
+                "When Strict Fitting is active on 1-word terms (buttons/UI), "
+                "how many extra characters may the translation expand by before falling "
+                "back to familiar English or original terms (e.g. +3 chars: Run (3) -> Lari (4) is allowed).",
+                classes="hint",
+            )
+            self._value = LabeledInput(
+                "Tolerance (+N chars)",
+                value=str(app_prefs.fitting_tolerance()),
+                default="3",
+                hint="0–20 characters (default: 3)",
+            )
+            yield self._value
+            yield Label("", id="fitting-tol-error", classes="error")
+            yield KeyHints([("⏎", "save"), ("esc", "cancel")])
+
+    def on_mount(self) -> None:
+        self._value.focus_input()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        try:
+            number = int(self._value.value)
+        except ValueError:
+            self.query_one("#fitting-tol-error", Label).update("That must be a number.")
+            return
+        if number < 0 or number > 20:
+            self.query_one("#fitting-tol-error", Label).update("Must be between 0 and 20.")
             return
         self.dismiss(number)
 

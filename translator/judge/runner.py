@@ -101,6 +101,7 @@ class JudgeTarget:
     dst_col: int
     start_row: int = 2
     num_rows: int = 0            # 0 = every remaining row
+    user_row_limit: int = 0      # 0 = every remaining row
     ctx_col: int = 0             # 0 = no context column, so no context criterion
     src_lang: str = ""
     tgt_lang: str = ""
@@ -108,6 +109,8 @@ class JudgeTarget:
     custom_placeholders: str = ""
     full_path: str = ""
     map_path: str = ""
+    fitting_mode: str = "normal"  # "normal" or "strict"
+    fitting_tolerance: int = 3
 
     @property
     def has_context(self) -> bool:
@@ -233,6 +236,8 @@ class JudgeRunner:
         # asks for it explicitly — and Settings supplies the default when it does
         # not (FR-104 / the Judge pacing step).
         self._max_rows = int(max_rows) if max_rows else _saved_max_rows()
+        self.fitting_mode = getattr(target, "fitting_mode", "normal")
+        self.fitting_tolerance = getattr(target, "fitting_tolerance", 3)
         self._client = None
         self._tokens_used = 0
         # Rows a valid reply has actually given a verdict for, across every
@@ -359,23 +364,60 @@ class JudgeRunner:
     def _fitting_map(self, rows: list[tuple[int, str, str]]) -> dict[int, str]:
         """Per-row FITTING prompt line — calculate source vs translation conciseness."""
         out: dict[int, str] = {}
+        is_strict = getattr(self, "fitting_mode", "normal") == "strict"
+        tolerance = getattr(self, "fitting_tolerance", 3)
+        if tolerance is None:
+            tolerance = 3
+
         for row, source, translation in rows:
             src = (source or "").strip()
             tgt = (translation or "").strip()
             if not src or not tgt:
                 continue
-            ratio = len(tgt) / max(len(src), 1)
-            # Highlight lines with significant text expansion (>1.4x) for conciseness review
-            if ratio >= 1.4:
-                out[row] = (
-                    f"source {len(src)} chars · translation {len(tgt)} chars "
-                    f"({ratio:.1f}x length) · CONCISENESS"
-                )
+
+            src_words = src.split()
+            tgt_words = tgt.split()
+            is_single_word = len(src_words) <= 1
+
+            if is_strict:
+                diff = len(tgt) - len(src)
+                if is_single_word:
+                    # Single word: if target became multi-word, or diff > tolerance
+                    if len(tgt_words) > 1 or diff > tolerance:
+                        out[row] = (
+                            f"source {len(src)} chars (1-word) · translation {len(tgt)} chars "
+                            f"(+{diff} chars, max +{tolerance}) · STRICT_1WORD_LIMIT"
+                        )
+                else:
+                    # Dialog / multi-word: target length should be <= source length
+                    if len(tgt) > len(src):
+                        ratio = len(tgt) / max(len(src), 1)
+                        out[row] = (
+                            f"source {len(src)} chars · translation {len(tgt)} chars "
+                            f"(+{diff} chars, {ratio:.1f}x) · STRICT_LENGTH_LIMIT"
+                        )
+            else:
+                ratio = len(tgt) / max(len(src), 1)
+                # Highlight lines with significant text expansion (>1.4x) for conciseness review
+                if ratio >= 1.4:
+                    out[row] = (
+                        f"source {len(src)} chars · translation {len(tgt)} chars "
+                        f"({ratio:.1f}x length) · CONCISENESS"
+                    )
         return out
 
     def revalidate_fix(self, row: int, fixed_text: str, source: str) -> str | None:
         """Post-fix gate: check if the fix is excessively verbose compared to source."""
-        if len(fixed_text or "") > max(len(source or "") * 2.5, 80):
+        if getattr(self, "fitting_mode", "normal") == "strict":
+            src = (source or "").strip()
+            fixed = (fixed_text or "").strip()
+            tol = getattr(self, "fitting_tolerance", 3) or 3
+            if len(src.split()) <= 1:
+                if len(fixed) > len(src) + tol + 2:
+                    return "excessive-length"
+            elif len(fixed) > max(len(src) * 1.5, 40):
+                return "excessive-length"
+        elif len(fixed_text or "") > max(len(source or "") * 2.5, 80):
             return "excessive-length"
         return None
 
@@ -446,7 +488,7 @@ class JudgeRunner:
             if not text:
                 prejudged[row] = RowIssue(
                     row=row, error_types=["empty"],
-                    comment="The target cell is empty — nothing was translated.",
+                    comment="The target cell is empty — translate from original source.",
                 )
             elif text == config.FAIL_MARKER or (row in failed_set and text == (source or "").strip()):
                 comment = (
@@ -504,7 +546,7 @@ class JudgeRunner:
             if not text:
                 prejudged[row] = RowIssue(
                     row=row, error_types=["empty"],
-                    comment="The target cell is empty — nothing was translated.",
+                    comment="The target cell is empty — translate from original source.",
                 )
             elif text == config.FAIL_MARKER or (row in failed_set and text == (source or "").strip()):
                 comment = (
@@ -634,6 +676,8 @@ class JudgeRunner:
                     comment_style=self._comment_style(),
                     fitting_map=self._fitting_map(rows),
                     history_map=h_map,
+                    fitting_mode=self.fitting_mode,
+                    fitting_tolerance=self.fitting_tolerance,
                 )
             return build_judge_prompt(
                 rows=rows,
@@ -648,6 +692,8 @@ class JudgeRunner:
                 comment_style=self._comment_style(),
                 fitting_map=self._fitting_map(rows),
                 history_map=h_map,
+                fitting_mode=self.fitting_mode,
+                fitting_tolerance=self.fitting_tolerance,
             )
 
         def apply_result(index: int, task: BatchTask, result: JudgeResult) -> None:
@@ -734,6 +780,8 @@ class JudgeRunner:
                 custom_placeholders=self._target.custom_placeholders,
                 grading_mode=self._grading_mode,
                 fitting=fitting_info,
+                fitting_mode=self.fitting_mode,
+                fitting_tolerance=self.fitting_tolerance,
             )
 
         def parse_solo(raw: str, row: int, task: BatchTask) -> str:
@@ -869,6 +917,8 @@ class JudgeRunner:
             # FITTING lines (but keeps the criterion) would re-judge without
             # the measurements the verdict is required to quote.
             fitting_map=self._fitting_map(task.extra["rows"]),
+            fitting_mode=self.fitting_mode,
+            fitting_tolerance=self.fitting_tolerance,
         )
         while attempts < MAX_FORMAT_RETRIES and result.unparsed:
             if self._stop.is_set():
@@ -1033,11 +1083,11 @@ class JudgeRunner:
 
         wanted = [row for row in dict.fromkeys(rows or [])]
         if not wanted and report is not None:
-            wanted = report.rows_matching(criteria, severities)
+            wanted = report.rows_matching(criteria or None, severities or None)
         elif wanted and report is not None and (criteria or severities):
             # An explicit list still respects the filters, so a caller cannot
             # accidentally repair a severity the user excluded.
-            allowed = set(report.rows_matching(criteria, severities))
+            allowed = set(report.rows_matching(criteria or None, severities or None))
             wanted = [row for row in wanted if row in allowed]
         if not wanted:
             return staged
@@ -1091,6 +1141,8 @@ class JudgeRunner:
                 custom_placeholders=self._target.custom_placeholders,
                 severities=severities,
                 fitting_map=self._fitting_map(task.extra["rows"]),
+                fitting_mode=self.fitting_mode,
+                fitting_tolerance=self.fitting_tolerance,
             )
 
         def build_solo(row: int, task: BatchTask) -> str:
@@ -1109,6 +1161,7 @@ class JudgeRunner:
                 criteria=criteria or self.criteria,
                 severities=severities,
                 fitting=fitting_info,
+                fitting_tolerance=self.fitting_tolerance,
             )
 
         def parse(raw: str, task: BatchTask, report=None) -> BatchResult:
@@ -1130,9 +1183,10 @@ class JudgeRunner:
             return parse_fixed_line(raw, source=source)
 
         def collect(task: BatchTask, result: BatchResult) -> None:
+            from ..parsing.recovery import is_error_output
             for row, text in result.results.items():
                 text = (text or "").strip()
-                if not text:
+                if not text or is_error_output(text):
                     continue
                 if text == (before.get(row) or "").strip():
                     # The model was told to return a line untouched rather than
@@ -1239,6 +1293,8 @@ class JudgeRunner:
                     custom_placeholders=self._target.custom_placeholders,
                     severities=severities,
                     fitting_map=self._fitting_map(task.extra["rows"]),
+                    fitting_mode=self.fitting_mode,
+                    fitting_tolerance=self.fitting_tolerance,
                 )
 
             def retry_build_solo(row: int, task: BatchTask) -> str:
@@ -1257,6 +1313,7 @@ class JudgeRunner:
                     criteria=criteria or self.criteria,
                     severities=severities,
                     fitting=fitting_info,
+                    fitting_tolerance=self.fitting_tolerance,
                 )
 
             self._run_tasks(
@@ -1294,12 +1351,18 @@ class JudgeRunner:
         ticked, and a row that is not in that list is never written, even when
         the model produced something for it (AC-103).
         """
+        from ..parsing.recovery import is_error_output
         rows = list(approved) if approved is not None else sorted(texts)
-        payload = {
-            row: texts[row]
-            for row in rows
-            if row in texts and (texts[row] or "").strip()
-        }
+        payload = {}
+        for row in rows:
+            if row in texts and (texts[row] or "").strip():
+                val = texts[row].strip()
+                if is_error_output(val):
+                    import sys
+                    sys.stderr.write(f"[ERROR] Row {row} omitted from output CSV: contains error message '{val}'\n")
+                    self.write_log(f"[error] Row {row} omitted from output CSV: contains error message '{val}'")
+                else:
+                    payload[row] = val
         if not payload:
             return 0
 
@@ -1373,6 +1436,9 @@ class JudgeRunner:
 
         contexts = self._context_for(row)
         fitting_info = self._fitting_map([(row, source, translation)]).get(row, "")
+        criteria = list(self.criteria) if self.criteria else []
+        if not (translation or "").strip() and "empty" not in criteria:
+            criteria.append("empty")
         prompt = build_fix_solo_prompt(
             row=row,
             source=source,
@@ -1383,8 +1449,9 @@ class JudgeRunner:
             style_prompt=self._target.style_prompt,
             context=contexts,
             custom_placeholders=self._target.custom_placeholders,
-            criteria=self.criteria,
+            criteria=criteria,
             fitting=fitting_info,
+            fitting_tolerance=self.fitting_tolerance,
         )
         content, error = self._one_request(prompt, label=f"fix row {row}")
         if error:
@@ -1444,6 +1511,8 @@ class JudgeRunner:
             grading_mode=self._grading_mode,
             fitting=fitting_info,
             history=h_text,
+            fitting_mode=self.fitting_mode,
+            fitting_tolerance=self.fitting_tolerance,
         )
         content, error = self._one_request(prompt, label=f"judge row {row}")
         if error:

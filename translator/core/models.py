@@ -69,6 +69,7 @@ class JobConfig:
     # Range
     start_row:  int = 2
     num_rows:   int = 0
+    user_row_limit: int = 0
     batch_size: int = config.DEFAULT_BATCH_SIZE
 
     # Language / style

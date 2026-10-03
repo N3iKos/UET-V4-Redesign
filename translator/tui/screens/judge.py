@@ -602,9 +602,9 @@ class RejudgeSetupScreen(ModalScreen["tuple | None"]):
         slot = self._chosen_slot()
         if slot is None:
             return
-        from ...data.app_prefs import remembered_fix_settings
+        from ...data.app_prefs import remembered_rejudge_settings
 
-        remembered = remembered_fix_settings(slot)
+        remembered = remembered_rejudge_settings(slot)
         if remembered is None:
             return
         self._batch.value = str(remembered["max_rows"])
@@ -899,6 +899,8 @@ class JudgeModelScreen(JudgeWizardScreen):
     def _file_engine_accepted_multiple(self, paths: list[str]) -> None:
         if paths:
             self.draft["paths"] = paths
+            self.draft["user_row_limit"] = 0
+            self.draft.pop("num_rows", None)
             self._file_engine_accepted(paths[0])
 
     def _file_engine_accepted(self, path: str) -> None:
@@ -906,6 +908,8 @@ class JudgeModelScreen(JudgeWizardScreen):
             # A different file invalidates the columns picked for the old one.
             for key in ("src_col", "dst_col", "ctx_col"):
                 self.draft.pop(key, None)
+            self.draft.pop("num_rows", None)
+            self.draft["user_row_limit"] = 0
         self.draft["path"] = path
 
 
@@ -980,34 +984,72 @@ class JudgeCriteriaScreen(JudgeWizardScreen):
 
     def on_screen_ready(self) -> None:
         chosen = set(self.draft.get("criteria") or app_prefs.last_judge_criteria())
+        fitting_mode = self.draft.get("fitting_mode") or app_prefs.last_judge_fitting_mode()
+        is_normal = ("fitting" in chosen and fitting_mode != "strict")
+        is_strict = ("fitting" in chosen and fitting_mode == "strict")
+
+        tol = app_prefs.fitting_tolerance()
         self.picker.set_options([
-            Option(CRITERION_LABELS[name], name, selected=name in chosen)
-            for name in CRITERIA
+            Option(CRITERION_LABELS["mistranslation"], "mistranslation", selected="mistranslation" in chosen),
+            Option(CRITERION_LABELS["context"], "context", selected="context" in chosen),
+            Option(CRITERION_LABELS["placeholder"], "placeholder", selected="placeholder" in chosen),
+            Option(CRITERION_LABELS["style"], "style", selected="style" in chosen),
+            Option("", "_sep", enabled=False),
+            Option("Fitting (Normal) — dialog window bounds & conciseness (ratio-based)", "fitting", selected=is_normal),
+            Option(f"Fitting (Strict) — UI / compact limit (≤ source length, +{tol} chars, fallback to common terms)", "fitting_strict", selected=is_strict),
         ])
         self.picker.focus()
         self._note()
 
     def _note(self) -> None:
         # Notes for special criteria
+        tol = app_prefs.fitting_tolerance()
         self.query_one("#judge-criteria-note", Static).update(
             "Context needs a context column; without one it is dropped automatically.\n"
             "Style judges internal consistency and naturalness when no style prompt is given.\n"
-            "Fitting checks dialog window bounds, or natural source conciseness in General mode."
+            "Fitting (Normal) checks dialog window bounds and flags text expansion beyond ~1.4x.\n"
+            f"Fitting (Strict) enforces length ≤ source (or +{tol} chars for 1-word UI terms), falling back to common terms."
         )
 
     def on_picker_toggled(self, event: Picker.Toggled) -> None:
         self._error.clear()
+        if event.option.value == "fitting" and event.option.selected:
+            for opt in self.picker.options:
+                if opt.value == "fitting_strict":
+                    opt.selected = False
+            self.picker.refresh()
+        elif event.option.value == "fitting_strict" and event.option.selected:
+            for opt in self.picker.options:
+                if opt.value == "fitting":
+                    opt.selected = False
+            self.picker.refresh()
 
     def on_picker_selected(self, event: Picker.Selected) -> None:
-        chosen = self.picker.selected_values()
+        raw_chosen = self.picker.selected_values()
+        chosen = [c for c in raw_chosen if c not in ("_sep",)]
         if not chosen:
             self._error.show(
                 "Tick at least one criterion — there is nothing to judge otherwise.",
                 "cannot continue",
             )
             return
-        app_prefs.set_last_judge_criteria(list(chosen))
-        self.draft["criteria"] = list(chosen)
+
+        fitting_mode = "normal"
+        criteria = []
+        for c in chosen:
+            if c == "fitting":
+                criteria.append("fitting")
+                fitting_mode = "normal"
+            elif c == "fitting_strict":
+                criteria.append("fitting")
+                fitting_mode = "strict"
+            else:
+                criteria.append(c)
+
+        app_prefs.set_last_judge_criteria(criteria)
+        app_prefs.set_last_judge_fitting_mode(fitting_mode)
+        self.draft["criteria"] = criteria
+        self.draft["fitting_mode"] = fitting_mode
         self.app.push_screen(JudgeStyleScreen())
 
 
@@ -1366,7 +1408,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
         )
         self._rows = LabeledInput(
             "Rows to evaluate",
-            value=str(self.draft.get("num_rows") or 0),
+            value=str(self.draft.get("user_row_limit", 0)),
             default="0",
             hint="Enter = every remaining row.",
         )
@@ -1546,6 +1588,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             error.update("A source and a translation column are required.")
             return
         src_col, dst_col, ctx_col, start, num_rows = parsed
+        user_row_limit = max(0, num_rows)
         if src_col == dst_col:
             error.update(
                 "Source and translation cannot be the same column — there would "
@@ -1559,16 +1602,14 @@ class JudgeColumnsScreen(JudgeWizardScreen):
             return
 
         available = max(0, total - start + 1)
-        if num_rows <= 0:
-            num_rows = available
-        num_rows = min(num_rows, available)
-        if num_rows <= 0:
+        leader_num_rows = min(user_row_limit, available) if user_row_limit > 0 else available
+        if leader_num_rows <= 0:
             error.update("That range contains no rows.")
             return
 
         self.draft.update(
             src_col=src_col, dst_col=dst_col, ctx_col=ctx_col,
-            start_row=start, num_rows=num_rows,
+            start_row=start, num_rows=leader_num_rows, user_row_limit=user_row_limit,
         )
         if app_prefs.dedup_mode() != "disabled":
             from ...core.dedup_file import prepare_unique_file
@@ -1579,7 +1620,7 @@ class JudgeColumnsScreen(JudgeWizardScreen):
                 try:
                     f_total = ExcelReader.row_count(fp)
                     f_avail = max(0, f_total - start + 1)
-                    f_num_rows = min(num_rows, f_avail) if num_rows > 0 else f_avail
+                    f_num_rows = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
                     unique, mapping, total_rows, unique_rows = prepare_unique_file(
                         fp, src_col, dst_col, start, f_num_rows,
                         fp if "_Translated" in os.path.splitext(fp)[0] else "",
@@ -1600,21 +1641,29 @@ class JudgeColumnsScreen(JudgeWizardScreen):
                             "full_path": canon_fp,
                             "path": canon_fp,
                             "map_path": "",
-                            "num_rows": unique_rows,
+                            "num_rows": f_num_rows,
                             "file_total_rows": total_rows,
                         }
                 except Exception as exc:
+                    try:
+                        f_total = ExcelReader.row_count(fp)
+                        f_avail = max(0, f_total - start + 1)
+                        f_num_rows = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
+                    except Exception:
+                        f_num_rows = leader_num_rows
                     multi_info[canon_fp] = {
                         "full_path": canon_fp,
                         "path": canon_fp,
                         "map_path": "",
-                        "num_rows": num_rows,
+                        "num_rows": f_num_rows,
                         "file_total_rows": 0,
                     }
             self.draft["multi_targets_info"] = multi_info
             first_p = os.path.abspath(paths_to_dedup[0])
             if first_p in multi_info:
+                saved_user_limit = self.draft.get("user_row_limit", 0)
                 self.draft.update(multi_info[first_p])
+                self.draft["user_row_limit"] = saved_user_limit
                 skipped = multi_info[first_p]["file_total_rows"] - multi_info[first_p]["num_rows"]
                 self.notify_status(
                     f"Deduplication: {multi_info[first_p]['num_rows']:,} unique rows "
@@ -1718,6 +1767,8 @@ def _judge_rows_default() -> int:
 def _targets_from(draft: dict) -> list[JudgeTarget]:
     """Build a list of JudgeTarget instances for multi-file review (up to 4), or a single target."""
     paths = draft.get("paths")
+    user_row_limit = draft.get("user_row_limit", None)
+    start = draft.get("start_row", 2)
     if paths and len(paths) > 1:
         targets = []
         multi_info = draft.get("multi_targets_info", {})
@@ -1732,9 +1783,31 @@ def _targets_from(draft: dict) -> list[JudgeTarget]:
             else:
                 t_draft["full_path"] = canon_p
                 t_draft["map_path"] = ""
+                try:
+                    f_total = ExcelReader.row_count(p)
+                    f_avail = max(0, f_total - start + 1)
+                    if user_row_limit is not None:
+                        t_draft["num_rows"] = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
+                    else:
+                        t_draft["num_rows"] = f_avail
+                except Exception:
+                    pass
             targets.append(_target_from(t_draft))
         return targets
-    return [_target_from(draft)]
+
+    t_draft = dict(draft)
+    sp = t_draft.get("path", "")
+    if sp and os.path.exists(sp) and (user_row_limit is not None or not t_draft.get("num_rows")):
+        try:
+            f_total = ExcelReader.row_count(sp)
+            f_avail = max(0, f_total - start + 1)
+            if user_row_limit is not None:
+                t_draft["num_rows"] = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
+            else:
+                t_draft["num_rows"] = f_avail
+        except Exception:
+            pass
+    return [_target_from(t_draft)]
 
 
 def _target_from(draft: dict) -> JudgeTarget:
@@ -1752,12 +1825,15 @@ def _target_from(draft: dict) -> JudgeTarget:
         ctx_col=draft.get("ctx_col", 0),
         start_row=draft.get("start_row", 2),
         num_rows=draft.get("num_rows", 0),
+        user_row_limit=draft.get("user_row_limit", 0),
         src_lang=draft.get("src_lang", ""),
         tgt_lang=draft.get("tgt_lang", ""),
         style_prompt=draft.get("style_prompt", ""),
         custom_placeholders=draft.get("custom_placeholders", ""),
         full_path=draft.get("full_path", ""),
         map_path=draft.get("map_path", ""),
+        fitting_mode=draft.get("fitting_mode", "normal"),
+        fitting_tolerance=draft.get("fitting_tolerance", app_prefs.fitting_tolerance()),
     )
 
 
@@ -1901,13 +1977,20 @@ class JudgePreviewScreen(JudgeWizardScreen, MenuScreen):
             )
         else:
             lines.append(f"[{MUTED}]Evaluation[/]   {plan.unique_rows:,} rows to evaluate")
+        crit_display = []
+        fitting_mode = draft.get("fitting_mode", "normal")
+        for c in criteria:
+            if c == "fitting":
+                crit_display.append(f"fitting ({fitting_mode})")
+            else:
+                crit_display.append(c)
         lines += [
             f"[{MUTED}]Model[/]       {escape_markup(model_name)}",
             f"[{MUTED}]Languages[/]   "
             f"{escape_markup(draft.get('src_lang') or 'auto')} → "
             f"{escape_markup(draft.get('tgt_lang') or '(not stated)')}",
             f"[{MUTED}]Style[/]       {escape_markup(self._style_label())}",
-            f"[{MUTED}]Criteria[/]    {escape_markup(', '.join(criteria))}",
+            f"[{MUTED}]Criteria[/]    {escape_markup(', '.join(crit_display))}",
             f"[{MUTED}]Requests[/]    {plan.request_count} · "
             f"~{plan.estimated_tokens:,} tokens estimated · "
             f"each under {plan.max_tokens:,}"
@@ -3508,6 +3591,8 @@ class JudgeRunScreen(BaseScreen):
             self._runner = runner
             report = runner.evaluate()
         except Exception as exc:            # a crash must not eat the screen
+            from ...core.crash_logger import log_exception
+            log_exception(exc, stage="judge_evaluate", operation="judge", file_path=self._target.path)
             safe_call(self._failed, f"{type(exc).__name__}: {exc}")
             return
         safe_call(self._evaluated, report)
@@ -3559,6 +3644,8 @@ class JudgeRunScreen(BaseScreen):
                 self._runner = runner
             report = runner.evaluate()
         except Exception as exc:
+            from ...core.crash_logger import log_exception
+            log_exception(exc, stage="judge_evaluate_session", operation="judge", file_path=session.target.path)
             msg = f"{type(exc).__name__}: {exc}"
             session.events.append(msg)
             safe_call(self._finish_operation, operation, "failed")
@@ -3683,6 +3770,11 @@ class JudgeRunScreen(BaseScreen):
         # did not finish and can be retried when the provider is back (bug #4).
         self._run_state = "paused" if self._aborted_run else "completed"
         self._report = report
+        if 0 <= self.active_session_index < len(self.sessions):
+            session = self.sessions[self.active_session_index]
+            session.report = report
+            session.run_state = self._run_state
+            session.busy_batch = False
         # Anything still queued belongs to this report; dropping it would leave
         # the last section's rows out of the grid until the next rebuild.
         self._pending_live.clear()
@@ -3911,18 +4003,32 @@ class JudgeRunScreen(BaseScreen):
         if not rows:
             self.notify_status("Nothing is unfinished — the run completed.", MUTED)
             return
+        origin = self._capture_origin(rows)
+        self._with_rejudge_model(
+            lambda slot, batch, workers, token=origin: self._begin_retry_unfinished(
+                rows, slot, token, rows_per_request=batch, workers=workers
+            ),
+            origin=origin,
+        )
+
+    def _begin_retry_unfinished(
+        self, rows: list[int], slot: tuple[str, str, str], origin: JudgeOrigin,
+        rows_per_request: int | None = None, workers: int | None = None,
+    ) -> None:
+        if not self._origin_current(origin, rows):
+            return
         self._aborted_run = False
         self._retry_rows = list(rows)
         operation = self._start_operation(
-            self.active_session_index, "Judge", self._model_slot,
-            report=self._report, busy_batch=True,
+            origin.session_index, "Judge", slot,
+            report=origin.report, busy_batch=True,
         )
-        self._begin_op("Judge", self._model_slot)
+        self._begin_op("Judge", slot)
         self.refresh_keys()
         self.notify_status(
             f"Retrying {len(rows)} unfinished row(s)…", ACCENT
         )
-        self._retry_unfinished(list(rows), operation)
+        self._retry_unfinished(list(rows), operation, workers=workers, rows_per_request=rows_per_request)
 
     def _begin_rejudge_filtered(
         self, rows: list[int], slot: tuple[str, str, str], origin: JudgeOrigin,
@@ -3949,13 +4055,19 @@ class JudgeRunScreen(BaseScreen):
         self._rejudge_many(list(rows), slot, operation, workers=workers, rows_per_request=rows_per_request)
 
     @work(thread=True)
-    def _retry_unfinished(self, rows: list[int], operation: JudgeOperation) -> None:
+    def _retry_unfinished(
+        self, rows: list[int], operation: JudgeOperation,
+        workers: int | None = None, rows_per_request: int | None = None,
+    ) -> None:
         app = self._app
         wanted = set(rows)
         try:
             runner = self._make_runner(
+                model_slot=operation.model_slot,
                 target=operation.target,
                 stop_event=operation.stop,
+                workers=workers,
+                max_rows=rows_per_request,
                 on_status=lambda status: app.call_from_thread(
                     self._operation_status, operation, status
                 ),
@@ -5076,15 +5188,7 @@ class JudgeRunScreen(BaseScreen):
                 MUTED,
             )
             return
-        fixable = [
-            row for row in visible
-            if "empty" not in report.issues[row].error_types
-        ]
-        if not fixable:
-            self.notify_status(
-                "The flagged rows are empty cells — translate them instead.", WARN
-            )
-            return
+        fixable = list(visible)
 
         from ...data.app_prefs import remembered_fix_settings
 
@@ -5095,6 +5199,8 @@ class JudgeRunScreen(BaseScreen):
                 repair_criteria = list(self._criteria)
                 if any("failed" in report.issues[row].error_types for row in fixable):
                     repair_criteria.append("failed")
+                if any("empty" in report.issues[row].error_types for row in fixable):
+                    repair_criteria.append("empty")
                 plan = FixAllPlan(
                     model_slot=slot,
                     rows=fixable,
@@ -5434,6 +5540,12 @@ class JudgeRunScreen(BaseScreen):
         if self._rejudging or getattr(self, "_rejudge_rows", None):
             n = len(getattr(self, "_rejudge_rows", []) or [])
             return f"{n} applied fix(es)" if n else ""
+        unfinished = self._unfinished_rows()
+        if unfinished:
+            return f"{len(unfinished)} unfinished row(s)"
+        visible = self._visible_problems()
+        if visible:
+            return f"{len(visible)} flagged row(s)"
         row = self._current_row()
         return f"row {row}" if row else ""
 
@@ -5807,11 +5919,10 @@ class JudgeRunScreen(BaseScreen):
                 self._verdict_stable.add(row)
                 continue
             if row in self._verdict_stable and \
-                    getattr(issue, "severity", "") != "critical":
+                    getattr(issue, "severity", "") == "minor":
                 # Layer 2 suppression: this row already passed a re-judge and
-                # the new finding is not critical — keep the pass, drop the
-                # flag. The verdict stays stable in the report and the count
-                # stays converged.
+                # the new finding is only minor — keep the pass, drop the
+                # minor flag. Moderate and critical defects must NOT be suppressed.
                 held_stable.append(row)
                 continue
             report.restore(issue)
@@ -6276,11 +6387,10 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
     def _next_step(self) -> None:
         """Validate the categories/severity choice, then move to the model step."""
         self._error.clear()
-        if not self._chosen_criteria():
-            self._error.show("Tick at least one category.", "nothing to fix")
-            return
-        if self._graded and not self._chosen_severities():
-            self._error.show("Tick at least one severity.", "nothing to fix")
+        chosen_cat = self._chosen_criteria()
+        chosen_sev = self._chosen_severities()
+        if not chosen_cat and not chosen_sev:
+            self._error.show("Tick at least one category or severity.", "nothing to fix")
             return
         if not self._matching_rows():
             self._error.show("No rows match those filters.", "nothing to fix")
@@ -6343,18 +6453,32 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         """
         distribution = self._report.summary.distribution
         options: list[Option] = []
-        repairable = (*CRITERIA, "failed")
+        repairable = (*CRITERIA, "failed", "empty", "unjudged", "other")
         for name in repairable:
             count = distribution.get(name, 0)
             if not count:
                 continue
-            label = (
-                "Failed translation — translate the original source"
-                if name == "failed"
-                else CRITERION_LABELS[name]
-            )
+            if name == "unjudged":
+                label = "Unjudged / unevaluated — re-evaluate and repair"
+            elif name == "failed":
+                label = "Failed translation — translate the original source"
+            elif name == "empty":
+                label = "Empty rows — translate from original source"
+            elif name == "other":
+                label = "Other — general phrasing / naturalness / unclassified"
+            else:
+                label = CRITERION_LABELS.get(name, name.title())
             options.append(Option(
                 label,
+                name,
+                hint=f"{count} row(s)",
+                selected=True,
+            ))
+        for name, count in distribution.items():
+            if not count or name in repairable:
+                continue
+            options.append(Option(
+                name.title(),
                 name,
                 hint=f"{count} row(s)",
                 selected=True,
@@ -6412,9 +6536,11 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
     def _matching_rows(self) -> list[int]:
         """Rows that pass both filters, within what the grid filter offered."""
         offered = set(self._offered)
+        criteria = self._chosen_criteria() or None
+        severities = self._chosen_severities() or None
         return [
             row for row in self._report.rows_matching(
-                self._chosen_criteria(), self._chosen_severities()
+                criteria, severities
             )
             if row in offered
         ]
@@ -6491,9 +6617,9 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         slot = self._chosen_slot()
         if slot is None:
             return
-        from ...data.app_prefs import remembered_judge_settings
+        from ...data.app_prefs import remembered_fix_settings
 
-        remembered = remembered_judge_settings(slot)
+        remembered = remembered_fix_settings(slot)
         if remembered is None:
             return
         self._batch.value = str(remembered["max_rows"])
@@ -6607,8 +6733,8 @@ class FixAllSetupScreen(ModalScreen["FixAllPlan | None"]):
         self.dismiss(FixAllPlan(
             model_slot=slot,
             rows=rows,
-            criteria=self._chosen_criteria(),
-            severities=self._chosen_severities(),
+            criteria=self._chosen_criteria() or None,
+            severities=self._chosen_severities() or None,
             batch_size=self._typed_batch(),
             workers=workers,
         ))

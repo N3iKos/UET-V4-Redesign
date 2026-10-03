@@ -53,8 +53,19 @@ _ALIASES: dict[str, str] = {
     "terminology": "style",
     "fluency": "style",
     "grammar": "style",
+    "naturalness": "style",
+    "unnatural": "style",
+    "awkward": "style",
+    "wording": "style",
+    "phrasing": "style",
+    "fitting": "fitting",
+    "conciseness": "fitting",
+    "length": "fitting",
+    "overflow": "fitting",
+    "sinking": "fitting",
     "empty": "empty",
     "failed": "failed",
+    "other": "other",
 }
 
 
@@ -208,7 +219,8 @@ def parse_fixed_line(text: str, source: str = "") -> str:
         candidate = re.sub(r"^(\[\d+\]\s*)+", "", candidate).strip()
         if not has_source_num:
             candidate = re.sub(r"^\d+[.)]\s+", "", candidate).strip()
-        if candidate:
+        from ..parsing.recovery import is_error_output
+        if candidate and not is_error_output(candidate):
             return decode_placeholders(candidate)
     return ""
 

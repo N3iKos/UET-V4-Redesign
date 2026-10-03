@@ -1,6 +1,10 @@
 import json
 import os
+import sys
 from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from translator.core.engine import ProcessingEngine
 from translator.core.models import JobConfig, BatchResult
 from translator.core.failed_cache import load_failed_rows, record_failed_rows

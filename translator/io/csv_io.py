@@ -136,6 +136,11 @@ def sniff(path: str) -> CsvFormat:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         delimiter = dialect.delimiter
         quotechar = dialect.quotechar or '"'
+        # csv.Sniffer notoriously misidentifies apostrophes in English text/contractions
+        # (e.g. You've, don't, it's, tag '<...>') as quotechar="'".
+        # Standard CSV (RFC 4180) and spreadsheet software always use double quotes '"'.
+        if quotechar != '"':
+            quotechar = '"'
     except csv.Error:
         header = sample.splitlines()[0] if sample.splitlines() else ""
         counts = {d: header.count(d) for d in (",", ";", "\t", "|")}

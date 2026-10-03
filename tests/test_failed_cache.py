@@ -1,5 +1,9 @@
 # tests/test_failed_cache.py
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from translator.core.failed_cache import (
     failed_cache_path,
     load_failed_rows,

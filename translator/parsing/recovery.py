@@ -16,6 +16,22 @@ from .. import config
 from .placeholders import decode_placeholders
 
 
+def is_error_output(text: str) -> bool:
+    """Check if a text string represents an API error or failure notice instead of a valid translation."""
+    if not text:
+        return False
+    s = text.strip().lower()
+    if s.startswith(("[translate_failed]", "[error]", "error:", "error 4", "error 5", "http error")):
+        return True
+    if re.search(r"^(?:request timed out|timed out|rate limit|429 too many requests|500 internal server|502 bad gateway|503 service unavailable|504 gateway timeout|failed to evaluate)", s):
+        return True
+    if re.search(r"^(?:i cannot (?:fulfill|translate|process)|i am unable to (?:fulfill|translate|process)|as an ai language model|the model returned nothing usable)", s):
+        return True
+    if s.startswith("{") and '"error"' in s:
+        return True
+    return False
+
+
 class ParseRecoveryPipeline:
     """Raw LLM text + expected row numbers -> {row_num: translated}."""
 
@@ -109,7 +125,7 @@ class ParseRecoveryPipeline:
             rn = int(match.group(1))
             source_text = (source_map or {}).get(rn, "")
             value = self._clean(match.group(2), source_text=source_text)
-            if value:
+            if value and not is_error_output(value):
                 result[rn] = decode_placeholders(value)
         return result
 
@@ -121,9 +137,11 @@ class ParseRecoveryPipeline:
         for match in re.finditer(pattern, text, re.MULTILINE):
             rn = int(match.group(1))
             source_text = (source_map or {}).get(rn, "")
-            raw_val = re.sub(r"^[\]:\-\*]+\s*", "", match.group(2))
+            raw_val = match.group(2)
+            if raw_val.startswith(("]", ":", "-")):
+                raw_val = re.sub(r"^[\]:\-]+\s*", "", raw_val)
             value = self._clean(raw_val, source_text=source_text)
-            if rn in expected_set and value:
+            if rn in expected_set and value and not is_error_output(value):
                 result[rn] = decode_placeholders(value)
         return result
 
@@ -143,18 +161,34 @@ class ParseRecoveryPipeline:
             if index < len(lines):
                 source_text = (source_map or {}).get(rn, "")
                 value = self._clean(lines[index], source_text=source_text)
-                if value:
+                if value and not is_error_output(value):
                     result[rn] = decode_placeholders(value)
         return result
 
     def _clean(self, value: str, source_text: str = "") -> str:
         value = value.strip()
         value = re.sub(r"^(\[[\dN]+\]\s*)+", "", value).strip()
-        # Clean leading markdown bold, colon, or dashes like ": ", "- ", "** "
-        value = re.sub(r"^(?:\*{1,2}|[:\-])\s*", "", value).strip()
+        # Clean leading colon or dashes like ": ", "- "
+        value = re.sub(r"^[:\-]\s*", "", value).strip()
+
+        # Handle leading asterisks:
+        # If source text itself starts with '*', or if translation has matching asterisks like '*action*',
+        # do NOT strip asterisks! Only strip if it's a markdown bullet point (* followed by whitespace)
+        # and source does NOT start with an asterisk.
+        src_clean = (source_text or "").strip()
+        has_source_asterisk = src_clean.startswith("*")
+        has_paired_asterisk = (
+            (value.startswith("*") and not value.startswith("**") and ("*" in value[1:]))
+            or (value.startswith("**") and ("**" in value[2:]))
+        )
+
+        if not (has_source_asterisk or has_paired_asterisk):
+            # Clean markdown bold/bullets with whitespace: "** text" or "* text"
+            value = re.sub(r"^\*{1,2}\s+", "", value).strip()
+
         # If the source text itself starts with a numbered bullet (e.g. "1. " or "2) "),
         # preserve the number in the translation! Only strip if source has no leading number.
-        has_source_num = bool(re.match(r"^\d+[.)]\s+", (source_text or "").strip()))
+        has_source_num = bool(re.match(r"^\d+[.)]\s+", src_clean))
         if not has_source_num:
             value = re.sub(r"^\d+[.)]\s+", "", value).strip()
         return value
@@ -201,7 +235,7 @@ def parse_json_response(text: str, expected_row_nums: list[int]) -> dict[int, st
         result: dict[int, str] = {}
         for rn in expected_row_nums:
             value = str(data.get(str(rn), "")).strip()
-            if value:
+            if value and not is_error_output(value):
                 result[rn] = decode_placeholders(value)
         return result
     except (_json.JSONDecodeError, AttributeError):
@@ -213,7 +247,7 @@ def parse_json_response(text: str, expected_row_nums: list[int]) -> dict[int, st
         if match:
             try:
                 value = _json.loads(f'"{match.group(1)}"').strip()
-                if value:
+                if value and not is_error_output(value):
                     result[rn] = decode_placeholders(value)
             except Exception:
                 pass

@@ -146,6 +146,65 @@ def test_judge_runner_apply_fix_ignores_stale_leaked_map_path(tmp_path):
     assert "bekas luka" in content
 
 
+def test_fitting_strict_single_word_within_tolerance(tmp_path):
+    target = JudgeTarget(
+        path=str(tmp_path / "x.csv"), src_col=2, dst_col=3,
+        fitting_mode="strict", fitting_tolerance=3,
+    )
+    r = JudgeRunner(target)
+    # "Run" (3) -> "Lari" (4): diff is +1 <= 3 and still 1 word -> allowed!
+    f_map = r._fitting_map([(1, "Run", "Lari")])
+    assert 1 not in f_map
+
+
+def test_fitting_strict_single_word_exceeds_tolerance(tmp_path):
+    target = JudgeTarget(
+        path=str(tmp_path / "x.csv"), src_col=2, dst_col=3,
+        fitting_mode="strict", fitting_tolerance=3,
+    )
+    r = JudgeRunner(target)
+    # "Cut" (3) -> "Memotong" (8): diff is +5 > 3 -> flagged as STRICT_1WORD_LIMIT
+    f_map = r._fitting_map([(1, "Cut", "Memotong")])
+    assert 1 in f_map
+    assert "STRICT_1WORD_LIMIT" in f_map[1]
+    assert "+5 chars" in f_map[1]
+
+
+def test_fitting_strict_single_word_multiword_expansion(tmp_path):
+    target = JudgeTarget(
+        path=str(tmp_path / "x.csv"), src_col=2, dst_col=3,
+        fitting_mode="strict", fitting_tolerance=3,
+    )
+    r = JudgeRunner(target)
+    # "Sunset" (6) -> "Matahari terbenam" (17): expanded to multi-word -> flagged!
+    f_map = r._fitting_map([(1, "Sunset", "Matahari terbenam")])
+    assert 1 in f_map
+    assert "STRICT_1WORD_LIMIT" in f_map[1]
+
+
+def test_fitting_strict_dialogue_longer_than_source(tmp_path):
+    target = JudgeTarget(
+        path=str(tmp_path / "x.csv"), src_col=2, dst_col=3,
+        fitting_mode="strict", fitting_tolerance=3,
+    )
+    r = JudgeRunner(target)
+    # Multi-word sentence: "Time to start" (13) -> "Saatnya untuk kita mulai sekarang juga" (39) -> flagged!
+    f_map = r._fitting_map([(1, "Time to start", "Saatnya untuk kita mulai sekarang juga")])
+    assert 1 in f_map
+    assert "STRICT_LENGTH_LIMIT" in f_map[1]
+
+
+def test_fitting_strict_revalidate_fix_checks_length(tmp_path):
+    target = JudgeTarget(
+        path=str(tmp_path / "x.csv"), src_col=2, dst_col=3,
+        fitting_mode="strict", fitting_tolerance=3,
+    )
+    r = JudgeRunner(target)
+    # If fix is "Matahari terbenam di ufuk barat yang sangat indah" for "Sunset"
+    assert r.revalidate_fix(1, "Matahari terbenam di ufuk barat yang sangat indah", "Sunset") == "excessive-length"
+    assert r.revalidate_fix(1, "Sunset", "Sunset") is None
+
+
 
 
 

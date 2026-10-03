@@ -97,6 +97,8 @@ DEFAULTS: dict = {
     # If the user selects fitting or deselects others, the combination is
     # remembered for subsequent runs.
     "last_judge_criteria": list(DEFAULT_JUDGE_CRITERIA),
+    "last_judge_fitting_mode": "normal",
+    "fitting_tolerance": 3,
     # Deduplication & Translation Memory mode:
     #   unique_file — extract unique rows to a working file and sync back
     #   persistent  — unique working file plus persistent translation memory
@@ -161,6 +163,12 @@ def load_prefs() -> dict:
     prefs["last_judge_criteria"] = _clean_judge_criteria(
         payload.get("last_judge_criteria")
     )
+    fitting_mode = payload.get("last_judge_fitting_mode")
+    prefs["last_judge_fitting_mode"] = fitting_mode if fitting_mode in ("normal", "strict") else "normal"
+    try:
+        prefs["fitting_tolerance"] = max(0, min(20, int(payload.get("fitting_tolerance", 3))))
+    except Exception:
+        prefs["fitting_tolerance"] = 3
     prefs["judge_chain_context"] = bool(payload.get("judge_chain_context", False))
     prefs["judge_chain_window"] = _clamp_chain_window(
         payload.get("judge_chain_window")
@@ -233,6 +241,12 @@ def save_prefs(prefs: dict) -> None:
     current["last_judge_criteria"] = _clean_judge_criteria(
         current.get("last_judge_criteria")
     )
+    fitting_mode = current.get("last_judge_fitting_mode")
+    current["last_judge_fitting_mode"] = fitting_mode if fitting_mode in ("normal", "strict") else "normal"
+    try:
+        current["fitting_tolerance"] = max(0, min(20, int(current.get("fitting_tolerance", 3))))
+    except Exception:
+        current["fitting_tolerance"] = 3
     current["judge_chain_context"] = bool(current.get("judge_chain_context", False))
     current["judge_chain_window"] = _clamp_chain_window(
         current.get("judge_chain_window")
@@ -591,6 +605,37 @@ def set_last_judge_criteria(criteria: list[str]) -> list[str]:
     clean = _clean_judge_criteria(criteria)
     save_prefs({"last_judge_criteria": clean})
     return clean
+
+
+def last_judge_fitting_mode() -> str:
+    """The remembered fitting sub-mode: 'normal' or 'strict'."""
+    val = load_prefs().get("last_judge_fitting_mode", "normal")
+    return val if val in ("normal", "strict") else "normal"
+
+
+def set_last_judge_fitting_mode(mode: str) -> str:
+    """Store the chosen fitting sub-mode: 'normal' or 'strict'."""
+    clean = "strict" if mode == "strict" else "normal"
+    save_prefs({"last_judge_fitting_mode": clean})
+    return clean
+
+
+def fitting_tolerance() -> int:
+    """Max characters expansion for single-word UI/terms before falling back to common terms."""
+    try:
+        return max(0, min(20, int(load_prefs().get("fitting_tolerance", 3))))
+    except Exception:
+        return 3
+
+
+def set_fitting_tolerance(value: int) -> int:
+    """Set max character expansion tolerance for 1-word UI/terms (0-20)."""
+    try:
+        val = max(0, min(20, int(value)))
+    except Exception:
+        val = 3
+    save_prefs({"fitting_tolerance": val})
+    return val
 
 
 # ── Deduplication / Translation Memory ───────────────────────────────────────

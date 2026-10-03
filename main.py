@@ -33,9 +33,20 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     _check_dependencies()
 
+    from translator.core.crash_logger import install_global_crash_handler, log_exception
+    install_global_crash_handler()
+
     from translator.tui.app import UETApp
 
-    UETApp().run()
+    try:
+        app = UETApp()
+        app.run()
+    except Exception as exc:
+        log_path = log_exception(exc, stage="app_lifecycle", operation="tui_run")
+        sys.stderr.write(f"\n[FATAL ERROR] Universal Excel Translator encountered an unexpected error.\n")
+        sys.stderr.write(f"Crash log written to: {log_path}\n")
+        sys.stderr.write(f"{type(exc).__name__}: {exc}\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

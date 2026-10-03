@@ -20,9 +20,20 @@ if errorlevel 1 (
     pip install openpyxl
 )
 
-python main.py
+python -c "import textual" >nul 2>&1
 if errorlevel 1 (
+    echo [INFO] Installing textual...
+    pip install textual
+)
+
+python main.py
+set EXIT_CODE=%ERRORLEVEL%
+if not "%EXIT_CODE%"=="0" (
     echo.
-    echo [ERROR] Exited with error.
+    echo [ERROR] Application exited with error code %EXIT_CODE%.
+    if exist "uet_crash.log" (
+        echo Details have been saved to 'uet_crash.log'.
+    )
+    echo.
     pause
 )

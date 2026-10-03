@@ -194,4 +194,15 @@ def test_multiple_json_self_correction_recovered():
     assert not result.issues
 
 
+def test_normalise_error_type_aliases():
+    from translator.judge.parser import normalise_error_type
+    assert normalise_error_type("naturalness") == "style"
+    assert normalise_error_type("unnatural phrasing") == "style"
+    assert normalise_error_type("awkward wording") == "style"
+    assert normalise_error_type("fitting") == "fitting"
+    assert normalise_error_type("conciseness") == "fitting"
+    assert normalise_error_type("other") == "other"
+
+
+
 

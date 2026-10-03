@@ -34,6 +34,26 @@ def test_fix_all_setup_offers_failed_rows_as_repairable():
     assert any(option.value == "failed" and option.selected for option in options)
 
 
+def test_fix_all_setup_offers_other_category_as_repairable():
+    report = JudgeReport(
+        rows=[(32, "They forced us to watch this.", "Mereka memaksa kami menonton ini.")],
+        issues={32: RowIssue(32, ["other"], "Wording could be improved.", severity="minor")},
+    )
+    report.summary.distribution["other"] = 1
+    screen = FixAllSetupScreen(
+        report=report,
+        rows=[32],
+        model_slot=("p", "c", "m"),
+        target=JudgeTarget(path="game.csv", src_col=2, dst_col=3),
+    )
+
+    options = screen._criteria_options()
+
+    assert any(option.value == "other" and option.selected for option in options)
+    filter_opts = screen._filter_options()
+    assert any("cat:other" in str(getattr(opt, "value", "")) for opt in filter_opts)
+
+
 def test_judge_run_screen_multi_tab_initialization(tmp_path):
     f1 = tmp_path / "a.csv"
     f2 = tmp_path / "b.csv"
@@ -674,4 +694,19 @@ def test_fix_all_respects_dont_ask_and_rejudge_isolated(tmp_path, monkeypatch):
     assert len(rejudge_run) == 0
 
 
+def test_evaluated_syncs_session_report_and_allows_fix_all_confirmation():
+    t = JudgeTarget(path="game.csv", src_col=2, dst_col=3)
+    screen = JudgeRunScreen(target=t, model_slot=("p", "c", "m"), criteria=["mistranslation"])
+    screen._fill_grid = lambda: None
+    screen._paint_rail = lambda: None
+    screen.refresh_keys = lambda: None
+    screen.notify_status = lambda *a, **k: None
+
+    rep = JudgeReport(rows=[(1, "src", "dst")], issues={1: RowIssue(1, ["mistranslation"], "err", "critical")})
+    screen._evaluated(rep)
+
+    assert screen.sessions[0].report is rep
+
+    origin = screen._capture_origin([1])
+    assert screen._origin_current(origin, [1]) is True
 

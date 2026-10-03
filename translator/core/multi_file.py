@@ -48,6 +48,8 @@ class MultiFileDraftManager:
             overridden = self._overrides[i]
             for k, v in kwargs.items():
                 if k not in overridden:
+                    if k in ("num_rows", "file_total_rows") and "user_row_limit" in kwargs:
+                        continue
                     follower[k] = v
 
     def update_file(self, index: int, **kwargs) -> None:
@@ -69,7 +71,7 @@ class MultiFileDraftManager:
         if key is None:
             self._overrides[index].clear()
             for k, v in leader.items():
-                if k not in ("path", "src_path", "out_path", "full_path", "map_path"):
+                if k not in ("path", "src_path", "out_path", "full_path", "map_path", "num_rows", "file_total_rows"):
                     self.drafts[index][k] = v
         else:
             self._overrides[index].discard(key)

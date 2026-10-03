@@ -1,4 +1,9 @@
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from translator.judge.runner import JudgeRunner, JudgeTarget
 from translator.core.failed_cache import load_failed_rows, record_failed_rows
 

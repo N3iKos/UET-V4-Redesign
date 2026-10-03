@@ -1,5 +1,9 @@
 import json
+import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from openpyxl import Workbook
@@ -119,3 +123,157 @@ def test_sync_failure_is_atomic(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         api().sync_unique_to_full(mapping, unique, full, 2)
     assert Path(full).read_bytes() == before
+
+
+def test_dedup_and_sync_with_apostrophes_and_commas(tmp_path):
+    """
+    Ensure CSV files with English contractions (You've, don't, tag '<...>') and commas
+    do not trick csv.Sniffer into quotechar="'" which previously corrupted columns and broke sync.
+    """
+    rows = [
+        ["ID", "Tag", "Source", "Translated"],
+        ["1", "tag '<...>'", "Congratulations! You've won, keep playing.", ""],
+        ["2", "", "Lorem ipsum dolor sit amet, consectetur adipiscing elit.", ""],
+        ["3", "", "Don't stop, keep going.", ""],
+        ["4", "", "Don't stop, keep going.", ""],
+    ]
+    source = make_file(tmp_path / "ui.csv", rows)
+    full = make_file(tmp_path / "ui_Translated.csv", rows)
+
+    unique, mapping, total, count = api().prepare_unique_file(source, 3, 4, full_out_path=full)
+    assert total == 4
+    assert count == 3
+    assert mapping != ""
+
+    # Add translations to unique file
+    wb = load_workbook(unique)
+    wb.active.cell(2, 4, "Selamat! Anda menang, terus main.")
+    wb.active.cell(3, 4, "Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
+    wb.active.cell(4, 4, "Jangan berhenti, teruskan.")
+    wb.save(unique)
+    wb.close()
+
+    # Sync must succeed without 'Unique file order does not match mapping' error
+    synced = api().sync_unique_to_full(mapping, unique, full, 4)
+    assert synced == 4
+
+    # Verify content in full translated file
+    res = values(full)
+    assert res[1][3] == "Selamat! Anda menang, terus main."
+    assert res[2][3] == "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+    assert res[3][3] == "Jangan berhenti, teruskan."
+    assert res[4][3] == "Jangan berhenti, teruskan."
+
+
+def test_validate_mapping_informative_error_message(tmp_path):
+    source = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    unique, mapping, _, _ = api().prepare_unique_file(source, 1, 2)
+    wrong_path = str(tmp_path / "wrong.csv")
+    with pytest.raises(ValueError) as exc_info:
+        api().validate_mapping(mapping, wrong_path)
+    err = str(exc_info.value)
+    assert "Unique file does not match mapping:" in err
+    assert f"unique_path='{wrong_path}'" in err
+    assert "expected '" in err
+
+
+def test_engine_init_does_not_overwrite_unique_out_when_full_out_exists(tmp_path):
+    cache_dir = tmp_path / ".uet_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    full_src = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    full_out = make_file(tmp_path / "dialog_Translated.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    unique_src, map_path, _, _ = api().prepare_unique_file(full_src, 1, 2)
+    unique_out = str(Path(unique_src).with_name(Path(unique_src).stem + "_Translated.csv"))
+    if os.path.exists(unique_out):
+        os.remove(unique_out)
+    assert not os.path.exists(unique_out)
+
+    from translator.core.engine import ProcessingEngine
+    from translator.core.models import JobConfig
+
+    job = JobConfig(
+        src_path=unique_src,
+        out_path=unique_out,
+        full_src_path=full_src,
+        full_out_path=full_out,
+        map_path=map_path,
+        src_col=1,
+        dst_col=2,
+    )
+    engine = ProcessingEngine(job)
+    assert job.out_path == unique_out
+    assert job.src_path == unique_src
+    assert job.map_path == map_path
+
+
+def test_engine_sync_guards_against_identical_paths(tmp_path):
+    from translator.core.engine import ProcessingEngine
+    from translator.core.models import JobConfig
+
+    source = make_file(tmp_path / "file.csv", [["s", "t"], ["a", ""]])
+    out = make_file(tmp_path / "file_Translated.csv", [["s", "t"], ["a", ""]])
+    job = JobConfig(
+        src_path=source,
+        out_path=out,
+        full_src_path=source,
+        full_out_path=out,
+        map_path=str(tmp_path / "fake_map.json"),
+        src_col=1,
+        dst_col=2,
+    )
+    engine = ProcessingEngine(job)
+    # Should safely return without error even if map_path is invalid
+    engine._maybe_sync_full()
+    engine._full_sync_tick()
+    engine._final_full_sync(cleanup=False)
+
+
+def test_final_full_sync_cleanup_only_on_complete_success(tmp_path):
+    from translator.core.engine import ProcessingEngine
+    from translator.core.models import JobConfig, ProcessStats
+
+    cache_dir = tmp_path / ".uet_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    full_src = make_file(tmp_path / "dialog.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    full_out = make_file(tmp_path / "dialog_Translated.csv", [["s", "t"], ["a", ""], ["a", ""]])
+    unique_src, map_path, _, _ = api().prepare_unique_file(full_src, 1, 2)
+    unique_out = str(cache_dir / (Path(unique_src).stem + "_Translated.csv"))
+    # Populate unique_out with translation
+    wb = load_workbook(unique_src)
+    wb.active.cell(2, 2, "A")
+    wb.save(unique_out)
+    wb.close()
+
+    job = JobConfig(
+        src_path=unique_src,
+        out_path=unique_out,
+        full_src_path=full_src,
+        full_out_path=full_out,
+        map_path=map_path,
+        src_col=1,
+        dst_col=2,
+    )
+
+    # 1. Partial/Failed: failed > 0 -> should NOT delete cache files
+    engine = ProcessingEngine(job)
+    engine._finish(ProcessStats(total=2, ok=1, failed=1))
+    assert os.path.exists(unique_out)
+
+    # 2. Skipped > 0 -> should NOT delete cache files
+    engine = ProcessingEngine(job)
+    engine._finish(ProcessStats(total=2, ok=1, skipped=1))
+    assert os.path.exists(unique_out)
+
+    # 3. Aborted (_stop set) -> should NOT delete cache files
+    engine = ProcessingEngine(job)
+    engine._stop.set()
+    engine._finish(ProcessStats(total=2, ok=2))
+    assert os.path.exists(unique_out)
+
+    # 4. Clean success -> should delete cache files
+    engine = ProcessingEngine(job)
+    engine._finish(ProcessStats(total=2, ok=2))
+    assert not os.path.exists(unique_out)
+
+
+

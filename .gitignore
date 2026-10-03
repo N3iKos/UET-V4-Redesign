@@ -9,5 +9,7 @@ graphify-out/
 *.csv
 *.rar
 *.txt
+!requirements.txt
+!styleprompt.txt
 .uet_cache/
 backup/

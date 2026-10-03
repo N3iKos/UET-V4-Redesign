@@ -1,4 +1,9 @@
+import os
+import sys
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from translator.data.app_prefs import (
     failed_fallback_mode,
     set_failed_fallback_mode,

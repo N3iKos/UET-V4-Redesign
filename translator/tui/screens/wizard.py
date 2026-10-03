@@ -379,12 +379,16 @@ class ReasoningScreen(WizardMenuScreen):
     def _file_engine_accepted_multiple(self, paths: list[str]) -> None:
         if paths:
             self.draft["src_paths"] = paths
+            self.draft["user_row_limit"] = 0
+            self.draft.pop("num_rows", None)
             self._file_engine_accepted(paths[0])
 
     def _file_engine_accepted(self, path: str) -> None:
         if path != self.draft.get("src_path"):
             for key in ("src_col", "dst_col", "ctx_col", "repair_col"):
                 self.draft.pop(key, None)
+            self.draft.pop("num_rows", None)
+            self.draft["user_row_limit"] = 0
         self.draft["src_path"] = path
         self.draft["out_path"] = translated_path(path)
 
@@ -526,8 +530,12 @@ class ColumnsScreen(WizardScreen):
                 field.value = ExcelReader.col_letter(value)
         if self.draft.get("start_row"):
             self._start.value = str(self.draft["start_row"])
-        if self.draft.get("num_rows"):
+        if self.draft.get("user_row_limit") is not None:
+            self._rows.value = str(self.draft["user_row_limit"])
+        elif self.draft.get("num_rows") and not self.draft.get("src_paths"):
             self._rows.value = str(self.draft["num_rows"])
+        else:
+            self._rows.value = "0"
 
     def _auto_detect(self) -> None:
         """Fill Source/Destination from the header unless already chosen."""
@@ -691,23 +699,30 @@ class ColumnsScreen(WizardScreen):
             error.update("Source and destination columns are required.")
             return
         src_col, dst_col, ctx_col, repair_col, start, num_rows = parsed
+        user_row_limit = max(0, num_rows)
         try:
             total = ExcelReader.row_count(self.draft["src_path"])
         except Exception as exc:
             error.update(f"Cannot read file: {exc}")
             return
 
-        if num_rows <= 0:
-            num_rows = max(0, total - start + 1)
-        num_rows = min(num_rows, max(0, total - start + 1))
-        if num_rows <= 0:
+        leader_avail = max(0, total - start + 1)
+        leader_num_rows = min(user_row_limit, leader_avail) if user_row_limit > 0 else leader_avail
+        if leader_num_rows <= 0:
             error.update("That range contains no rows.")
             return
 
+        current_op = self.draft.get("op_mode", "translate")
+        if current_op in ("translate", "translate_context"):
+            op_mode = "translate_context" if ctx_col else "translate"
+        else:
+            op_mode = current_op
+
         self.draft.update(
             src_col=src_col, dst_col=dst_col, ctx_col=ctx_col,
-            repair_col=repair_col, start_row=start, num_rows=num_rows,
-            op_mode="translate_context" if ctx_col else "translate",
+            repair_col=repair_col, start_row=start, num_rows=leader_num_rows,
+            user_row_limit=user_row_limit,
+            op_mode=op_mode,
         )
         if app_prefs.dedup_mode() != "disabled":
             from ...core.dedup_file import prepare_unique_file
@@ -719,7 +734,7 @@ class ColumnsScreen(WizardScreen):
                 try:
                     f_total = ExcelReader.row_count(sp)
                     f_avail = max(0, f_total - start + 1)
-                    f_num_rows = min(num_rows, f_avail) if num_rows > 0 else f_avail
+                    f_num_rows = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
                     unique, mapping, total_rows, unique_rows = prepare_unique_file(
                         sp, src_col, dst_col, start, f_num_rows, f_out,
                     )
@@ -741,23 +756,31 @@ class ColumnsScreen(WizardScreen):
                             "src_path": canon_sp,
                             "out_path": os.path.abspath(f_out),
                             "map_path": "",
-                            "num_rows": unique_rows,
+                            "num_rows": f_num_rows,
                             "file_total_rows": total_rows,
                         }
                 except Exception:
+                    try:
+                        f_total = ExcelReader.row_count(sp)
+                        f_avail = max(0, f_total - start + 1)
+                        f_num_rows = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
+                    except Exception:
+                        f_num_rows = leader_num_rows
                     multi_info[canon_sp] = {
                         "full_src_path": canon_sp,
                         "full_out_path": os.path.abspath(f_out),
                         "src_path": canon_sp,
                         "out_path": os.path.abspath(f_out),
                         "map_path": "",
-                        "num_rows": num_rows,
+                        "num_rows": f_num_rows,
                         "file_total_rows": 0,
                     }
             self.draft["multi_targets_info"] = multi_info
             first_sp = os.path.abspath(src_paths[0])
             if first_sp in multi_info:
+                saved_limit = self.draft.get("user_row_limit", 0)
                 self.draft.update(multi_info[first_sp])
+                self.draft["user_row_limit"] = saved_limit
                 skipped = multi_info[first_sp]["file_total_rows"] - multi_info[first_sp]["num_rows"]
                 self.notify_status(
                     f"Deduplication: {multi_info[first_sp]['num_rows']:,} unique rows "
@@ -1220,6 +1243,87 @@ class PreviewScreen(WizardMenuScreen):
         yield Label("")
         yield Static(self._summary(), id="job-summary", classes="panel")
 
+    def _inspect_existing_outputs(self) -> dict[str, Any]:
+        src_paths = self.draft.get("src_paths") or [self.draft.get("src_path", "")]
+        multi_info = self.draft.get("multi_targets_info", {})
+        start_row = self.draft.get("start_row", 2)
+        user_limit = self.draft.get("user_row_limit", 0) or 0
+        num_rows = user_limit if user_limit > 0 else 0
+        dst_col = self.draft.get("dst_col", 2)
+        src_col = self.draft.get("src_col", 1)
+
+        total_filled = 0
+        total_empty = 0
+        total_failed = 0
+        any_exists = False
+
+        from ...core.failed_cache import load_failed_rows
+
+        for sp in src_paths:
+            if not sp:
+                continue
+            canon_sp = os.path.abspath(sp)
+            info = multi_info.get(canon_sp) or multi_info.get(sp) or {}
+            out_p = None
+            for candidate in [
+                info.get("full_out_path"),
+                self.draft.get("full_out_path"),
+                info.get("out_path"),
+                self.draft.get("out_path"),
+                translated_path(sp),
+            ]:
+                if candidate and os.path.exists(candidate):
+                    out_p = candidate
+                    break
+
+            if not out_p:
+                continue
+
+            src_p = None
+            for candidate in [
+                info.get("full_src_path"),
+                self.draft.get("full_src_path"),
+                info.get("src_path"),
+                self.draft.get("src_path"),
+                sp,
+            ]:
+                if candidate and os.path.exists(candidate):
+                    src_p = candidate
+                    break
+
+            if not src_p:
+                continue
+
+            any_exists = True
+            try:
+                dst_rows = ExcelReader.load_column(out_p, dst_col, start_row, num_rows)
+                src_rows = dict(ExcelReader.load_column(src_p, src_col, start_row, num_rows))
+                cached_failed = load_failed_rows(out_p, dst_col)
+                for rn, dst_val in dst_rows:
+                    src_val = src_rows.get(rn, "")
+                    if not src_val.strip():
+                        continue
+                    if not dst_val or not dst_val.strip():
+                        total_empty += 1
+                    elif dst_val.strip() == config.FAIL_MARKER or rn in cached_failed:
+                        total_failed += 1
+                    else:
+                        total_filled += 1
+            except Exception:
+                pass
+
+        return {
+            "exists": any_exists,
+            "filled": total_filled,
+            "empty": total_empty,
+            "failed": total_failed,
+        }
+
+    def _get_existing_info(self) -> dict[str, Any]:
+        if not hasattr(self, "_cached_existing_info"):
+            self._cached_existing_info = self._inspect_existing_outputs()
+        return self._cached_existing_info
+
     def _summary(self) -> str:
         draft = self.draft
         registry = self.app.registry
@@ -1255,15 +1359,29 @@ class PreviewScreen(WizardMenuScreen):
         dst_letter = ExcelReader.col_letter(draft["dst_col"])
         end_row = draft["start_row"] + draft["num_rows"] - 1
 
+        existing_info = self._get_existing_info()
         already = ""
-        try:
-            filled = ExcelReader.filled_rows(
-                draft["out_path"], draft["dst_col"], draft["start_row"], draft["num_rows"]
-            )
-            if filled and draft.get("skip_filled", True):
-                already = f"{len(filled)} rows already filled → will be skipped"
-        except Exception:
-            pass
+        if existing_info["exists"] and draft.get("skip_filled", True):
+            f_cnt = existing_info["filled"]
+            e_cnt = existing_info["empty"]
+            fail_cnt = existing_info["failed"]
+            if fail_cnt > 0 and e_cnt > 0:
+                already = f"{f_cnt} rows filled (skipped) · {e_cnt} empty · {fail_cnt} failed"
+            elif fail_cnt > 0:
+                already = f"{f_cnt} rows filled (skipped) · {fail_cnt} failed rows to retranslate"
+            elif e_cnt > 0:
+                already = f"{f_cnt} rows filled (skipped) · {e_cnt} empty rows to translate"
+            elif f_cnt > 0:
+                already = f"all {f_cnt} rows already filled → will be skipped"
+        elif not existing_info["exists"]:
+            try:
+                filled = ExcelReader.filled_rows(
+                    draft["out_path"], draft["dst_col"], draft["start_row"], draft["num_rows"]
+                )
+                if filled and draft.get("skip_filled", True):
+                    already = f"{len(filled)} rows already filled → will be skipped"
+            except Exception:
+                pass
 
         workers = max(1, draft["n_workers"])
         bound = preset.limited_by(draft["batch_size"])
@@ -1351,11 +1469,56 @@ class PreviewScreen(WizardMenuScreen):
         return "\n".join(lines)
 
     def build_options(self) -> list[Option]:
-        return [
-            Option("Start Translation", "start", style=OK),
+        options = []
+        info = self._get_existing_info()
+        is_retranslate_op = self.draft.get("op_mode") == "retranslate_failed"
+
+        if is_retranslate_op:
+            options.append(
+                Option("Retranslate failed/missing rows", "retranslate_failed", style=OK,
+                       hint="retranslate failed and missing rows")
+            )
+        elif info["exists"] and (info["empty"] > 0 or info["failed"] > 0):
+            if info["failed"] > 0 and info["empty"] > 0:
+                options.append(
+                    Option(f"Retranslate failed/missing rows ({info['failed'] + info['empty']} rows)",
+                           "retranslate_failed", style=OK, hint="translate empty and failed rows only")
+                )
+                options.append(
+                    Option(f"Translate missing rows only (Resume) ({info['empty']} rows)",
+                           "resume", hint="translate empty rows, skip already filled")
+                )
+            elif info["empty"] > 0:
+                options.append(
+                    Option(f"Translate missing rows only (Resume) ({info['empty']} rows)",
+                           "resume", style=OK, hint="translate empty rows, skip already filled")
+                )
+            elif info["failed"] > 0:
+                options.append(
+                    Option(f"Retranslate failed rows ({info['failed']} rows)",
+                           "retranslate_failed", style=OK, hint="retranslate failed rows only")
+                )
+            options.append(
+                Option("Translate entire file from scratch", "start_scratch",
+                       hint="overwrite existing translations")
+            )
+        elif info["exists"] and info["filled"] > 0 and info["empty"] == 0 and info["failed"] == 0:
+            options.append(
+                Option("Re-translate entire file from scratch", "start_scratch", style=OK,
+                       hint="overwrite all existing translations")
+            )
+            options.append(
+                Option("Start Translation (Resume)", "resume",
+                       hint="already filled rows will be skipped")
+            )
+        else:
+            options.append(Option("Start Translation", "start", style=OK))
+
+        options += [
             Option("Edit", "edit", hint="change a part without walking back"),
             Option("Cancel", "cancel"),
         ]
+        return options
 
     def handle_choice(self, option: Option) -> None:
         from .run import RunScreen
@@ -1364,8 +1527,33 @@ class PreviewScreen(WizardMenuScreen):
             self.app.push_screen(_TranslateEditScreen())
         elif option.value == "cancel":
             self.app.go_home()
-        else:
+        elif option.value == "retranslate_failed":
+            self.draft["op_mode"] = "retranslate_failed"
+            self.draft["skip_filled"] = True
             jobs = build_jobs_from_draft(self.draft, getattr(self.app, "registry", None))
+            for j in jobs:
+                j.op_mode = "retranslate_failed"
+                if j.full_src_path and os.path.exists(j.full_src_path):
+                    j.src_path = j.full_src_path
+                    j.full_src_path = ""
+                if j.full_out_path and os.path.exists(j.full_out_path):
+                    j.out_path = j.full_out_path
+                    j.full_out_path = ""
+                j.map_path = ""
+                j.num_rows = 0
+                j.user_row_limit = 0
+            self.app.push_screen(RunScreen(job=jobs[0], jobs=jobs))
+        elif option.value == "start_scratch":
+            self.draft["skip_filled"] = False
+            jobs = build_jobs_from_draft(self.draft, getattr(self.app, "registry", None))
+            for j in jobs:
+                j.skip_filled = False
+            self.app.push_screen(RunScreen(job=jobs[0], jobs=jobs))
+        else:
+            self.draft["skip_filled"] = True
+            jobs = build_jobs_from_draft(self.draft, getattr(self.app, "registry", None))
+            for j in jobs:
+                j.skip_filled = True
             self.app.push_screen(RunScreen(job=jobs[0], jobs=jobs))
 
     def build_job(self) -> JobConfig:
@@ -1377,21 +1565,40 @@ def build_single_job(draft: dict, registry=None) -> JobConfig:
     wave_delay = getattr(preset, "wave_delay", 0.0) if preset else 0.0
     batch_delay = getattr(preset, "delay_per_request", 0.0) if preset else 0.0
 
+    user_row_limit = draft.get("user_row_limit", None)
+    start_row = draft.get("start_row", 2)
+    src_p = draft.get("src_path", "")
+    num_rows = draft.get("num_rows", 0)
+    if user_row_limit is not None and src_p and os.path.exists(src_p):
+        try:
+            total_r = ExcelReader.row_count(src_p)
+            avail_r = max(0, total_r - start_row + 1)
+            num_rows = min(user_row_limit, avail_r) if user_row_limit > 0 else avail_r
+        except Exception:
+            pass
+    elif not num_rows and src_p and os.path.exists(src_p):
+        try:
+            total_r = ExcelReader.row_count(src_p)
+            num_rows = max(0, total_r - start_row + 1)
+        except Exception:
+            pass
+
     job = JobConfig(
-        provider_id=draft["provider_id"],
-        model_id=draft["model_id"],
+        provider_id=draft.get("provider_id", ""),
+        model_id=draft.get("model_id", ""),
         connection_id=draft.get("connection_id", ""),
         src_path=os.path.abspath(draft["src_path"]),
         out_path=os.path.abspath(draft.get("out_path", "") or translated_path(draft["src_path"])),
         full_src_path=os.path.abspath(draft.get("full_src_path", "")) if draft.get("full_src_path") else "",
         full_out_path=os.path.abspath(draft.get("full_out_path", "")) if draft.get("full_out_path") else "",
         map_path=os.path.abspath(draft.get("map_path", "")) if draft.get("map_path") else "",
-        src_col=draft["src_col"],
-        dst_col=draft["dst_col"],
+        src_col=draft.get("src_col", 1),
+        dst_col=draft.get("dst_col", 2),
         ctx_col=draft.get("ctx_col", 0),
         repair_col=draft.get("repair_col", 0),
-        start_row=draft.get("start_row", 2),
-        num_rows=draft.get("num_rows", 0),
+        start_row=start_row,
+        num_rows=num_rows,
+        user_row_limit=user_row_limit or 0,
         batch_size=draft.get("batch_size", 15),
         src_lang=draft.get("src_lang", "auto"),
         tgt_lang=draft.get("tgt_lang", ""),
@@ -1436,6 +1643,8 @@ def build_jobs_from_draft(draft: dict, registry=None) -> list[JobConfig]:
         return [build_single_job(draft, registry)]
 
     multi_info = draft.get("multi_targets_info", {})
+    user_row_limit = draft.get("user_row_limit", None)
+    start_row = draft.get("start_row", 2)
     per_file_drafts = []
     for sp in src_paths:
         f_draft = dict(draft)
@@ -1450,6 +1659,15 @@ def build_jobs_from_draft(draft: dict, registry=None) -> list[JobConfig]:
             f_draft["full_src_path"] = canon_sp
             f_draft["full_out_path"] = os.path.abspath(translated_path(sp))
             f_draft["map_path"] = ""
+            try:
+                f_total = ExcelReader.row_count(sp)
+                f_avail = max(0, f_total - start_row + 1)
+                if user_row_limit is not None:
+                    f_draft["num_rows"] = min(user_row_limit, f_avail) if user_row_limit > 0 else f_avail
+                else:
+                    f_draft["num_rows"] = f_avail
+            except Exception:
+                pass
         per_file_drafts.append(f_draft)
 
     # Distribute workers smartly across shared models
